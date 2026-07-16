@@ -95,8 +95,11 @@ test("party statement: 7 AR movements, closing ₹12,580.00, running balance", (
   assert.equal(s.closing_paise, 1_258_000);
   assert.equal(s.lines[0].balance_paise, 500_000); // opening
   assert.equal(s.lines[s.lines.length - 1].balance_paise, 1_258_000);
-  // Purchases/payments ride AP, not the customer statement.
+  // Purchases/payments ride AP, not the customer statement…
   assert.ok(!s.lines.some((l) => l.entry_type === "purchase" || l.entry_type === "payment"));
+  // …but they must not vanish: the cross-ledger balance carries them.
+  assert.equal(s.cross_ledger_paise, 390_000); // purchase 5,900 − payment 2,000
+  assert.equal(s.net_position_paise, 868_000); // 12,580 − 3,900
   assert.equal(partyStatement(db, 99), null);
 });
 

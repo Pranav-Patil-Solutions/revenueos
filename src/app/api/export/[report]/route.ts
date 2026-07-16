@@ -152,6 +152,8 @@ export async function GET(
       json = {
         party: { name: s.party.name, kind: s.party.kind, gstin: s.party.gstin },
         closing_balance: rupees(s.closing_paise),
+        cross_ledger_balance: rupees(s.cross_ledger_paise),
+        net_position: rupees(s.net_position_paise),
         lines: s.lines.map((l) => ({
           date: l.entry_date, type: l.entry_type, memo: l.memo, ref: l.ref_no,
           debit: rupees(l.debit_paise), credit: rupees(l.credit_paise),

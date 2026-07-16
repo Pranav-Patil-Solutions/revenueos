@@ -57,7 +57,29 @@ esbuild rejects top-level await — the P7 gate went red on first run.
 scripts must use a `main()` wrapper, never top-level await — even though
 `await import()` inside functions is fine.
 
-## 5. No other failures
+## 5. Ship-gate findings (both fixed in-session)
+
+**qa-runner:** `monthLabel("2026-13")` returned `"2026-13 2026"` — the
+out-of-range fallback re-appended the year instead of passing the input
+through. Fixed; qa-runner's new `test/format.test.ts` adopted into the suite.
+*Delta (test craft):* every formatting helper needs a malformed-input
+passthrough test, not just happy paths.
+
+**code-reviewer:** party statements filtered to one control account by party
+kind, silently dropping legs the same party carries on the other account
+(the spec itself posts customer-khata purchases/payments to AP — demo truth:
+Sharma carries AR ₹12,580.00 **and** AP ₹3,900.00). The reviewer's proposed
+fix (merge both accounts into one statement) would have broken the ticket's
+pinned gate figure (statement = ₹12,580.00), so the statement stays a
+control-account ledger and the hidden side is surfaced as
+`cross_ledger_paise` + `net_position_paise` (party page tiles + export
+fields), pinned by tests. *Delta (spec-template):* when a party can appear on
+both control accounts, every party-level report must state all three numbers
+(ledger closing, cross-ledger, net) — dropping the other side misstates who
+owes whom; and when a reviewer's fix conflicts with a pinned gate truth,
+resolve by exposing the missing data, not by changing the pinned semantics.
+
+## 6. No other failures
 
 Phase gates P1–P7 otherwise passed first try; server-action-by-curl (P2/P5
 gates) worked via the rendered `$ACTION_ID` form field and the `Next-Action`

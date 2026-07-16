@@ -67,11 +67,19 @@ export interface PartyStatement {
   party: PartyRow;
   lines: StatementLine[];
   closing_paise: number;
+  /** Balance this party carries on the OTHER control account (a customer's
+   * payables, a supplier's receivables) — cross-trade and refund entry types
+   * post there, and hiding it would misstate who owes whom. */
+  cross_ledger_paise: number;
+  /** closing − cross: the true net position with this party. */
+  net_position_paise: number;
 }
 
 /** Control-account movements for one party with a running balance. Customers
  * run on AR (debit balance = they owe us); suppliers on AP (credit balance =
- * we owe them). */
+ * we owe them). Legs the same party carries on the other control account
+ * (purchases/payments in a customer khata, sales/receipts in a supplier one)
+ * are reported as cross_ledger_paise rather than silently dropped. */
 export function partyStatement(
   db: Database.Database,
   partyId: number
@@ -81,6 +89,7 @@ export function partyStatement(
     .get(partyId) as PartyRow | undefined;
   if (!party) return null;
   const control = party.kind === "customer" ? "1200" : "2100";
+  const other = party.kind === "customer" ? "2100" : "1200";
   const rows = db
     .prepare(
       `SELECT j.id AS journal_id, j.entry_date, j.entry_type, j.memo, j.ref_no,
@@ -101,7 +110,26 @@ export function partyStatement(
         : r.credit_paise - r.debit_paise;
     return { ...r, balance_paise: balance };
   });
-  return { party, lines, closing_paise: balance };
+
+  // AP runs credit-positive, AR debit-positive — sign by the account itself.
+  const cross = db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN a.code = '2100'
+                THEN jl.credit_paise - jl.debit_paise
+                ELSE jl.debit_paise - jl.credit_paise END), 0) AS net
+       FROM journal_lines jl
+       JOIN accounts a ON a.id = jl.account_id
+       WHERE jl.party_id = ? AND a.code = ?`
+    )
+    .get(partyId, other) as { net: number };
+
+  return {
+    party,
+    lines,
+    closing_paise: balance,
+    cross_ledger_paise: cross.net,
+    net_position_paise: balance - cross.net,
+  };
 }
 
 export interface DayBookLeg {

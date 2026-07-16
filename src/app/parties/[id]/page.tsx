@@ -15,7 +15,8 @@ export default async function PartyPage({
   const { id } = await params;
   const statement = partyStatement(getDb(), Number(id));
   if (!statement) notFound();
-  const { party, lines, closing_paise } = statement;
+  const { party, lines, closing_paise, cross_ledger_paise, net_position_paise } =
+    statement;
   const owesUs = party.kind === "customer";
 
   return (
@@ -41,12 +42,43 @@ export default async function PartyPage({
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="rounded-xl border border-hairline bg-surface p-5">
           <p className="text-[12.5px] font-medium text-ink-3">
-            {owesUs ? "They owe you" : "You owe them"}
+            {owesUs ? "They owe you (receivables)" : "You owe them (payables)"}
           </p>
           <p className="mt-2 text-[26px] font-semibold leading-none tracking-tight" style={{ fontVariantNumeric: "tabular-nums" }}>
             {inr(closing_paise)}
           </p>
         </div>
+        {cross_ledger_paise !== 0 && (
+          <>
+            <div className="rounded-xl border border-hairline bg-surface p-5">
+              <p className="text-[12.5px] font-medium text-ink-3">
+                {owesUs
+                  ? "You owe them (payables ledger)"
+                  : "They owe you (receivables ledger)"}
+              </p>
+              <p className="mt-2 text-[26px] font-semibold leading-none tracking-tight" style={{ fontVariantNumeric: "tabular-nums" }}>
+                {inr(cross_ledger_paise)}
+              </p>
+              <p className="mt-2.5 text-[12px] text-ink-3">
+                From cross-trades and refunds posted on the other side.
+              </p>
+            </div>
+            <div className="rounded-xl border border-hairline bg-surface p-5">
+              <p className="text-[12.5px] font-medium text-ink-3">Net position</p>
+              <p
+                className={`mt-2 text-[26px] font-semibold leading-none tracking-tight ${
+                  net_position_paise < 0 ? "text-warning" : ""
+                }`}
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {inr(net_position_paise)}
+              </p>
+              <p className="mt-2.5 text-[12px] text-ink-3">
+                {owesUs ? "Receivable minus payable." : "Payable minus receivable."}
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="mt-6">
