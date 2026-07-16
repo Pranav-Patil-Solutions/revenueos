@@ -2,7 +2,119 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 import { getDb } from "./db";
+import { extractDocument } from "./extraction";
+import { GST_RATES } from "./tax/india-gst";
+import type { DocumentRow, EntryType } from "./types";
+
+const ENTRY_TYPES: EntryType[] = [
+  "sale",
+  "receipt",
+  "purchase",
+  "payment",
+  "credit_note",
+  "debit_note",
+  "opening",
+  "other",
+];
+
+export interface DraftRowInput {
+  id: number;
+  entry_date: string | null;
+  particulars: string;
+  ref_no: string;
+  debit_paise: number | null;
+  credit_paise: number | null;
+  entry_type: EntryType;
+  gst_rate: number | null;
+  settle_account: "cash" | "bank";
+  include: boolean;
+}
+
+function parseDraftRows(rowsJson: string): DraftRowInput[] {
+  const parsed: unknown = JSON.parse(rowsJson);
+  if (!Array.isArray(parsed)) throw new Error("rows payload must be an array");
+  return parsed.map((raw, i) => {
+    const r = raw as Record<string, unknown>;
+    const label = `row ${i + 1}`;
+    if (typeof r.id !== "number") throw new Error(`${label}: missing id`);
+    const date =
+      typeof r.entry_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.entry_date)
+        ? r.entry_date
+        : null;
+    const money = (v: unknown, side: string): number | null => {
+      if (v === null || v === undefined) return null;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(`${label}: ${side} must be a non-negative integer of paise`);
+      }
+      return v === 0 ? null : v;
+    };
+    const debit_paise = money(r.debit_paise, "debit");
+    const credit_paise = money(r.credit_paise, "credit");
+    if (debit_paise !== null && credit_paise !== null) {
+      throw new Error(`${label}: has both debit and credit`);
+    }
+    if (!ENTRY_TYPES.includes(r.entry_type as EntryType)) {
+      throw new Error(`${label}: unknown entry type`);
+    }
+    let gst_rate: number | null = null;
+    if (r.gst_rate !== null && r.gst_rate !== undefined) {
+      if (!GST_RATES.includes(r.gst_rate as (typeof GST_RATES)[number])) {
+        throw new Error(`${label}: invalid GST rate`);
+      }
+      gst_rate = r.gst_rate as number;
+    }
+    return {
+      id: r.id,
+      entry_date: date,
+      particulars: typeof r.particulars === "string" ? r.particulars : "",
+      ref_no: typeof r.ref_no === "string" ? r.ref_no : "",
+      debit_paise,
+      credit_paise,
+      entry_type: r.entry_type as EntryType,
+      gst_rate,
+      settle_account: r.settle_account === "bank" ? "bank" : "cash",
+      include: r.include === true,
+    };
+  });
+}
+
+function saveDraft(docId: number, rows: DraftRowInput[]): void {
+  const db = getDb();
+  const doc = db
+    .prepare("SELECT * FROM documents WHERE id = ?")
+    .get(docId) as DocumentRow | undefined;
+  if (!doc) throw new Error("Document not found.");
+  if (doc.status === "posted") {
+    throw new Error("Document is posted — its rows are locked.");
+  }
+  const update = db.prepare(
+    `UPDATE staged_rows SET
+       entry_date = ?, particulars = ?, ref_no = ?, debit_paise = ?, credit_paise = ?,
+       entry_type = ?, gst_rate = ?, settle_account = ?, include = ?
+     WHERE id = ? AND document_id = ?`
+  );
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      update.run(
+        r.entry_date,
+        r.particulars,
+        r.ref_no,
+        r.debit_paise,
+        r.credit_paise,
+        r.entry_type,
+        r.gst_rate,
+        r.settle_account,
+        r.include ? 1 : 0,
+        r.id,
+        docId
+      );
+    }
+  });
+  tx();
+}
 
 export async function createParty(formData: FormData): Promise<void> {
   const name = String(formData.get("name") ?? "").trim();
@@ -44,4 +156,49 @@ export async function updateSettings(formData: FormData): Promise<void> {
     );
   revalidatePath("/settings");
   redirect("/settings");
+}
+
+export async function runExtraction(docId: number): Promise<void> {
+  try {
+    await extractDocument(docId);
+  } catch {
+    // Failure state + message are already stored on the document row.
+  }
+  revalidatePath(`/documents/${docId}`);
+  revalidatePath("/documents");
+}
+
+export async function saveDraftRows(
+  docId: number,
+  rowsJson: string
+): Promise<void> {
+  saveDraft(docId, parseDraftRows(rowsJson));
+  revalidatePath(`/documents/${docId}`);
+}
+
+export async function saveAndPost(
+  docId: number,
+  rowsJson: string
+): Promise<void> {
+  // Wired to the posting engine in P5.
+  void docId;
+  void rowsJson;
+  throw new Error("Posting is not available yet.");
+}
+
+export async function deleteDocument(docId: number): Promise<void> {
+  const db = getDb();
+  const doc = db
+    .prepare("SELECT * FROM documents WHERE id = ?")
+    .get(docId) as DocumentRow | undefined;
+  if (!doc) throw new Error("Document not found.");
+  if (doc.status === "posted") {
+    throw new Error(
+      "Posted documents cannot be deleted — the books reference them. Fix forward with an opposite entry."
+    );
+  }
+  db.prepare("DELETE FROM documents WHERE id = ?").run(docId); // staged rows cascade
+  await unlink(path.join(process.cwd(), doc.image_path)).catch(() => {});
+  revalidatePath("/documents");
+  redirect("/documents");
 }
