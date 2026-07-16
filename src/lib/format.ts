@@ -37,11 +37,12 @@ export function formatDate(iso: string | null | undefined): string {
   return month ? `${m[3]} ${month.slice(0, 3)} ${m[1]}` : iso;
 }
 
-/** "2026-07" → "July 2026". */
+/** "2026-07" → "July 2026". Malformed or out-of-range input passes through. */
 export function monthLabel(month: string): string {
   const m = month.match(/^(\d{4})-(\d{2})$/);
   if (!m) return month;
-  return `${MONTHS[Number(m[2]) - 1] ?? month} ${m[1]}`;
+  const name = MONTHS[Number(m[2]) - 1];
+  return name ? `${name} ${m[1]}` : month;
 }
 
 /** Local date as ISO YYYY-MM-DD. */
