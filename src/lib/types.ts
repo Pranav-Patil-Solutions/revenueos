@@ -1,0 +1,107 @@
+export type AccountType = "asset" | "liability" | "equity" | "income" | "expense";
+export type PartyKind = "customer" | "supplier";
+export type DocumentStatus =
+  | "uploaded"
+  | "extracting"
+  | "extracted"
+  | "posted"
+  | "failed";
+export type EntryType =
+  | "sale"
+  | "receipt"
+  | "purchase"
+  | "payment"
+  | "credit_note"
+  | "debit_note"
+  | "opening"
+  | "other";
+export type SettleAccount = "cash" | "bank";
+
+// Row types mirror the sqlite column names exactly (snake_case) so queries
+// need no aliasing. All money columns are INTEGER paise.
+
+export interface SettingsRow {
+  id: number;
+  company_name: string;
+  gstin: string;
+  state_code: string;
+  country: string;
+  currency: string;
+  default_gst_rate: number;
+  tax_inclusive: number; // 0 | 1
+}
+
+export interface AccountRow {
+  id: number;
+  code: string;
+  name: string;
+  type: AccountType;
+}
+
+export interface PartyRow {
+  id: number;
+  name: string;
+  kind: PartyKind;
+  gstin: string;
+  state_code: string;
+  phone: string;
+  created_at: string;
+}
+
+export interface DocumentRow {
+  id: number;
+  party_id: number;
+  image_path: string;
+  image_sha256: string;
+  status: DocumentStatus;
+  error: string;
+  model: string;
+  created_at: string;
+  extracted_at: string | null;
+  posted_at: string | null;
+}
+
+export interface DocumentWithParty extends DocumentRow {
+  party_name: string;
+  party_kind: PartyKind;
+  party_state_code: string;
+}
+
+export interface StagedRow {
+  id: number;
+  document_id: number;
+  row_no: number;
+  entry_date: string | null; // ISO YYYY-MM-DD
+  particulars: string;
+  ref_no: string;
+  debit_paise: number | null;
+  credit_paise: number | null;
+  entry_type: EntryType;
+  gst_rate: number | null;
+  settle_account: SettleAccount;
+  confidence: number; // 0–1
+  is_balance_row: number; // 0 | 1
+  include: number; // 0 | 1
+  posted_journal_id: number | null;
+}
+
+export interface JournalRow {
+  id: number;
+  entry_date: string;
+  entry_type: EntryType;
+  memo: string;
+  ref_no: string;
+  source_document_id: number | null;
+  source_row_id: number | null;
+  created_at: string;
+}
+
+export interface JournalLineRow {
+  id: number;
+  journal_id: number;
+  line_no: number;
+  account_id: number;
+  party_id: number | null;
+  debit_paise: number;
+  credit_paise: number;
+}
