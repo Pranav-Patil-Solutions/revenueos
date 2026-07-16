@@ -1,0 +1,285 @@
+import { strict as assert } from "node:assert";
+import { test } from "node:test";
+import Database from "better-sqlite3";
+import { initSchema, seedCoreData } from "../src/lib/db";
+import { validateExtraction } from "../src/lib/extraction-schema";
+import { DEMO_FIXTURE } from "../src/lib/extraction";
+import { assertBalanced, buildLegs, postDocument, type Leg } from "../src/lib/posting";
+import type { DraftRowInput, StagedRow } from "../src/lib/types";
+
+const CUSTOMER = { id: 1, kind: "customer" as const, state_code: "27" };
+const SUPPLIER = { id: 2, kind: "supplier" as const, state_code: "07" };
+const SETTINGS = { state_code: "27", default_gst_rate: 18, tax_inclusive: 1 };
+
+function row(overrides: Record<string, unknown>) {
+  return {
+    row_no: 1,
+    entry_type: "sale",
+    debit_paise: null,
+    credit_paise: null,
+    gst_rate: null,
+    settle_account: "cash",
+    ...overrides,
+  } as Parameters<typeof buildLegs>[0];
+}
+
+function byCode(legs: Leg[], code: string): Leg {
+  const l = legs.find((x) => x.accountCode === code);
+  assert.ok(l, `expected a leg on account ${code}`);
+  return l;
+}
+
+test("sale (intra-state, inclusive): AR gross, Sales taxable, CGST+SGST", () => {
+  const legs = buildLegs(row({ entry_type: "sale", debit_paise: 118_000, gst_rate: 18 }), CUSTOMER, SETTINGS);
+  assertBalanced(legs);
+  assert.equal(byCode(legs, "1200").debitPaise, 118_000);
+  assert.equal(byCode(legs, "1200").partyId, 1); // party stamped on the control line
+  assert.equal(byCode(legs, "4000").creditPaise, 100_000);
+  assert.equal(byCode(legs, "2200").creditPaise, 9_000);
+  assert.equal(byCode(legs, "2210").creditPaise, 9_000);
+});
+
+test("sale (inter-state): single IGST leg", () => {
+  const interCustomer = { id: 3, kind: "customer" as const, state_code: "07" };
+  const legs = buildLegs(row({ entry_type: "sale", debit_paise: 118_000, gst_rate: 18 }), interCustomer, SETTINGS);
+  assertBalanced(legs);
+  assert.equal(byCode(legs, "2220").creditPaise, 18_000);
+  assert.ok(!legs.some((l) => l.accountCode === "2200" || l.accountCode === "2210"));
+});
+
+test("sale with odd-paise tax still balances to the exact gross", () => {
+  const legs = buildLegs(row({ entry_type: "sale", debit_paise: 101, gst_rate: 18 }), CUSTOMER, SETTINGS);
+  assertBalanced(legs); // taxable 86 + cgst 8 + sgst 7 = 101
+  const total = legs.reduce((s, l) => s + l.creditPaise, 0);
+  assert.equal(total, 101);
+});
+
+test("receipt: settle account by cash/bank, no GST", () => {
+  const cash = buildLegs(row({ entry_type: "receipt", credit_paise: 700_000 }), CUSTOMER, SETTINGS);
+  assertBalanced(cash);
+  assert.equal(byCode(cash, "1000").debitPaise, 700_000);
+  assert.equal(byCode(cash, "1200").creditPaise, 700_000);
+  assert.equal(cash.length, 2);
+
+  const bank = buildLegs(row({ entry_type: "receipt", credit_paise: 400_000, settle_account: "bank" }), CUSTOMER, SETTINGS);
+  assert.equal(byCode(bank, "1100").debitPaise, 400_000);
+});
+
+test("purchase: Purchases + ITC against AP gross", () => {
+  const legs = buildLegs(row({ entry_type: "purchase", credit_paise: 590_000, gst_rate: 18 }), CUSTOMER, SETTINGS);
+  assertBalanced(legs);
+  assert.equal(byCode(legs, "5000").debitPaise, 500_000);
+  assert.equal(byCode(legs, "1300").debitPaise, 90_000);
+  assert.equal(byCode(legs, "2100").creditPaise, 590_000);
+  assert.equal(byCode(legs, "2100").partyId, 1);
+});
+
+test("payment: AP debit against cash/bank credit", () => {
+  const legs = buildLegs(row({ entry_type: "payment", debit_paise: 200_000 }), SUPPLIER, SETTINGS);
+  assertBalanced(legs);
+  assert.equal(byCode(legs, "2100").debitPaise, 200_000);
+  assert.equal(byCode(legs, "1000").creditPaise, 200_000);
+});
+
+test("credit_note is the exact reverse of sale", () => {
+  const sale = buildLegs(row({ entry_type: "sale", debit_paise: 118_000, gst_rate: 18 }), CUSTOMER, SETTINGS);
+  const cn = buildLegs(row({ entry_type: "credit_note", credit_paise: 118_000, gst_rate: 18 }), CUSTOMER, SETTINGS);
+  assertBalanced(cn);
+  for (const s of sale) {
+    const r = byCode(cn, s.accountCode);
+    assert.equal(r.debitPaise, s.creditPaise, s.accountCode);
+    assert.equal(r.creditPaise, s.debitPaise, s.accountCode);
+  }
+});
+
+test("debit_note is the exact reverse of purchase", () => {
+  const purchase = buildLegs(row({ entry_type: "purchase", credit_paise: 590_000, gst_rate: 18 }), SUPPLIER, SETTINGS);
+  const dn = buildLegs(row({ entry_type: "debit_note", debit_paise: 590_000, gst_rate: 18 }), SUPPLIER, SETTINGS);
+  assertBalanced(dn);
+  for (const p of purchase) {
+    const r = byCode(dn, p.accountCode);
+    assert.equal(r.debitPaise, p.creditPaise, p.accountCode);
+    assert.equal(r.creditPaise, p.debitPaise, p.accountCode);
+  }
+});
+
+test("opening: control account by party kind, direction by ledger column", () => {
+  const custDr = buildLegs(row({ entry_type: "opening", debit_paise: 500_000 }), CUSTOMER, SETTINGS);
+  assert.equal(byCode(custDr, "1200").debitPaise, 500_000);
+  assert.equal(byCode(custDr, "3000").creditPaise, 500_000);
+
+  const custCr = buildLegs(row({ entry_type: "opening", credit_paise: 40_000 }), CUSTOMER, SETTINGS);
+  assert.equal(byCode(custCr, "1200").creditPaise, 40_000);
+  assert.equal(byCode(custCr, "3000").debitPaise, 40_000);
+
+  const suppCr = buildLegs(row({ entry_type: "opening", credit_paise: 90_000 }), SUPPLIER, SETTINGS);
+  assert.equal(byCode(suppCr, "2100").creditPaise, 90_000);
+  assert.equal(byCode(suppCr, "3000").debitPaise, 90_000);
+});
+
+test("gst_rate falls back to the settings default", () => {
+  const legs = buildLegs(row({ entry_type: "sale", debit_paise: 118_000 }), CUSTOMER, SETTINGS);
+  assert.equal(byCode(legs, "4000").creditPaise, 100_000); // default 18 applied
+});
+
+test("rate 0 emits no tax legs", () => {
+  const legs = buildLegs(row({ entry_type: "sale", debit_paise: 100_000, gst_rate: 0 }), CUSTOMER, SETTINGS);
+  assert.equal(legs.length, 2);
+  assert.equal(byCode(legs, "4000").creditPaise, 100_000);
+});
+
+test("tax-exclusive settings add GST on top", () => {
+  const legs = buildLegs(
+    row({ entry_type: "sale", debit_paise: 100_000, gst_rate: 18 }),
+    CUSTOMER,
+    { ...SETTINGS, tax_inclusive: 0 }
+  );
+  assertBalanced(legs);
+  assert.equal(byCode(legs, "1200").debitPaise, 118_000);
+  assert.equal(byCode(legs, "4000").creditPaise, 100_000);
+});
+
+test("'other' rows are unpostable", () => {
+  assert.throws(
+    () => buildLegs(row({ entry_type: "other", debit_paise: 100 }), CUSTOMER, SETTINGS),
+    /unpostable/
+  );
+});
+
+test("a row with both sides (or neither) throws", () => {
+  assert.throws(() => buildLegs(row({ debit_paise: 1, credit_paise: 1 }), CUSTOMER, SETTINGS), /exactly one/);
+  assert.throws(() => buildLegs(row({}), CUSTOMER, SETTINGS), /exactly one/);
+});
+
+test("assertBalanced rejects tampered legs and non-integer paise", () => {
+  assert.throws(
+    () =>
+      assertBalanced([
+        { accountCode: "1200", partyId: null, debitPaise: 100, creditPaise: 0 },
+        { accountCode: "4000", partyId: null, debitPaise: 0, creditPaise: 99 },
+      ]),
+    /does not balance/
+  );
+  assert.throws(
+    () =>
+      assertBalanced([
+        { accountCode: "1200", partyId: null, debitPaise: 0.5, creditPaise: 0 },
+        { accountCode: "4000", partyId: null, debitPaise: 0, creditPaise: 0.5 },
+      ]),
+    /non-integer/
+  );
+});
+
+// ---------------------------------------------------------------------------
+// postDocument against a real (in-memory) db
+// ---------------------------------------------------------------------------
+
+function setupDb(): Database.Database {
+  const db = new Database(":memory:");
+  initSchema(db);
+  seedCoreData(db);
+  db.prepare(
+    `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
+     VALUES ('Sharma Traders', 'customer', '', '27', '', '2026-07-01T00:00:00Z')`
+  ).run();
+  db.prepare(
+    `INSERT INTO documents (party_id, image_path, image_sha256, status, created_at)
+     VALUES (1, 'data/uploads/demo.jpg', 'demo-sha', 'extracted', '2026-07-16T00:00:00Z')`
+  ).run();
+  const insert = db.prepare(
+    `INSERT INTO staged_rows
+       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+        entry_type, gst_rate, settle_account, confidence, is_balance_row, include)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const r of validateExtraction(DEMO_FIXTURE).rows) {
+    insert.run(
+      r.row_no, r.entry_date, r.particulars, r.ref_no, r.debit_paise, r.credit_paise,
+      r.entry_type, r.gst_rate, r.settle_account, r.confidence,
+      r.is_balance_row ? 1 : 0, r.include ? 1 : 0
+    );
+  }
+  return db;
+}
+
+function draftsFromStaged(db: Database.Database, excludeRowNos: number[] = []): DraftRowInput[] {
+  const staged = db
+    .prepare("SELECT * FROM staged_rows WHERE document_id = 1 ORDER BY row_no")
+    .all() as StagedRow[];
+  return staged.map((r) => ({
+    id: r.id,
+    entry_date: r.entry_date,
+    particulars: r.particulars,
+    ref_no: r.ref_no,
+    debit_paise: r.debit_paise,
+    credit_paise: r.credit_paise,
+    entry_type: r.entry_type,
+    gst_rate: r.gst_rate,
+    settle_account: r.settle_account,
+    include: excludeRowNos.includes(r.row_no) ? false : r.include === 1,
+  }));
+}
+
+test("postDocument: demo fixture posts 9 journals, books balance, AR = ₹12,580.00", () => {
+  const db = setupDb();
+  const { journals } = postDocument(db, 1, draftsFromStaged(db, [10]));
+  assert.equal(journals, 9);
+
+  const sum = db
+    .prepare("SELECT SUM(debit_paise) - SUM(credit_paise) AS d FROM journal_lines")
+    .get() as { d: number };
+  assert.equal(sum.d, 0);
+
+  const ar = db
+    .prepare(
+      `SELECT SUM(jl.debit_paise) - SUM(jl.credit_paise) AS bal
+       FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+       WHERE a.code = '1200' AND jl.party_id = 1`
+    )
+    .get() as { bal: number };
+  assert.equal(ar.bal, 1_258_000); // ₹12,580.00
+
+  const doc = db.prepare("SELECT status, posted_at FROM documents WHERE id = 1").get() as {
+    status: string;
+    posted_at: string | null;
+  };
+  assert.equal(doc.status, "posted");
+  assert.ok(doc.posted_at);
+
+  const unstamped = db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM staged_rows WHERE include = 1 AND posted_journal_id IS NULL"
+    )
+    .get() as { n: number };
+  assert.equal(unstamped.n, 0);
+});
+
+test("postDocument: double-post throws (idempotency re-check inside the tx)", () => {
+  const db = setupDb();
+  postDocument(db, 1, draftsFromStaged(db, [10]));
+  assert.throws(() => postDocument(db, 1, draftsFromStaged(db, [10])), /already posted/);
+});
+
+test("postDocument: an included 'other' row aborts and rolls back everything", () => {
+  const db = setupDb();
+  // Give the 'other' row an amount so it fails specifically as unpostable
+  // (amountless rows are caught earlier by the one-non-zero-side check).
+  const drafts = draftsFromStaged(db).map((d, i) =>
+    i === 9 ? { ...d, debit_paise: 100_000 } : d
+  );
+  assert.throws(() => postDocument(db, 1, drafts), /unpostable/);
+  const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
+  assert.equal(journals.n, 0);
+  const doc = db.prepare("SELECT status FROM documents WHERE id = 1").get() as { status: string };
+  assert.equal(doc.status, "extracted"); // status flip rolled back too
+});
+
+test("postDocument: a dateless included row aborts the whole post", () => {
+  const db = setupDb();
+  const drafts = draftsFromStaged(db, [10]).map((d, i) =>
+    i === 2 ? { ...d, entry_date: null } : d
+  );
+  assert.throws(() => postDocument(db, 1, drafts), /needs a date/);
+  const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
+  assert.equal(journals.n, 0);
+});

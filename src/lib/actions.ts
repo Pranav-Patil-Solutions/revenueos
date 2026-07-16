@@ -6,8 +6,9 @@ import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { getDb } from "./db";
 import { extractDocument } from "./extraction";
+import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
-import type { DocumentRow, EntryType } from "./types";
+import type { DocumentRow, DraftRowInput, EntryType } from "./types";
 
 const ENTRY_TYPES: EntryType[] = [
   "sale",
@@ -19,19 +20,6 @@ const ENTRY_TYPES: EntryType[] = [
   "opening",
   "other",
 ];
-
-export interface DraftRowInput {
-  id: number;
-  entry_date: string | null;
-  particulars: string;
-  ref_no: string;
-  debit_paise: number | null;
-  credit_paise: number | null;
-  entry_type: EntryType;
-  gst_rate: number | null;
-  settle_account: "cash" | "bank";
-  include: boolean;
-}
 
 function parseDraftRows(rowsJson: string): DraftRowInput[] {
   const parsed: unknown = JSON.parse(rowsJson);
@@ -90,29 +78,7 @@ function saveDraft(docId: number, rows: DraftRowInput[]): void {
   if (doc.status === "posted") {
     throw new Error("Document is posted — its rows are locked.");
   }
-  const update = db.prepare(
-    `UPDATE staged_rows SET
-       entry_date = ?, particulars = ?, ref_no = ?, debit_paise = ?, credit_paise = ?,
-       entry_type = ?, gst_rate = ?, settle_account = ?, include = ?
-     WHERE id = ? AND document_id = ?`
-  );
-  const tx = db.transaction(() => {
-    for (const r of rows) {
-      update.run(
-        r.entry_date,
-        r.particulars,
-        r.ref_no,
-        r.debit_paise,
-        r.credit_paise,
-        r.entry_type,
-        r.gst_rate,
-        r.settle_account,
-        r.include ? 1 : 0,
-        r.id,
-        docId
-      );
-    }
-  });
+  const tx = db.transaction(() => applyDraftRows(db, docId, rows));
   tx();
 }
 
@@ -180,10 +146,10 @@ export async function saveAndPost(
   docId: number,
   rowsJson: string
 ): Promise<void> {
-  // Wired to the posting engine in P5.
-  void docId;
-  void rowsJson;
-  throw new Error("Posting is not available yet.");
+  postDocument(getDb(), docId, parseDraftRows(rowsJson));
+  revalidatePath(`/documents/${docId}`);
+  revalidatePath("/documents");
+  revalidatePath("/");
 }
 
 export async function deleteDocument(docId: number): Promise<void> {

@@ -85,6 +85,20 @@ export interface StagedRow {
   posted_journal_id: number | null;
 }
 
+/** One edited review-grid row as sent by the client to save/post actions. */
+export interface DraftRowInput {
+  id: number;
+  entry_date: string | null;
+  particulars: string;
+  ref_no: string;
+  debit_paise: number | null;
+  credit_paise: number | null;
+  entry_type: EntryType;
+  gst_rate: number | null;
+  settle_account: SettleAccount;
+  include: boolean;
+}
+
 export interface JournalRow {
   id: number;
   entry_date: string;
