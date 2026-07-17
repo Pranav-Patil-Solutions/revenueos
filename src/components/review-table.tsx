@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { saveAndPost, saveDraftRows } from "@/lib/actions";
 import { inr } from "@/lib/format";
 import { ConfidenceBadge } from "./status-badge";
@@ -36,6 +36,14 @@ interface EditRow {
 
 const cellInput =
   "w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[12.5px] text-ink outline-none hover:border-hairline focus:border-accent focus:bg-surface-2";
+
+// Date cell uses its own base (no cellInput) so the invalid border-color isn't
+// fighting cellInput's border-transparent for CSS source-order precedence.
+const dateBase =
+  "w-32 rounded-md border px-1.5 py-1 text-[12.5px] text-ink outline-none";
+const dateOk =
+  "border-transparent bg-transparent hover:border-hairline focus:border-accent focus:bg-surface-2";
+const dateBad = "border-critical bg-critical/10 focus:border-critical";
 
 function paiseToInput(paise: number | null): string {
   return paise === null ? "" : (paise / 100).toFixed(2);
@@ -78,6 +86,46 @@ export function ReviewTable({
   );
   const [pending, startTransition] = useTransition();
   const [notice, setNotice] = useState<{ tone: "good" | "bad"; text: string } | null>(null);
+  // Indices of included rows flagged as missing a date by the pre-post check.
+  const [missingDates, setMissingDates] = useState<Set<number>>(new Set());
+  const dateRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // Bill/invoice pages carry one document-level date, not a per-row date, so the
+  // model returns nulls for every row. This lets the user stamp one date across
+  // all empty rows instead of typing it N times. Left blank by default — a
+  // single stray per-row date isn't trustworthy enough to silently reuse.
+  const [fillDate, setFillDate] = useState<string>("");
+
+  // Derived from the live missingDates set (not a frozen string) so the banner
+  // shrinks in place as the user fixes flagged rows, instead of naming rows
+  // that are already resolved.
+  const missingDatesText = useMemo(() => {
+    if (missingDates.size === 0) return null;
+    const nums = [...missingDates]
+      .sort((a, b) => a - b)
+      .map((i) => edit[i].row_no);
+    const many = nums.length > 1;
+    return `Row${many ? "s" : ""} ${nums.join(", ")} need${many ? "" : "s"} a date before posting — fill the highlighted date cell${many ? "s" : ""}.`;
+  }, [missingDates, edit]);
+
+  function clearDateFlag(i: number) {
+    setMissingDates((prev) => {
+      if (!prev.has(i)) return prev;
+      const next = new Set(prev);
+      next.delete(i);
+      return next;
+    });
+  }
+
+  function fillEmptyDates() {
+    if (!fillDate) return;
+    setEdit((prev) =>
+      prev.map((r) =>
+        r.include && !r.entry_date ? { ...r, entry_date: fillDate } : r
+      )
+    );
+    setMissingDates(new Set());
+    setNotice(null);
+  }
 
   const totals = useMemo(() => {
     let dr = 0;
@@ -89,6 +137,11 @@ export function ReviewTable({
     }
     return { dr, cr };
   }, [edit]);
+
+  const emptyDateCount = useMemo(
+    () => edit.filter((r) => r.include && !r.entry_date).length,
+    [edit]
+  );
 
   function set(i: number, patch: Partial<EditRow>) {
     setEdit((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -129,6 +182,16 @@ export function ReviewTable({
       setNotice({ tone: "bad", text: "No rows are included — nothing to post." });
       return;
     }
+    // Mirror the posting engine's rule: every included row needs a date. Catch
+    // it here — with the offending cells highlighted — instead of failing on the
+    // server after the confirm dialog.
+    const missing = edit.flatMap((r, i) => (r.include && !r.entry_date ? [i] : []));
+    if (missing.length > 0) {
+      setMissingDates(new Set(missing));
+      dateRefs.current[missing[0]]?.focus();
+      return;
+    }
+    setMissingDates(new Set());
     const ok = window.confirm(
       `Post ${included.length} row${included.length === 1 ? "" : "s"} to the books?\n\nPosting is permanent — corrections are made with an opposite entry, not by editing.`
     );
@@ -146,6 +209,28 @@ export function ReviewTable({
 
   return (
     <div className="rounded-xl border border-hairline bg-surface">
+      {!readOnly && emptyDateCount > 0 && (
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-hairline px-4 py-2.5 text-[12.5px]">
+          <span className="text-ink-3">
+            {emptyDateCount} row{emptyDateCount === 1 ? "" : "s"} missing a date —
+            a bill carries one date. Set it once:
+          </span>
+          <input
+            type="date"
+            value={fillDate}
+            onChange={(e) => setFillDate(e.target.value)}
+            className="rounded-md border border-hairline bg-surface-2 px-2 py-1 text-ink outline-none focus:border-accent"
+          />
+          <button
+            type="button"
+            onClick={fillEmptyDates}
+            disabled={!fillDate}
+            className="rounded-md border border-hairline bg-surface-2 px-3 py-1 font-medium text-ink-2 transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Fill empty dates
+          </button>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[920px] text-left text-[12.5px]">
           <thead>
@@ -187,10 +272,17 @@ export function ReviewTable({
                   <>
                     <td className="px-1 py-1">
                       <input
+                        ref={(el) => {
+                          dateRefs.current[i] = el;
+                        }}
                         type="date"
                         value={r.entry_date}
-                        onChange={(e) => set(i, { entry_date: e.target.value })}
-                        className={`${cellInput} w-32`}
+                        onChange={(e) => {
+                          set(i, { entry_date: e.target.value });
+                          if (e.target.value) clearDateFlag(i);
+                        }}
+                        aria-invalid={missingDates.has(i)}
+                        className={`${dateBase} ${missingDates.has(i) ? dateBad : dateOk}`}
                       />
                     </td>
                     <td className="px-1 py-1">
@@ -271,7 +363,10 @@ export function ReviewTable({
                     type="checkbox"
                     checked={r.include}
                     disabled={readOnly}
-                    onChange={(e) => set(i, { include: e.target.checked })}
+                    onChange={(e) => {
+                      set(i, { include: e.target.checked });
+                      if (!e.target.checked) clearDateFlag(i);
+                    }}
                     className="size-4 accent-[#3987e5]"
                   />
                 </td>
@@ -295,10 +390,17 @@ export function ReviewTable({
         <div className="flex items-center justify-between gap-3 border-t border-hairline px-4 py-3">
           <p
             className={`min-h-5 text-[12.5px] ${
-              notice ? (notice.tone === "good" ? "text-good" : "text-critical") : "text-ink-3"
+              missingDatesText
+                ? "text-critical"
+                : notice
+                  ? notice.tone === "good"
+                    ? "text-good"
+                    : "text-critical"
+                  : "text-ink-3"
             }`}
           >
-            {notice?.text ??
+            {missingDatesText ??
+              notice?.text ??
               "Uncheck rows you don't want in the books. Balance rows are excluded for you."}
           </p>
           <div className="flex shrink-0 gap-2">

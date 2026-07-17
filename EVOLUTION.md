@@ -84,3 +84,75 @@ resolve by exposing the missing data, not by changing the pinned semantics.
 Phase gates P1–P7 otherwise passed first try; server-action-by-curl (P2/P5
 gates) worked via the rendered `$ACTION_ID` form field and the `Next-Action`
 header respectively.
+
+## 7. Post-ship (2026-07-16): capture quality + bill-type pages (no per-row date)
+
+**What happened:** Real-world use surfaced two gaps the demo fixture hid.
+(a) Capture was a bare `capture="environment"` file input that hard-rejected
+iPhone HEIC and shipped full-res photos. (b) A user photographed a **BILL FORM**
+(itemised invoice: Quantity/Description/HSN/Rate/Value) — not the running khata
+the app was designed around. A bill has ONE document-level date, no per-row
+dates, so the vision model correctly returned `entry_date: null` on every row —
+and the posting engine then blocked with `row 1: needs a date before posting`,
+thrown server-side on the FIRST offender only (fix row 1 → re-post → "row 2…" →
+N round-trips).
+
+**Resolution:**
+- Capture rewritten to normalise every shot in the browser (decode → downscale
+  2400px → bake EXIF orientation into pixels → re-encode JPEG q0.85) + preview
+  and Retake. HEIC decodes natively on iOS Safari; sideways photos (a silent
+  extraction-killer) are made upright before upload.
+- Review gained a client-side pre-flight mirroring the posting rule: it flags
+  **all** included dateless rows at once, highlights the cells, focuses the
+  first, and blocks before the confirm dialog. Server throw kept as backstop.
+- Added a **"Fill empty dates"** control (set one date → stamps all empty rows)
+  — the correct UX for bill/invoice pages.
+
+**Delta (spec-template):** The extractor was NOT wrong to return null dates — do
+not "fix" extraction to invent dates. Ledger-vs-bill is a real document-type
+split: khata pages date per row; bills/invoices carry one document-level date.
+Any field the source encodes once at the document level (date here; GSTIN,
+bill-no next) must be fillable once in review, never required per row — and
+per-row posting validation must fail *all* offenders up front, not one at a time.
+
+## 8. Code review of the post-ship capture/fill-dates rewrite (2026-07-17)
+
+**What happened:** A workflow-backed xhigh review of item 7's diff (before
+commit) found 8 confirmed defects, none caught by typecheck/lint/tests. Two
+were data-integrity bugs: `fillEmptyDates()`/`emptyDateCount` had no
+`r.include` guard, so the bulk date-fill silently persisted a fabricated date
+onto excluded/balance rows via `payload()` → `applyDraftRows` — a
+still-excluded row could later be re-included and posted under an invented
+date. The bulk-fill input also defaulted to `rows.find(r => r.entry_date)`,
+silently trusting whichever row happened to have a date first, including a
+single stray mis-extraction. The rest were UI-integrity gaps in the same
+rewrite: Retake called `fileRef.current?.click()` against a ref that was
+`null` because the `<input>` only existed in the DOM in the no-preview
+branch; the "Row N needs a date" banner was a string snapshotted at click
+time that `clearDateFlag()` never updated, so it kept naming already-fixed
+rows; every image was forced through a lossy JPEG q0.85 re-encode even when
+already small and clean; a transparent PNG composited to solid black under
+that re-encode (no background fill before `drawImage`); the image-decode
+promise had no timeout, so an undecodable file could hang "processing"
+forever; and `createObjectURL` ran inside a `setShot` functional updater,
+which Strict Mode double-invokes in dev, leaking a blob URL per pick.
+
+**Resolution:** All 8 fixed — see `src/components/review-table.tsx` and
+`src/components/upload-capture.tsx` in this commit. Fixes: gate
+fill/count on `r.include`; default `fillDate` to `""` (no auto-trust); derive
+the missing-dates banner live from the `missingDates` set instead of a frozen
+string; mount the file `<input>` unconditionally (`htmlFor` instead of
+physical nesting under the label) so Retake always has a live ref; seed an
+opaque white canvas background before `drawImage`; only drop to JPEG q0.85
+when actually downscaling (0.95 otherwise); add a 15s decode timeout with a
+user-facing error; hoist `createObjectURL` out of the updater so it runs
+exactly once per pick.
+
+**Delta (spec-template):** A feature rewrite that touches capture/review UI
+state needs an adversarial code review before commit, not just
+typecheck/lint/tests — none of these 8 were type errors or lint violations,
+and several (fabricated dates on excluded rows, silent stray-date trust) are
+exactly the class of bug a coded spec's "hard constraints" section exists to
+prevent. Add "run /code-review before committing" as a standing step for any
+diff touching money-adjacent UI state (dates, amounts, include flags), not
+just before a ship gate.

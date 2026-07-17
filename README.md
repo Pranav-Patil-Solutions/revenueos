@@ -50,12 +50,16 @@ ITC ₹900.00, payable ₹1,680.00.
 Open `http://<tailscale-ip-of-this-mac>:3322/capture` on your phone. The
 capture button uses a file input with `capture="environment"` — it opens the
 camera directly and works over plain HTTP (no secure-context requirement,
-unlike getUserMedia). iPhone users: shoot in **Most Compatible** format
-(Settings → Camera → Formats) — HEIC uploads are rejected with a hint.
+unlike getUserMedia). Every shot is normalised **in the browser** before
+upload — decoded, downscaled to a 2400px long edge, EXIF orientation baked into
+the pixels, and re-encoded to JPEG. iPhone HEIC decodes natively on iOS Safari,
+so no camera-format change is needed; you also get a preview + Retake before the
+page burns an extraction round on a blurry shot.
 
 ## Pipeline
 
-1. **Capture** — photo + party → `POST /api/upload` (15MB cap, jpg/png/webp,
+1. **Capture** — photo + party. The browser normalises the shot (HEIC-safe,
+   downscaled, upright JPEG) and shows a preview → `POST /api/upload` (15MB cap,
    sha256 duplicate-page warning).
 2. **Extract** — `POST /api/documents/<id>/extract` (also fired by the UI).
    Headless Claude reads the photo via its Read tool and returns strict JSON;
