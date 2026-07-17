@@ -3,6 +3,12 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import { saveAndPost, saveDraftRows } from "@/lib/actions";
 import { inr } from "@/lib/format";
+import {
+  countEmptyDates,
+  findMissingDateIndices,
+  fillEmptyDates as bulkFillEmptyDates,
+  missingDatesText as deriveMissingDatesText,
+} from "@/lib/review-dates";
 import { ConfidenceBadge } from "./status-badge";
 import type { EntryType, StagedRow } from "@/lib/types";
 
@@ -98,14 +104,10 @@ export function ReviewTable({
   // Derived from the live missingDates set (not a frozen string) so the banner
   // shrinks in place as the user fixes flagged rows, instead of naming rows
   // that are already resolved.
-  const missingDatesText = useMemo(() => {
-    if (missingDates.size === 0) return null;
-    const nums = [...missingDates]
-      .sort((a, b) => a - b)
-      .map((i) => edit[i].row_no);
-    const many = nums.length > 1;
-    return `Row${many ? "s" : ""} ${nums.join(", ")} need${many ? "" : "s"} a date before posting — fill the highlighted date cell${many ? "s" : ""}.`;
-  }, [missingDates, edit]);
+  const missingDatesText = useMemo(
+    () => deriveMissingDatesText(edit, missingDates),
+    [missingDates, edit]
+  );
 
   function clearDateFlag(i: number) {
     setMissingDates((prev) => {
@@ -118,11 +120,7 @@ export function ReviewTable({
 
   function fillEmptyDates() {
     if (!fillDate) return;
-    setEdit((prev) =>
-      prev.map((r) =>
-        r.include && !r.entry_date ? { ...r, entry_date: fillDate } : r
-      )
-    );
+    setEdit((prev) => bulkFillEmptyDates(prev, fillDate));
     setMissingDates(new Set());
     setNotice(null);
   }
@@ -138,10 +136,7 @@ export function ReviewTable({
     return { dr, cr };
   }, [edit]);
 
-  const emptyDateCount = useMemo(
-    () => edit.filter((r) => r.include && !r.entry_date).length,
-    [edit]
-  );
+  const emptyDateCount = useMemo(() => countEmptyDates(edit), [edit]);
 
   function set(i: number, patch: Partial<EditRow>) {
     setEdit((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -185,7 +180,7 @@ export function ReviewTable({
     // Mirror the posting engine's rule: every included row needs a date. Catch
     // it here — with the offending cells highlighted — instead of failing on the
     // server after the confirm dialog.
-    const missing = edit.flatMap((r, i) => (r.include && !r.entry_date ? [i] : []));
+    const missing = findMissingDateIndices(edit);
     if (missing.length > 0) {
       setMissingDates(new Set(missing));
       dateRefs.current[missing[0]]?.focus();
