@@ -18,7 +18,7 @@ Single business at a time (multi-client later). India regime. Local-first, Tails
   (no CHECK there — verified): "journal" | "contra" | "depreciation" | "tds_challan".
 - Next.js 16: params/searchParams are Promises — always await.
 
-## UI DIRECTION (final, per approved preview artifact 60d1d93a)
+## UI DIRECTION (APPROVED FINAL by Pranav 2026-07-19 — "final ui" on the Light/Apple preview; no further design rounds)
 Apple UI/UX over ERP bones:
 - SF/system type, sentence case, −.005em tracking; large bold page titles.
 - Light default: #f5f5f7 page / #fff cards / #007aff accent (dark alt: #1c1c1e / #0a84ff).
