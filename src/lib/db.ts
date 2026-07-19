@@ -99,21 +99,36 @@ const DDL = `
   CREATE INDEX IF NOT EXISTS idx_lines_party   ON journal_lines(party_id);
 `;
 
-/** Chart of accounts — 13 accounts, seeded once. */
-export const SEED_ACCOUNTS: { code: string; name: string; type: string }[] = [
-  { code: "1000", name: "Cash", type: "asset" },
-  { code: "1100", name: "Bank", type: "asset" },
-  { code: "1200", name: "Accounts Receivable", type: "asset" },
-  { code: "1300", name: "GST ITC", type: "asset" },
-  { code: "2100", name: "Accounts Payable", type: "liability" },
-  { code: "2200", name: "GST Output CGST", type: "liability" },
-  { code: "2210", name: "GST Output SGST", type: "liability" },
-  { code: "2220", name: "GST Output IGST", type: "liability" },
-  { code: "3000", name: "Opening Balance Equity", type: "equity" },
-  { code: "4000", name: "Sales", type: "income" },
-  { code: "5000", name: "Purchases", type: "expense" },
-  { code: "5900", name: "Expenses", type: "expense" },
-  { code: "5950", name: "Rounding", type: "expense" },
+/** Chart of accounts — seeded once, grouped via src/lib/coa.ts metadata. */
+export const SEED_ACCOUNTS: {
+  code: string;
+  name: string;
+  type: string;
+  group_code: string;
+}[] = [
+  { code: "1000", name: "Cash", type: "asset", group_code: "current_assets" },
+  { code: "1100", name: "Bank", type: "asset", group_code: "current_assets" },
+  { code: "1200", name: "Accounts Receivable", type: "asset", group_code: "current_assets" },
+  { code: "1300", name: "GST ITC", type: "asset", group_code: "duties_taxes" },
+  { code: "1500", name: "Plant & Machinery", type: "asset", group_code: "fixed_assets" },
+  { code: "1510", name: "Furniture & Fixtures", type: "asset", group_code: "fixed_assets" },
+  { code: "1520", name: "Buildings", type: "asset", group_code: "fixed_assets" },
+  { code: "1530", name: "Computers", type: "asset", group_code: "fixed_assets" },
+  { code: "1540", name: "Vehicles", type: "asset", group_code: "fixed_assets" },
+  { code: "1590", name: "Accumulated Depreciation", type: "asset", group_code: "fixed_assets" },
+  { code: "2100", name: "Accounts Payable", type: "liability", group_code: "current_liabilities" },
+  { code: "2200", name: "GST Output CGST", type: "liability", group_code: "duties_taxes" },
+  { code: "2210", name: "GST Output SGST", type: "liability", group_code: "duties_taxes" },
+  { code: "2220", name: "GST Output IGST", type: "liability", group_code: "duties_taxes" },
+  { code: "2300", name: "TDS Payable", type: "liability", group_code: "duties_taxes" },
+  { code: "3000", name: "Opening Balance Equity", type: "equity", group_code: "capital" },
+  { code: "3100", name: "Capital Account", type: "equity", group_code: "capital" },
+  { code: "3150", name: "Drawings", type: "equity", group_code: "capital" },
+  { code: "4000", name: "Sales", type: "income", group_code: "income" },
+  { code: "5000", name: "Purchases", type: "expense", group_code: "direct_expenses" },
+  { code: "5800", name: "Depreciation", type: "expense", group_code: "indirect_expenses" },
+  { code: "5900", name: "Expenses", type: "expense", group_code: "indirect_expenses" },
+  { code: "5950", name: "Rounding", type: "expense", group_code: "indirect_expenses" },
 ];
 
 /** DDL + additive migrations. Safe to run on every open (and on :memory: in
@@ -121,17 +136,33 @@ export const SEED_ACCOUNTS: { code: string; name: string; type: string }[] = [
 export function initSchema(db: Database.Database): void {
   db.pragma("foreign_keys = ON");
   db.exec(DDL);
-  // ensureColumn() slots for future additive migrations go here.
+  // ensureColumn() slots — additive migrations, run on every open.
+  ensureColumn(db, "accounts", "group_code", "TEXT");
+  ensureColumn(db, "settings", "entity_type", "TEXT NOT NULL DEFAULT 'proprietorship'");
+  ensureColumn(db, "settings", "pan", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "settings", "tan", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "settings", "it_regime", "TEXT NOT NULL DEFAULT 'new'");
+  ensureColumn(db, "settings", "presumptive", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "settings", "books_locked_through", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "settings", "fy_audit_case", "INTEGER NOT NULL DEFAULT 0");
 }
 
-/** Settings singleton + chart of accounts. Idempotent. */
+/** Settings singleton + chart of accounts. Idempotent — also backfills
+ * group_code on pre-grouping books. */
 export function seedCoreData(db: Database.Database): void {
   db.prepare("INSERT OR IGNORE INTO settings (id) VALUES (1)").run();
   const insert = db.prepare(
-    "INSERT OR IGNORE INTO accounts (code, name, type) VALUES (@code, @name, @type)"
+    `INSERT OR IGNORE INTO accounts (code, name, type, group_code)
+     VALUES (@code, @name, @type, @group_code)`
+  );
+  const backfill = db.prepare(
+    "UPDATE accounts SET group_code = @group_code WHERE code = @code AND group_code IS NULL"
   );
   const tx = db.transaction(() => {
-    for (const a of SEED_ACCOUNTS) insert.run(a);
+    for (const a of SEED_ACCOUNTS) {
+      insert.run(a);
+      backfill.run({ code: a.code, group_code: a.group_code });
+    }
   });
   tx();
 }

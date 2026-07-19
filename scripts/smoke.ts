@@ -24,15 +24,19 @@ const ok = (msg: string) => console.log(`  ✓ ${msg}`);
 
 async function main(): Promise<void> {
   step = "boot fresh db + seeds";
-  const { getDb } = await import("../src/lib/db");
+  const { getDb, SEED_ACCOUNTS } = await import("../src/lib/db");
   const db = getDb();
   const accounts = db.prepare("SELECT COUNT(*) AS n FROM accounts").get() as { n: number };
-  assert.equal(accounts.n, 13, "chart of accounts");
+  assert.equal(accounts.n, SEED_ACCOUNTS.length, "chart of accounts");
+  const ungrouped = db
+    .prepare("SELECT COUNT(*) AS n FROM accounts WHERE group_code IS NULL")
+    .get() as { n: number };
+  assert.equal(ungrouped.n, 0, "every account grouped");
   const sharma = db
     .prepare("SELECT id FROM parties WHERE name = 'Sharma Traders'")
     .get() as { id: number } | undefined;
   assert.ok(sharma, "DEMO_MODE seeds Sharma Traders");
-  ok(`fresh db at ${tmp} — 13 accounts, demo parties seeded`);
+  ok(`fresh db at ${tmp} — ${SEED_ACCOUNTS.length} grouped accounts, demo parties seeded`);
 
   step = "fake upload";
   mkdirSync(path.join(tmp, "data", "uploads"), { recursive: true });

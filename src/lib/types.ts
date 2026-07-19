@@ -16,6 +16,17 @@ export type EntryType =
   | "opening"
   | "other";
 export type SettleAccount = "cash" | "bank";
+export type EntityType = "proprietorship" | "partnership" | "company";
+export type ItRegime = "old" | "new";
+export type Presumptive = "" | "44AD" | "44ADA";
+/** journals.entry_type has no CHECK — manual/generated kinds live here.
+ * staged_rows.entry_type stays the frozen 8-value EntryType enum. */
+export type JournalKind =
+  | EntryType
+  | "journal"
+  | "contra"
+  | "depreciation"
+  | "tds_challan";
 
 // Row types mirror the sqlite column names exactly (snake_case) so queries
 // need no aliasing. All money columns are INTEGER paise.
@@ -29,6 +40,13 @@ export interface SettingsRow {
   currency: string;
   default_gst_rate: number;
   tax_inclusive: number; // 0 | 1
+  entity_type: EntityType;
+  pan: string;
+  tan: string;
+  it_regime: ItRegime;
+  presumptive: Presumptive;
+  books_locked_through: string; // ISO YYYY-MM-DD, '' = books open
+  fy_audit_case: number; // 0 | 1 — audit case pushes the ITR due date
 }
 
 export interface AccountRow {
@@ -36,6 +54,7 @@ export interface AccountRow {
   code: string;
   name: string;
   type: AccountType;
+  group_code: string | null;
 }
 
 export interface PartyRow {
@@ -102,7 +121,7 @@ export interface DraftRowInput {
 export interface JournalRow {
   id: number;
   entry_date: string;
-  entry_type: EntryType;
+  entry_type: JournalKind;
   memo: string;
   ref_no: string;
   source_document_id: number | null;

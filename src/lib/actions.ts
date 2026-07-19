@@ -4,11 +4,20 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
+import { groupFor } from "./coa";
 import { getDb } from "./db";
 import { extractDocument } from "./extraction";
 import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
-import type { DocumentRow, DraftRowInput, EntryType } from "./types";
+import type {
+  AccountType,
+  DocumentRow,
+  DraftRowInput,
+  EntryType,
+  EntityType,
+  ItRegime,
+  Presumptive,
+} from "./types";
 
 const ENTRY_TYPES: EntryType[] = [
   "sale",
@@ -102,13 +111,35 @@ export async function createParty(formData: FormData): Promise<void> {
   redirect("/parties");
 }
 
+const ENTITY_TYPES: EntityType[] = ["proprietorship", "partnership", "company"];
+const IT_REGIMES: ItRegime[] = ["old", "new"];
+const PRESUMPTIVE: Presumptive[] = ["", "44AD", "44ADA"];
+
 export async function updateSettings(formData: FormData): Promise<void> {
   const rate = Number(formData.get("default_gst_rate") ?? 18);
+  const entityType = String(formData.get("entity_type") ?? "proprietorship");
+  if (!ENTITY_TYPES.includes(entityType as EntityType)) {
+    throw new Error("Unknown entity type.");
+  }
+  const itRegime = String(formData.get("it_regime") ?? "new");
+  if (!IT_REGIMES.includes(itRegime as ItRegime)) {
+    throw new Error("IT regime must be old or new.");
+  }
+  const presumptive = String(formData.get("presumptive") ?? "");
+  if (!PRESUMPTIVE.includes(presumptive as Presumptive)) {
+    throw new Error("Presumptive scheme must be blank, 44AD, or 44ADA.");
+  }
+  const lockedThrough = String(formData.get("books_locked_through") ?? "").trim();
+  if (lockedThrough !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(lockedThrough)) {
+    throw new Error("Books-locked-through must be a date (YYYY-MM-DD) or blank.");
+  }
   getDb()
     .prepare(
       `UPDATE settings SET
          company_name = ?, gstin = ?, state_code = ?, country = ?,
-         currency = ?, default_gst_rate = ?, tax_inclusive = ?
+         currency = ?, default_gst_rate = ?, tax_inclusive = ?,
+         entity_type = ?, pan = ?, tan = ?, it_regime = ?, presumptive = ?,
+         books_locked_through = ?, fy_audit_case = ?
        WHERE id = 1`
     )
     .run(
@@ -118,10 +149,62 @@ export async function updateSettings(formData: FormData): Promise<void> {
       String(formData.get("country") ?? "IN").trim().toUpperCase() || "IN",
       String(formData.get("currency") ?? "INR").trim().toUpperCase() || "INR",
       Number.isFinite(rate) ? rate : 18,
-      formData.get("tax_inclusive") === "on" ? 1 : 0
+      formData.get("tax_inclusive") === "on" ? 1 : 0,
+      entityType,
+      String(formData.get("pan") ?? "").trim().toUpperCase(),
+      String(formData.get("tan") ?? "").trim().toUpperCase(),
+      itRegime,
+      presumptive,
+      lockedThrough,
+      formData.get("fy_audit_case") === "on" ? 1 : 0
     );
   revalidatePath("/settings");
   redirect("/settings");
+}
+
+const ACCOUNT_TYPES: AccountType[] = [
+  "asset",
+  "liability",
+  "equity",
+  "income",
+  "expense",
+];
+
+/** COA is add-only/rename-only — accounts are never deleted or retyped, the
+ * books may already reference them. */
+export async function createAccount(formData: FormData): Promise<void> {
+  const code = String(formData.get("code") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  const type = String(formData.get("type") ?? "");
+  const groupCode = String(formData.get("group_code") ?? "");
+  if (!/^\d{4}$/.test(code)) {
+    throw new Error("Account code must be 4 digits (e.g. 5910).");
+  }
+  if (!name) throw new Error("Account name is required.");
+  if (!ACCOUNT_TYPES.includes(type as AccountType)) {
+    throw new Error("Unknown account type.");
+  }
+  if (!groupFor(groupCode)) throw new Error("Unknown account group.");
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT id FROM accounts WHERE code = ?")
+    .get(code);
+  if (existing) throw new Error(`Account code ${code} already exists.`);
+  db.prepare(
+    "INSERT INTO accounts (code, name, type, group_code) VALUES (?, ?, ?, ?)"
+  ).run(code, name, type, groupCode);
+  revalidatePath("/settings/accounts");
+  redirect("/settings/accounts");
+}
+
+export async function renameAccount(formData: FormData): Promise<void> {
+  const id = Number(formData.get("id"));
+  const name = String(formData.get("name") ?? "").trim();
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Bad account id.");
+  if (!name) throw new Error("Account name is required.");
+  getDb().prepare("UPDATE accounts SET name = ? WHERE id = ?").run(name, id);
+  revalidatePath("/settings/accounts");
+  redirect("/settings/accounts");
 }
 
 export async function runExtraction(docId: number): Promise<void> {
