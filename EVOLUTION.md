@@ -156,3 +156,26 @@ exactly the class of bug a coded spec's "hard constraints" section exists to
 prevent. Add "run /code-review before committing" as a standing step for any
 diff touching money-adjacent UI state (dates, amounts, include flags), not
 just before a ship gate.
+
+## 9. RVOS-002 P1 (2026-07-19): no failures
+
+All four gates green first run (87 tests, smoke with 23 grouped accounts,
+lint, build), live-DB copy migrated cleanly through the new ensureColumn
+slots. High-effort code-review workflow launched on the diff; committed on
+Pranav's go-ahead with any late findings to land as `RVOS-002 gate:` commits.
+
+## 10. RVOS-002 P2 (2026-07-19): reused `?N` SQL params bound positionally
+
+**What happened:** `trialBalance(asOf?)` and `profitAndLoss(period)` reused
+numbered SQLite parameters (`?1` twice for the null-or-filter idiom) and bound
+them positionally with `.all(a, b, c)`. better-sqlite3 refuses positional
+binding when a numbered param is reused — every call threw
+`RangeError: Too many parameter values were provided`, failing 10 tests.
+
+**Resolution:** switched all three optional-filter queries in reports.ts
+(`trialBalance`, `profitAndLoss`, `netProfitBetween`) to `@named` params bound
+with a single object — better-sqlite3's supported form for reused params.
+
+**Delta (rule):** in this repo, any SQL parameter that is optional (the
+`@p IS NULL OR col = @p` idiom) or referenced more than once MUST be a
+`@named` param bound via an object; never `?N` with positional args.

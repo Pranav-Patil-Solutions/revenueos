@@ -83,8 +83,14 @@ async function main(): Promise<void> {
   ok("posted 9 journals in one transaction");
 
   step = "assert the books";
-  const { trialBalance, partyStatement, gstr3b, gstr1B2B, profitAndLoss } =
-    await import("../src/lib/reports");
+  const {
+    balanceSheet,
+    trialBalance,
+    partyStatement,
+    gstr3b,
+    gstr1B2B,
+    profitAndLoss,
+  } = await import("../src/lib/reports");
 
   const zero = db
     .prepare("SELECT SUM(debit_paise) - SUM(credit_paise) AS d FROM journal_lines")
@@ -111,6 +117,22 @@ async function main(): Promise<void> {
   assert.equal(pnl.total_income_paise, 1_600_000, "P&L income");
   assert.equal(pnl.total_expense_paise, 500_000, "P&L purchases");
   ok("P&L: income ₹16,000.00 · purchases ₹5,000.00");
+
+  const fyPnl = profitAndLoss(db, { from: "2026-04-01", to: "2027-03-31" });
+  assert.equal(fyPnl.net_profit_paise, 1_100_000, "FY 2026-27 net profit");
+  const settings = db
+    .prepare("SELECT * FROM settings WHERE id = 1")
+    .get() as import("../src/lib/types").SettingsRow;
+  const bs = balanceSheet(db, "2027-03-31", settings);
+  assert.equal(bs.balanced, true, "balance sheet balanced");
+  assert.equal(bs.total_assets_paise, 2_158_000, "total assets ₹21,580.00");
+  assert.equal(bs.current_year_profit_paise, 1_100_000, "profit injected as equity");
+  assert.equal(
+    bs.total_assets_paise,
+    bs.total_liabilities_paise + bs.total_equity_paise,
+    "A = L + E"
+  );
+  ok("BS 2027-03-31: assets ₹21,580.00 = liabilities + capital · profit ₹11,000.00 injected");
 
   step = "posted lock";
   await assert.rejects(() => extractDocument(docId), /posted/);

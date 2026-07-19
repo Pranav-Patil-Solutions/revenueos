@@ -1,16 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { paiseToRupeeString, thisMonth, toCsv } from "@/lib/format";
+import { paiseToRupeeString, thisMonth, toCsv, todayIso } from "@/lib/format";
+import { fyEnd, fyStart } from "@/lib/fy";
 import {
+  balanceSheet,
   dayBook,
   gstr1B2B,
   gstr3b,
   partyStatement,
   profitAndLoss,
   trialBalance,
+  type PnlPeriod,
 } from "@/lib/reports";
+import type { SettingsRow } from "@/lib/types";
 
 const rupees = paiseToRupeeString;
+
+/** ?fy= value → FY key, or null when absent/invalid. */
+function parseFy(sp: URLSearchParams): string | null {
+  const fy = sp.get("fy");
+  if (!fy) return null;
+  try {
+    fyStart(fy);
+    return fy;
+  } catch {
+    return null;
+  }
+}
 
 /** CSV/JSON exports for every report. Money is exported as decimal-rupee
  * strings (exact — derived from integer paise, never floats). */
@@ -78,8 +94,17 @@ export async function GET(
       break;
     }
     case "pnl": {
-      const pnl = profitAndLoss(db, sp.has("month") ? month : undefined);
-      filename = "profit-and-loss";
+      const fy = parseFy(sp);
+      if (sp.has("fy") && !fy) {
+        return NextResponse.json({ error: "fy must look like 2026-27" }, { status: 400 });
+      }
+      const period: PnlPeriod | undefined = fy
+        ? { from: fyStart(fy), to: fyEnd(fy) }
+        : sp.has("month")
+          ? month
+          : undefined;
+      const pnl = profitAndLoss(db, period);
+      filename = fy ? `profit-and-loss-fy-${fy}` : "profit-and-loss";
       headers = ["Section", "Code", "Account", "Amount"];
       rows = [
         ...pnl.income_lines.map((l) => ["Income", l.code, l.name, rupees(l.amount_paise)]),
@@ -162,9 +187,58 @@ export async function GET(
       };
       break;
     }
+    case "balance-sheet": {
+      const asOfParam = sp.get("as_of");
+      if (asOfParam && !/^\d{4}-\d{2}-\d{2}$/.test(asOfParam)) {
+        return NextResponse.json({ error: "as_of must be YYYY-MM-DD" }, { status: 400 });
+      }
+      const fy = parseFy(sp);
+      if (sp.has("fy") && !fy) {
+        return NextResponse.json({ error: "fy must look like 2026-27" }, { status: 400 });
+      }
+      const asOf = asOfParam ?? (fy ? fyEnd(fy) : todayIso());
+      const settings = db
+        .prepare("SELECT * FROM settings WHERE id = 1")
+        .get() as SettingsRow;
+      const bs = balanceSheet(db, asOf, settings);
+      filename = `balance-sheet-${asOf}`;
+      headers = ["Section", "Group", "Code", "Account", "Amount"];
+      const sectionLabel = (s: string): string =>
+        s === "assets" ? "Assets" : "Capital & liabilities";
+      rows = bs.groups.flatMap((g) => [
+        ...g.lines.map((l) => [
+          sectionLabel(g.section), g.label, l.code, l.name, rupees(l.amount_paise),
+        ]),
+        [sectionLabel(g.section), g.label, "", `Total ${g.label.toLowerCase()}`, rupees(g.total_paise)],
+      ]);
+      rows.push(
+        ["Assets", "", "", "TOTAL ASSETS", rupees(bs.total_assets_paise)],
+        ["Capital & liabilities", "", "", "TOTAL CAPITAL & LIABILITIES",
+          rupees(bs.total_liabilities_paise + bs.total_equity_paise)],
+      );
+      json = {
+        as_of: bs.as_of,
+        fy: bs.fy,
+        groups: bs.groups.map((g) => ({
+          section: g.section,
+          group: g.label,
+          lines: g.lines.map((l) => ({
+            code: l.code, account: l.name, amount: rupees(l.amount_paise),
+          })),
+          total: rupees(g.total_paise),
+        })),
+        retained_earnings_prior: rupees(bs.retained_prior_paise),
+        current_year_profit: rupees(bs.current_year_profit_paise),
+        total_assets: rupees(bs.total_assets_paise),
+        total_liabilities: rupees(bs.total_liabilities_paise),
+        total_equity: rupees(bs.total_equity_paise),
+        balanced: bs.balanced,
+      };
+      break;
+    }
     default:
       return NextResponse.json(
-        { error: `unknown report '${report}' — use trial-balance, day-book, pnl, gstr-3b, gstr-1, or statement` },
+        { error: `unknown report '${report}' — use trial-balance, balance-sheet, day-book, pnl, gstr-3b, gstr-1, or statement` },
         { status: 404 }
       );
   }
