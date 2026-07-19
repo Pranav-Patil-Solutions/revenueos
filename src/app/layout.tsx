@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist_Mono } from "next/font/google";
+import { Shortcuts } from "@/components/shortcuts";
 import { Sidebar } from "@/components/sidebar";
 import { Statusbar } from "@/components/statusbar";
 import { Topbar } from "@/components/topbar";
@@ -38,6 +39,7 @@ export default function RootLayout({
           <main className="mx-auto max-w-6xl px-8 pt-8 pb-16">{children}</main>
         </div>
         <Statusbar />
+        <Shortcuts />
       </body>
     </html>
   );

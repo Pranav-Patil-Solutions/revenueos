@@ -5,6 +5,7 @@ import {
   splitExclusive,
   splitInclusive,
 } from "./tax/india-gst";
+import { assertNotLocked } from "./vouchers";
 import type {
   DocumentRow,
   DraftRowInput,
@@ -284,6 +285,7 @@ export function postDocument(
       if (!row.entry_date) {
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
+      assertNotLocked(db, row.entry_date);
       const legs = buildLegs(row, party, settings);
       assertBalanced(legs);
       const journalId = insertJournal.run(

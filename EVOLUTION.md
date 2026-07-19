@@ -179,3 +179,21 @@ with a single object — better-sqlite3's supported form for reused params.
 **Delta (rule):** in this repo, any SQL parameter that is optional (the
 `@p IS NULL OR col = @p` idiom) or referenced more than once MUST be a
 `@named` param bound via an object; never `?N` with positional args.
+
+## 11. RVOS-002 P3 (2026-07-20): server trusted the form's party filter
+
+**What happened:** `postManualVoucher`'s structured branch looked the party up
+but never checked its kind against the voucher kind — the client `<select>`
+filters customers vs suppliers, so the gap was invisible in the UI, but a
+direct server-action call could post AR entries against a supplier (or AP
+against a customer), corrupting both sub-ledgers. Caught by the pre-commit
+code-review pass, not by tests — all 109 tests went through the form's happy
+path.
+
+**Resolution:** kind guard in `legsFor` (sale/receipt/credit_note → customer;
+purchase/payment/debit_note → supplier) + a pinned rejection test.
+
+**Delta (rule):** any option a form *filters* is a constraint the server must
+*enforce*: every server action that accepts an entity id must re-validate the
+relationship the UI implied (party kind, account group, document status) —
+client-side filtering is UX, never validation.

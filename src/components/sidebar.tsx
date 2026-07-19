@@ -35,6 +35,16 @@ const NAV_GROUPS: NavGroup[] = [
           </>
         ),
       },
+      {
+        href: "/vouchers",
+        label: "Vouchers",
+        icon: (
+          <>
+            <path d="M4 4h16v16H4z" />
+            <path d="M8 9h8M8 13h5M4 4l2 2 2-2 2 2 2-2 2 2 2-2 2 2" />
+          </>
+        ),
+      },
     ],
   },
   {

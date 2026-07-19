@@ -9,6 +9,12 @@ import { getDb } from "./db";
 import { extractDocument } from "./extraction";
 import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
+import {
+  postManualVoucher,
+  type JournalLegInput,
+  type StructuredKind,
+  type VoucherInput,
+} from "./vouchers";
 import type {
   AccountType,
   DocumentRow,
@@ -16,6 +22,7 @@ import type {
   EntryType,
   EntityType,
   ItRegime,
+  PartyKind,
   Presumptive,
 } from "./types";
 
@@ -205,6 +212,127 @@ export async function renameAccount(formData: FormData): Promise<void> {
   getDb().prepare("UPDATE accounts SET name = ? WHERE id = ?").run(name, id);
   revalidatePath("/settings/accounts");
   redirect("/settings/accounts");
+}
+
+const STRUCTURED_KINDS: StructuredKind[] = [
+  "sale",
+  "purchase",
+  "receipt",
+  "payment",
+  "credit_note",
+  "debit_note",
+];
+
+function parseVoucherLegs(legsJson: string): JournalLegInput[] {
+  const parsed: unknown = JSON.parse(legsJson);
+  if (!Array.isArray(parsed)) throw new Error("legs payload must be an array");
+  return parsed.map((raw, i) => {
+    const l = raw as Record<string, unknown>;
+    const label = `leg ${i + 1}`;
+    if (typeof l.account_code !== "string") {
+      throw new Error(`${label}: missing account`);
+    }
+    const money = (v: unknown, side: string): number => {
+      if (v === null || v === undefined) return 0;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(`${label}: ${side} must be a non-negative integer of paise`);
+      }
+      return v;
+    };
+    return {
+      account_code: l.account_code,
+      party_id: typeof l.party_id === "number" ? l.party_id : null,
+      debit_paise: money(l.debit_paise, "debit"),
+      credit_paise: money(l.credit_paise, "credit"),
+    };
+  });
+}
+
+/** Manual voucher entry — parses the form by kind, posts one journal. */
+export async function createVoucher(formData: FormData): Promise<void> {
+  const kind = String(formData.get("kind") ?? "");
+  const entry_date = String(formData.get("entry_date") ?? "").trim();
+  const memo = String(formData.get("memo") ?? "").trim();
+  const ref_no = String(formData.get("ref_no") ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(entry_date)) {
+    throw new Error("Voucher date is required (YYYY-MM-DD).");
+  }
+
+  const amount = (): number => {
+    const v = Number(formData.get("amount_paise"));
+    if (!Number.isInteger(v) || v <= 0) {
+      throw new Error("Amount must be a positive amount in paise.");
+    }
+    return v;
+  };
+
+  let input: VoucherInput;
+  if (kind === "contra") {
+    const from = formData.get("from") === "bank" ? "bank" : "cash";
+    const to = formData.get("to") === "bank" ? "bank" : "cash";
+    input = { kind, entry_date, memo, ref_no, from, to, amount_paise: amount() };
+  } else if (kind === "journal") {
+    input = {
+      kind,
+      entry_date,
+      memo,
+      ref_no,
+      legs: parseVoucherLegs(String(formData.get("legs") ?? "[]")),
+    };
+  } else if (STRUCTURED_KINDS.includes(kind as StructuredKind)) {
+    const party_id = Number(formData.get("party_id"));
+    if (!Number.isInteger(party_id) || party_id <= 0) {
+      throw new Error("Pick a party for this voucher.");
+    }
+    let gst_rate: number | null = null;
+    const rateRaw = String(formData.get("gst_rate") ?? "");
+    if (rateRaw !== "") {
+      const rate = Number(rateRaw);
+      if (!GST_RATES.includes(rate as (typeof GST_RATES)[number])) {
+        throw new Error("Invalid GST rate.");
+      }
+      gst_rate = rate;
+    }
+    input = {
+      kind: kind as StructuredKind,
+      entry_date,
+      memo,
+      ref_no,
+      party_id,
+      amount_paise: amount(),
+      gst_rate,
+      settle_account: formData.get("settle_account") === "bank" ? "bank" : "cash",
+    };
+  } else {
+    throw new Error("Unknown voucher kind.");
+  }
+
+  const { journalId } = postManualVoucher(getDb(), input);
+  revalidatePath("/vouchers");
+  revalidatePath("/reports");
+  revalidatePath("/");
+  redirect(`/vouchers?kind=${kind}&posted=${journalId}`);
+}
+
+/** Alt+C inline party create from the voucher form — returns the new row so
+ * the form can select it without losing state (no redirect). */
+export async function createVoucherParty(
+  name: string,
+  kind: PartyKind
+): Promise<{ id: number; name: string }> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Party name is required.");
+  if (kind !== "customer" && kind !== "supplier") {
+    throw new Error("Party kind must be customer or supplier.");
+  }
+  const id = getDb()
+    .prepare(
+      `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
+       VALUES (?, ?, '', '', '', ?)`
+    )
+    .run(trimmed, kind, new Date().toISOString()).lastInsertRowid as number;
+  revalidatePath("/parties");
+  return { id: Number(id), name: trimmed };
 }
 
 export async function runExtraction(docId: number): Promise<void> {

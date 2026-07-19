@@ -134,6 +134,41 @@ async function main(): Promise<void> {
   );
   ok("BS 2027-03-31: assets ₹21,580.00 = liabilities + capital · profit ₹11,000.00 injected");
 
+  step = "manual voucher + books lock";
+  const { postManualVoucher } = await import("../src/lib/vouchers");
+  const { dayBook } = await import("../src/lib/reports");
+  const { journalId } = postManualVoucher(db, {
+    kind: "journal",
+    entry_date: "2026-07-20",
+    memo: "Shop rent",
+    ref_no: "RENT-07",
+    legs: [
+      { account_code: "5900", party_id: null, debit_paise: 250_000, credit_paise: 0 },
+      { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: 250_000 },
+    ],
+  });
+  assert.equal(trialBalance(db).balanced, true, "TB zero after manual journal");
+  const dayEntry = dayBook(db, "2026-07").find((e) => e.id === journalId);
+  assert.ok(dayEntry, "day book shows the manual journal");
+  assert.equal(dayEntry!.entry_type, "journal");
+  assert.equal(dayEntry!.source_document_id, null);
+  db.prepare("UPDATE settings SET books_locked_through = '2026-07-31' WHERE id = 1").run();
+  await assert.rejects(
+    async () =>
+      postManualVoucher(db, {
+        kind: "contra",
+        entry_date: "2026-07-10",
+        memo: "back-dated",
+        ref_no: "",
+        from: "cash",
+        to: "bank",
+        amount_paise: 100,
+      }),
+    /locked/
+  );
+  db.prepare("UPDATE settings SET books_locked_through = '' WHERE id = 1").run();
+  ok("manual journal ₹2,500.00 posted (Dr 5900 / Cr 1100) · locked books reject back-dated voucher");
+
   step = "posted lock";
   await assert.rejects(() => extractDocument(docId), /posted/);
   ok("posted document is locked against re-extraction");
