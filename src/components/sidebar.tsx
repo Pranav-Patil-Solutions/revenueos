@@ -111,6 +111,17 @@ const NAV_GROUPS: NavGroup[] = [
           </>
         ),
       },
+      {
+        href: "/compliance",
+        label: "Compliance",
+        icon: (
+          <>
+            <path d="M4 6h16v14H4z" />
+            <path d="M8 3v4M16 3v4M4 11h16" />
+            <path d="M9 16l2 2 4-4" />
+          </>
+        ),
+      },
     ],
   },
   {

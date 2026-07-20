@@ -204,6 +204,20 @@ const DDL = `
   -- Tally ledger name → this book's account or party. Persistent: a ledger
   -- mapped once is never asked about again on later imports. ledger_name is
   -- UNIQUE so a name can only ever point at one target.
+  -- One human mark per compliance item: done, or not-applicable. Everything
+  -- else on the board (pending/overdue) is derived, never stored, so the
+  -- calendar can't hold a stale status. Period strings are the item's own
+  -- key (months absolute, quarters/ITR FY-prefixed — see lib/compliance.ts).
+  CREATE TABLE IF NOT EXISTS compliance_marks (
+    id        INTEGER PRIMARY KEY,
+    rule_code TEXT NOT NULL,
+    period    TEXT NOT NULL,
+    status    TEXT NOT NULL CHECK (status IN ('done','na')),
+    marked_at TEXT NOT NULL,
+    note      TEXT NOT NULL DEFAULT '',
+    UNIQUE (rule_code, period)
+  );
+
   CREATE TABLE IF NOT EXISTS ledger_mappings (
     id          INTEGER PRIMARY KEY,
     ledger_name TEXT NOT NULL UNIQUE,

@@ -396,3 +396,58 @@ trail exists precisely for the reader who arrives later, and a wrong
 sibling tables share an invariant ("no claim without a journal"), enforce it
 on both the day the second table is born — asymmetry between siblings is the
 same bug as EVOLUTION #14's entry/exit asymmetry, one level up.
+
+## 17. RVOS-002 P9 (2026-07-20): an allowlist built from a superset
+
+**What happened:** the compliance board hides GST rows until a GSTIN is on
+file and TDS rows until a TAN is set or a deduction exists — but the
+`markCompliance` server action validated an incoming (rule_code, period)
+against `dueItems(fy, { gst: true, tds: true })`: the full universe of rules,
+both regimes hardcoded ON. The code even carried a comment defending it
+("a mark on a hidden regime is harmless"). The zero-context review read it
+the other way, correctly: a direct action call could mark a GSTR-1 "done"
+for a business the board never shows GST to, and the phantom mark surfaces
+pre-completed the day the GSTIN is filled in. The validation existed BECAUSE
+of EVOLUTION #11 — and still re-opened the exact bypass it was written to
+close, because the allowlist was derived from a different function than the
+one that renders the form.
+
+**Resolution:** the action now fetches the settings row and validates against
+`generateItems(db, fy, settings, todayIso())` — the same engine call, same
+regime switches, same db state that produced the board the user clicked.
+That is only sound if board MEMBERSHIP never depends on `today` (statuses
+may, items may not), so a test pins the item set identical across distant
+todays. The reviewer's warn (blanket unverified banner) was fixed by gating
+it on `items.some(i => !i.verified)`.
+
+**The fix then failed its own re-review — on a different axis.** Applying
+#15's rule (a review fix is new code), an adversarial 3-lens verify pass on
+the fixed diff found the SAME bug shape surviving through the `fy`
+parameter: the action format-checked fy (`fyStart`) while the page clamps
+it to `fyList(db)` — so `fy="2035-36", advance-tax, done` passed the
+engine-membership check (the engine rightly generates items for any
+well-formed FY) and pre-marked a board no screen can reach, reproduced
+live. The allowlist was again a superset, this time because ONE input to
+the shared function was caller-supplied instead of render-derived. Fixed:
+marking requires `fyList(db).includes(fy)` — the page's own set. The same
+pass also caught the opposite failure on `clear`: gating a DELETE as
+tightly as the INSERT traps a wrong mark whose regime later switched off
+(invisible, uncorrectable, resurfacing as "done" when the regime returns).
+Clear now requires only that the mark EXISTS — destroying your own metadata
+can pre-mark nothing.
+
+**Delta (rule):** a server-side allowlist must be derived by the SAME
+function, with the SAME inputs, that rendered the user's choices — settings,
+db state, all of it. A superset ("accept everything any configuration could
+show") feels safe and is the bug: it validates against a world the user
+isn't in. Check EVERY axis the form filters, including the ones that arrive
+as the validator's own arguments — calling the right function with a
+caller-supplied input is still a superset. Guards are directional:
+creation/assertion validates against the rendered world; deletion of the
+user's own metadata validates against existence, or the guard traps data it
+can no longer see. Corollaries: when a validation calls a generator with an
+uncontrolled input the generator doesn't strictly need (here: the clock),
+pin with a test that the input cannot change the generated SET; and when a
+guard carries a comment arguing why looseness is fine, treat the comment as
+a review flag — the argument for the exception is usually the defect's own
+description.

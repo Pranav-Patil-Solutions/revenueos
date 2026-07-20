@@ -130,11 +130,45 @@
   `tds_challans.form` column (a quarter can hold a 26Q and a 24Q challan and
   the rows must be distinguishable) -> EVOLUTION #16.
 
+- **P9 compliance** — `src/lib/compliance.ts`: `RULES` (gstr1 11th ·
+  gstr3b 20th · tds-deposit 7th-next-month with Mar→Apr 30 · tds-return
+  Jul 31/Oct 31/Jan 31/**May 31 in the NEXT FY** · advance-tax 15
+  Jun/Sep/Dec/Mar · itr Jul 31 / Oct 31 by fy_audit_case), every rule
+  `verified: false` + source, same law-adjacent discipline as india-it.ts.
+  Pure `dueItems(fy, {gst, tds})` + `itrItem(fy, auditCase)`;
+  `generateItems(db, fy, settings, today)` merges `compliance_marks`, derives
+  pending/overdue from the INJECTED today (strictly due_date < today; due
+  today = pending), sorts by due date. Period keys: months absolute
+  ("2026-04"), quarters/ITR FY-prefixed ("2026-27-Q4", "2026-27") so marks
+  never collide across FYs under UNIQUE(rule_code, period). GST rules iff
+  gstin set; TDS rules iff TAN set OR tds_entries exist in the FY (books
+  with real deductions owe returns before settings catch up). db.ts DDL
+  `compliance_marks` (status CHECK done/na, UNIQUE(rule_code, period)) —
+  verified additive on a live-db copy. Action `markCompliance`
+  (done/na/clear; upsert ON CONFLICT; validates the pair against
+  **generateItems with the real settings** — see EVOLUTION #17).
+  `/compliance` page: FY select, month-grouped-by-DUE-date board, status
+  pills (dot pattern), per-row note + Done/N-A/Clear, caveat banner gated on
+  unverified rules, hidden-regime hints. Sidebar entry under "4 · Tax &
+  filing" (own nav item, NOT a tax-tabs tab). 221 tests (17 new: pinned
+  45-item full board = 24 GST + 16 TDS + 4 AT + 1 ITR; Dec→Jan seam;
+  Q4→May 31 next FY; membership independent of today; marks override;
+  regime skips incl. deduction-without-TAN). Smoke: 21-item board leg
+  (TDS auto-on via posted deduction, GST off), mark → regenerate → done,
+  sibling overdue, TB untouched. Review: 1 blocker (validation allowlist
+  built from a superset — both regimes hardcoded on) fixed pre-commit; the
+  FIX then failed its own adversarial re-review on the FY axis (format-only
+  fy check vs the page's fyList clamp — reproduced live) and over-gated
+  clear (wrong marks trapped when a regime switches off). Marking now
+  validates fy ∈ fyList(db) + engine membership; clear requires only that
+  the mark exists → EVOLUTION #17. Warn (blanket banner) fixed by gating.
+
 ## Current state
-- Branch `feat/rvos-002-accountant-edition`; all four gates green at P8.
-- EVOLUTION.md at #16 (P8: audit-trail columns are part of a transaction's
-  truth — derive them from what happened, constrain them like their siblings,
-  partition them the way downstream reconciliation partitions).
+- Branch `feat/rvos-002-accountant-edition`; all four gates green at P9.
+- EVOLUTION.md at #17 (P9: a server-side allowlist must be derived by the
+  SAME function, with the SAME inputs, that rendered the user's choices — a
+  superset re-opens the bypass; pin that uncontrolled generator inputs can't
+  change the generated set).
 - Live-DB compat spot-checked on a COPY of `data/revenueos.db` (+WAL):
   `ledger_mappings` created additively, 6 documents / 27 journal lines intact.
 - Live-DB compat also re-checked at P6: `fixed_assets` + `wdv_openings` are
@@ -188,26 +222,25 @@ flag. Two things still need a human with the source material:
 To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
 put the citation in `source`. `ratesFor()` and every caveat follow from there.
 
-## Next phase: P9 compliance calendar
-Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md (follow the PLAN's
-shapes, not a paraphrase): new `src/lib/compliance.ts` — `RULES` (GSTR-1 11th
-monthly; GSTR-3B 20th; TDS deposit 7th of the next month, Mar→Apr 30; TDS
-returns Jul 31/Oct 31/Jan 31/May 31; advance tax Jun/Sep/Dec 15 + Mar 15; ITR
-Jul 31 or Oct 31 by `fy_audit_case`) and `generateItems(fy, settings, today)`
-→ status done|na|pending|overdue merging `compliance_marks`; skip GST rules
-when gstin='' and TDS rules when no tds_entries and no TAN. `today` is passed
-IN, never read from the clock inside the rules. db.ts DDL `compliance_marks`
-(rule_code, period, status CHECK('done','na'), marked_at, note,
-UNIQUE(rule_code, period)). New `src/app/compliance/page.tsx` (FY select,
-month-grouped board, status pills via the status-badge dot pattern, mark
-done/na); actions `markCompliance`; sidebar NAV + Compliance (its own entry —
-NOT a tax-tabs tab, per the plan). Due-date DATES are law-adjacent: same
-unverified/source discipline as india-it.ts and tds.ts, caveat on the page.
-Accept: `test/compliance.test.ts` — full-FY item count pinned (GSTIN+TAN
-row); quarter dues incl. Q4→May 31 landing in the NEXT FY; overdue with
-injected `today`; marks override; na-skip. Smoke: generate the board, mark
-one done, regenerate shows it. Commit: `RVOS-002 P9: compliance — due-date
-rules engine, FY status board with manual marks and derived overdue`.
+## Next phase: P10 CA sign-off pack + hardening + docs
+Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md §P10 (follow the
+PLAN's shapes): new `src/app/pack/page.tsx` (`?fy=`) — cover (company,
+entity label, FY, PAN/TAN/GSTIN) → BS → P&L → Computation → GST summary
+(12 × gstr3b) → TDS summary + challans → depreciation schedule/FAR →
+debtors/creditors annexure. Composed ENTIRELY from existing functions —
+zero new query logic. Print button (`window.print` tiny client comp).
+Mod `globals.css` `@media print` (white/black overrides, page-break section
+classes, hide chrome); sidebar `print:hidden`, layout `print:ml-0`; smoke
+pack-composition assert; README Accountant Edition section + updated
+Deferred list; EVOLUTION entries; final HANDOFF.md. Remember the P7/P9
+lesson: derived figures shown beside posted ones must be reconciled, and
+the unverified caveats (rates AND due dates) must reach the printed pack —
+it is the artefact most likely to be handed to a CA. Accept: all tests
+green; full smoke green; build green; manual print-preview check (light,
+paginated, no sidebar). Commit: `RVOS-002 P10: ca pack — print-optimized
+FY bundle (FS + computation + GST/TDS + annexures), docs & final smoke`.
+Then: the ship gate (RVOS-002-SPEC.md §SHIP GATE — code-reviewer on the
+full branch diff + qa-runner driving :3322) and merge to master.
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
@@ -300,6 +333,37 @@ rules engine, FY status board with manual marks and derived overdue`.
   depreciation entry on 2027-03-31 — ALL after these assertions run, so the
   July GST + BS pins stay untouched. Any new smoke leg must post after them
   too, or re-pin the figures deliberately.
+
+- A validation allowlist must come from the SAME function + inputs that
+  rendered the choices (settings, db state). A superset ("any configuration
+  could show this") re-opens the bypass EVOLUTION #11 closed — and check
+  EVERY axis the form filters, including the validator's own arguments
+  (markCompliance's fy had to be clamped to fyList(db) exactly like the
+  page, not just format-checked). Guards are directional: create/assert
+  validates against the rendered world, delete-own-metadata validates
+  against existence only, or wrong marks get trapped behind a switched-off
+  regime. When the validator calls a generator with an input it doesn't
+  strictly need (the clock), pin with a test that the input can't change
+  the generated SET (EVOLUTION #17 — test "board membership is independent
+  of today").
+- addItAdjustment / addTaxPayment / createTdsChallan also fy-format-check
+  only (pre-#17 precedent). Lower stakes — their rows are visible, deletable
+  metadata, not completion claims — but if one ever grows an assertion
+  semantic, clamp its fy to fyList(db) the same way.
+- Compliance period keys: months are absolute ("2026-04"); anything
+  FY-scoped (quarters, ITR) carries the FY prefix. New rules must follow or
+  marks collide across FYs under UNIQUE(rule_code, period).
+- compliance_marks stores ONLY human marks (done/na); pending/overdue are
+  derived every render. Never persist a derived status.
+- Regime switches live in generateItems, not the page: GST iff gstin,
+  TDS iff TAN OR tds_entries-in-FY. The page's "rows hidden" hints re-derive
+  from the same predicates via the items themselves.
+
+## Files touched (P9)
+src/lib/compliance.ts (new) · src/app/compliance/page.tsx (new) ·
+test/compliance.test.ts (new) ·
+src/lib/{db,types,actions}.ts · src/components/sidebar.tsx ·
+scripts/smoke.ts · EVOLUTION.md · HANDOFF.md
 
 ## Files touched (P8)
 src/lib/tax/tds.ts (new) · src/app/tax/tds/page.tsx (new) ·

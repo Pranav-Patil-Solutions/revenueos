@@ -202,6 +202,18 @@ export interface WdvOpeningRow {
   created_at: string;
 }
 
+export type ComplianceMarkStatus = "done" | "na";
+
+/** A human's mark on one compliance item; pending/overdue are derived. */
+export interface ComplianceMarkRow {
+  id: number;
+  rule_code: string;
+  period: string;
+  status: ComplianceMarkStatus;
+  marked_at: string;
+  note: string;
+}
+
 /** Tally ledger name → account or party. Exactly one target id is non-null,
  * enforced by paired SQL CHECKs. */
 export interface LedgerMappingRow {

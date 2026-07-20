@@ -6,10 +6,11 @@ import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { groupFor } from "./coa";
+import { generateItems } from "./compliance";
 import { getDb, UPLOADS_DIR } from "./db";
 import { extractDocument } from "./extraction";
-import { rupeeStringToPaise } from "./format";
-import { fyEnd, fyLabel, fyStart } from "./fy";
+import { rupeeStringToPaise, todayIso } from "./format";
+import { fyEnd, fyLabel, fyList, fyStart } from "./fy";
 import {
   blockFor,
   depreciationSchedule,
@@ -41,6 +42,7 @@ import type {
   ItRegime,
   PartyKind,
   Presumptive,
+  SettingsRow,
 } from "./types";
 
 const ENTRY_TYPES: EntryType[] = [
@@ -819,6 +821,72 @@ const QUARTER_RANGES: Record<1 | 2 | 3 | 4, (fy: string) => { from: string; to: 
   3: (fy) => ({ from: `${fyStart(fy).slice(0, 4)}-10-01`, to: `${fyStart(fy).slice(0, 4)}-12-31` }),
   4: (fy) => ({ from: `${Number(fyStart(fy).slice(0, 4)) + 1}-01-01`, to: fyEnd(fy) }),
 };
+
+// ---------------------------------------------------------------------------
+// Compliance calendar — marks are metadata, never posted
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a board item done / not-applicable, or clear a wrong mark.
+ *
+ * Marking validates BOTH axes the form filters (EVOLUTION #11/#17): the FY
+ * against the same fyList the page's select renders, and (rule_code, period)
+ * against the SAME engine output that rendered the board — real settings,
+ * real tds_entries. Any superset re-opens the bypass: a hidden GST/TDS item —
+ * or a future FY's whole board — could arrive pre-marked "done" the day the
+ * GSTIN/TAN is filled in or that FY opens.
+ *
+ * Clearing is gated differently, on the mark EXISTING: a delete destroys
+ * only the office's own metadata and can pre-mark nothing, while gating it
+ * on current board membership would trap a wrong mark whose regime later
+ * switched off — invisible, uncorrectable, and resurfacing as "done" the
+ * day the regime returns.
+ */
+export async function markCompliance(formData: FormData): Promise<void> {
+  const fy = String(formData.get("fy") ?? "").trim();
+  fyStart(fy); // throws on a malformed FY key
+  const rule_code = String(formData.get("rule_code") ?? "");
+  const period = String(formData.get("period") ?? "");
+  const status = String(formData.get("status") ?? "");
+  if (status !== "done" && status !== "na" && status !== "clear") {
+    throw new Error("A mark is done, na, or clear.");
+  }
+  const db = getDb();
+
+  if (status === "clear") {
+    const gone = db
+      .prepare("DELETE FROM compliance_marks WHERE rule_code = ? AND period = ?")
+      .run(rule_code, period);
+    if (gone.changes === 0) {
+      throw new Error(`No mark to clear: ${rule_code} ${period}.`);
+    }
+  } else {
+    if (!fyList(db).includes(fy)) {
+      throw new Error(`FY ${fy} is not on the books.`);
+    }
+    const settings = db
+      .prepare("SELECT * FROM settings WHERE id = 1")
+      .get() as SettingsRow;
+    const valid = generateItems(db, fy, settings, todayIso());
+    if (!valid.some((i) => i.rule_code === rule_code && i.period === period)) {
+      throw new Error(`No such compliance item on the board: ${rule_code} ${period}.`);
+    }
+    db.prepare(
+      `INSERT INTO compliance_marks (rule_code, period, status, marked_at, note)
+       VALUES (@rule_code, @period, @status, @marked_at, @note)
+       ON CONFLICT (rule_code, period) DO UPDATE SET
+         status = excluded.status, marked_at = excluded.marked_at, note = excluded.note`
+    ).run({
+      rule_code,
+      period,
+      status,
+      marked_at: new Date().toISOString(),
+      note: String(formData.get("note") ?? "").trim(),
+    });
+  }
+  revalidatePath("/compliance");
+  redirect(`/compliance?fy=${fy}`);
+}
 
 export async function runExtraction(docId: number): Promise<void> {
   try {

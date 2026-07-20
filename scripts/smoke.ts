@@ -517,6 +517,40 @@ async function main(): Promise<void> {
   assert.equal(trialBalance(db).balanced, true, "TB zero after TDS cycle");
   ok("TDS: 194C ₹10,000 → ₹100 held in 2300 · 26Q one line · challan deposit → 2300 zero · TB zero");
 
+  step = "compliance: board → mark done → regenerate";
+  // Marks are metadata, never journals — this leg cannot move any pinned
+  // figure. The smoke db has no GSTIN, but the TDS leg above posted a real
+  // deduction, so the TDS rows must switch on by themselves.
+  const { generateItems } = await import("../src/lib/compliance");
+  const smokeSettings = db
+    .prepare("SELECT * FROM settings WHERE id = 1")
+    .get() as import("../src/lib/types").SettingsRow;
+  assert.equal(smokeSettings.gstin, "", "smoke books carry no GSTIN");
+  const board = generateItems(db, "2026-27", smokeSettings, "2026-11-01");
+  assert.equal(board.length, 21, "16 TDS + 4 advance tax + 1 ITR, no GST rows");
+  const octDeposit = board.find(
+    (i) => i.rule_code === "tds-deposit" && i.period === "2026-10"
+  );
+  assert.ok(octDeposit, "October deposit on the board");
+  assert.equal(octDeposit!.due_date, "2026-11-07");
+  assert.equal(octDeposit!.status, "pending");
+  db.prepare(
+    `INSERT INTO compliance_marks (rule_code, period, status, marked_at, note)
+     VALUES ('tds-deposit', '2026-10', 'done', ?, 'CHLN-SMOKE')`
+  ).run(new Date().toISOString());
+  const after = generateItems(db, "2026-27", smokeSettings, "2026-11-08");
+  const marked = after.find(
+    (i) => i.rule_code === "tds-deposit" && i.period === "2026-10"
+  )!;
+  assert.equal(marked.status, "done", "mark survives regeneration");
+  assert.equal(marked.note, "CHLN-SMOKE");
+  const sept = after.find(
+    (i) => i.rule_code === "tds-deposit" && i.period === "2026-09"
+  )!;
+  assert.equal(sept.status, "overdue", "unmarked sibling derives overdue");
+  assert.equal(trialBalance(db).balanced, true, "TB untouched by marks");
+  ok("Compliance: 21-item board (TDS auto-on, GST off) · Oct deposit marked done · regenerate shows it · sibling overdue");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }
