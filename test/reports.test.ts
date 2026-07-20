@@ -103,6 +103,25 @@ test("party statement: 7 AR movements, closing ₹12,580.00, running balance", (
   assert.equal(partyStatement(db, 99), null);
 });
 
+test("party statement asOf slices BOTH ledgers, inclusively", () => {
+  const db = postedDb();
+  const early = partyStatement(db, 1, "2026-07-05")!;
+  assert.equal(early.lines.length, 3); // opening, sale #241, the 5 Jul receipt
+  assert.equal(early.closing_paise, 980_000); // 5,000 + 11,800 − 7,000
+  assert.equal(early.cross_ledger_paise, 0); // the purchase only lands 14 Jul
+  // Cross ledger is dated too: purchase (14 Jul) in, payment (15 Jul) not yet.
+  const mid = partyStatement(db, 1, "2026-07-14")!;
+  assert.equal(mid.closing_paise, 1_258_000);
+  assert.equal(mid.cross_ledger_paise, 590_000);
+  assert.equal(mid.net_position_paise, 668_000);
+  const before = partyStatement(db, 1, "2026-06-30")!;
+  assert.equal(before.lines.length, 0);
+  assert.equal(before.closing_paise, 0);
+  assert.equal(before.cross_ledger_paise, 0);
+  // Omitting asOf stays byte-identical to full history.
+  assert.deepEqual(partyStatement(db, 1, "2099-12-31"), partyStatement(db, 1));
+});
+
 test("day book: 9 journals in date order, each internally balanced", () => {
   const db = postedDb();
   const entries = dayBook(db, MONTH);

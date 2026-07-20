@@ -76,6 +76,37 @@ page burns an extraction round on a blurry shot.
 Exports: `/api/export/<report>?format=csv|json[&month=YYYY-MM][&party=<id>]`
 for `trial-balance`, `day-book`, `pnl`, `gstr-3b`, `gstr-1`, `statement`.
 
+## Accountant Edition (RVOS-002)
+
+Everything an accounting office runs after the books, built on the same
+posting engine:
+
+- **Statements** — P&L for any FY, Balance Sheet with computed
+  retained-earnings/current-year-profit injection and a hard A=L+E check.
+- **Vouchers** — manual entry with Tally keyboard parity (F4–F9, ^F8/^F9,
+  F2, ^A, Esc), contra and free-form journals, books-locked-through guard.
+- **Imports** — Excel via a CSV template, and Tally day-book XML with a
+  persistent ledger→account/party mapping (mapped once, never asked again).
+  Anything the importer cannot faithfully post lands excluded-with-reason in
+  review — it never guesses with money.
+- **Depreciation** — IT-Act WDV blocks (half-year rule, additions/disposals),
+  fixed-asset register, generated FY journal through the one audited path.
+- **Income tax** — computation of total income per entity type (slabs,
+  surcharge with marginal relief, rebate, presumptive, 40(b) indicative
+  ceiling), advance-tax schedule, adjustments and payments as free metadata.
+- **TDS** — deduct-on-payment vouchers (register row atomically tied to the
+  journal), quarterly 26Q/24Q summaries, computed-amount challan deposits.
+- **Compliance** — due-date board per FY (GSTR-1/3B, TDS deposits & returns,
+  advance tax, ITR) with human done/n-a marks and derived overdue.
+- **CA pack** — `/pack?fy=` print-composed bundle: cover → BS → P&L →
+  computation → GST 12-month summary → TDS + challans → depreciation →
+  debtors/creditors annexure. Print to PDF from the browser.
+
+**Every statutory rate and due date in the app ships `verified: false`** and
+says so on screen and in every export — confirm a year against the Act (see
+`src/lib/tax/india-it.ts`, `tds.ts`, `compliance.ts`) and flip the flag with
+a source before the office files from these numbers.
+
 ## Tests & smoke
 
 ```bash
@@ -83,14 +114,19 @@ npm test                              # unit: tax math, schema, posting, reports
 DEMO_MODE=1 npx tsx scripts/smoke.ts  # end-to-end against a fresh temp db
 ```
 
-## Deferred (out of scope for v1)
+## Deferred (out of scope)
 
 - Multi-page ledger stitching
-- Official GSTN JSON/CSV schemas (this is filing *prep* for you/your CA)
+- Official GSTN/ITD filing schemas — portal JSON, TRACES FVU (this is filing
+  *prep*; the computation JSON export is the seam)
 - Bill-wise receipt allocation
 - Void/reverse journals (post-only; fix forward)
-- RCM / TDS / TCS / composition scheme
-- Income-tax estimator
+- RCM / TCS / composition scheme; payroll (192B amounts entered manually)
+- Companies-Act depreciation, MAT, deferred tax
+- 26AS/AIS reconciliation; 3CA/3CB/3CD
+- Multi-client books (one company per instance)
+- Hard period close (soft books-locked-through only)
+- e-invoice / e-way bill
 - Auth (Tailscale is the perimeter)
 - Non-India tax packs (the regime interface in `src/lib/tax/regime.ts` is the seam)
 - Automated backups

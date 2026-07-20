@@ -1,0 +1,238 @@
+import { strict as assert } from "node:assert";
+import { test } from "node:test";
+import Database from "better-sqlite3";
+import { initSchema, seedCoreData } from "../src/lib/db";
+import {
+  dueItems,
+  generateItems,
+  itrItem,
+  RULES,
+} from "../src/lib/compliance";
+import { postVoucherWithTds } from "../src/lib/vouchers";
+import type { SettingsRow } from "../src/lib/types";
+
+const FY = "2026-27";
+
+function complianceDb(): Database.Database {
+  const db = new Database(":memory:");
+  initSchema(db);
+  seedCoreData(db);
+  return db;
+}
+
+function settingsWith(
+  db: Database.Database,
+  patch: Partial<SettingsRow>
+): SettingsRow {
+  const row = db.prepare("SELECT * FROM settings WHERE id = 1").get() as SettingsRow;
+  return { ...row, ...patch };
+}
+
+// The demo settings ship with a GSTIN'd state but an empty gstin string —
+// pin the assumption the regime switches rest on.
+test("fresh settings have no GSTIN and no TAN", () => {
+  const db = complianceDb();
+  const s = settingsWith(db, {});
+  assert.equal(s.gstin, "");
+  assert.equal(s.tan, "");
+});
+
+// ---------------------------------------------------------------------------
+// dueItems — pure due-date shapes
+// ---------------------------------------------------------------------------
+
+test("full board pins at 45 items: 24 GST + 16 TDS + 4 advance tax + 1 ITR", () => {
+  const items = [...dueItems(FY, { gst: true, tds: true }), itrItem(FY, false)];
+  assert.equal(items.length, 45);
+  const byRule = new Map<string, number>();
+  for (const i of items) byRule.set(i.rule_code, (byRule.get(i.rule_code) ?? 0) + 1);
+  assert.equal(byRule.get("gstr1"), 12);
+  assert.equal(byRule.get("gstr3b"), 12);
+  assert.equal(byRule.get("tds-deposit"), 12);
+  assert.equal(byRule.get("tds-return"), 4);
+  assert.equal(byRule.get("advance-tax"), 4);
+  assert.equal(byRule.get("itr"), 1);
+});
+
+test("GST returns fall due in the FOLLOWING month, across the Dec→Jan seam", () => {
+  const items = dueItems(FY, { gst: true, tds: false });
+  const due = (code: string, period: string) =>
+    items.find((i) => i.rule_code === code && i.period === period)?.due_date;
+  assert.equal(due("gstr1", "2026-04"), "2026-05-11");
+  assert.equal(due("gstr3b", "2026-04"), "2026-05-20");
+  assert.equal(due("gstr1", "2026-12"), "2027-01-11");
+  // March of the FY files in April of the NEXT FY.
+  assert.equal(due("gstr3b", "2027-03"), "2027-04-20");
+});
+
+test("TDS deposits: 7th of the next month, except March which gets 30 April", () => {
+  const items = dueItems(FY, { gst: false, tds: true });
+  const deposits = items.filter((i) => i.rule_code === "tds-deposit");
+  assert.equal(deposits.length, 12);
+  assert.equal(deposits.find((i) => i.period === "2026-04")?.due_date, "2026-05-07");
+  assert.equal(deposits.find((i) => i.period === "2026-12")?.due_date, "2027-01-07");
+  assert.equal(deposits.find((i) => i.period === "2027-03")?.due_date, "2027-04-30");
+});
+
+test("TDS returns: Jul 31 / Oct 31 / Jan 31, and Q4 lands 31 May in the NEXT FY", () => {
+  const rets = dueItems(FY, { gst: false, tds: true }).filter(
+    (i) => i.rule_code === "tds-return"
+  );
+  assert.deepEqual(
+    rets.map((i) => [i.period, i.due_date]),
+    [
+      ["2026-27-Q1", "2026-07-31"],
+      ["2026-27-Q2", "2026-10-31"],
+      ["2026-27-Q3", "2027-01-31"],
+      ["2026-27-Q4", "2027-05-31"],
+    ]
+  );
+});
+
+test("advance tax instalments land 15 Jun/Sep/Dec and 15 Mar", () => {
+  const at = dueItems(FY, { gst: false, tds: false }).filter(
+    (i) => i.rule_code === "advance-tax"
+  );
+  assert.deepEqual(
+    at.map((i) => i.due_date),
+    ["2026-06-15", "2026-09-15", "2026-12-15", "2027-03-15"]
+  );
+});
+
+test("ITR due date moves with the audit case", () => {
+  assert.equal(itrItem(FY, false).due_date, "2027-07-31");
+  assert.equal(itrItem(FY, true).due_date, "2027-10-31");
+  assert.equal(itrItem(FY, false).period, FY);
+});
+
+// Marks key on (rule_code, period) — a collision anywhere in the shapes
+// would silently make one mark cover two items, this FY or a later one.
+test("periods are unique per rule within an FY and across FYs", () => {
+  const all = [
+    ...dueItems(FY, { gst: true, tds: true }),
+    itrItem(FY, false),
+    ...dueItems("2027-28", { gst: true, tds: true }),
+    itrItem("2027-28", false),
+  ];
+  const keys = new Set(all.map((i) => `${i.rule_code} ${i.period}`));
+  assert.equal(keys.size, all.length);
+});
+
+test("every rule ships unverified with a source, and items carry the flag", () => {
+  for (const r of RULES) {
+    assert.equal(r.verified, false, r.code);
+    assert.ok(r.source.length > 0, r.code);
+  }
+  const items = dueItems(FY, { gst: true, tds: true });
+  assert.ok(items.every((i) => i.verified === false));
+});
+
+// ---------------------------------------------------------------------------
+// generateItems — regime switches, marks, derived status
+// ---------------------------------------------------------------------------
+
+test("no GSTIN and no TAN: only advance tax + ITR remain", () => {
+  const db = complianceDb();
+  const items = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  assert.equal(items.length, 5);
+  assert.ok(items.every((i) => i.regime === "it"));
+});
+
+test("a GSTIN turns the GST rows on; a TAN turns the TDS rows on", () => {
+  const db = complianceDb();
+  const gst = generateItems(
+    db,
+    FY,
+    settingsWith(db, { gstin: "27ABCDE1234F1Z5" }),
+    "2026-04-01"
+  );
+  assert.equal(gst.length, 29); // 24 GST + 4 advance + ITR
+  const both = generateItems(
+    db,
+    FY,
+    settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" }),
+    "2026-04-01"
+  );
+  assert.equal(both.length, 45);
+});
+
+test("posted deductions turn TDS rows on even with no TAN in settings", () => {
+  const db = complianceDb();
+  db.prepare(
+    `INSERT INTO parties (name, kind, gstin, pan, state_code, phone, created_at)
+     VALUES ('Verma Contractors', 'supplier', '', 'ABCPV1234F', '27', '', '2026-04-01T00:00:00Z')`
+  ).run();
+  postVoucherWithTds(db, {
+    entry_date: "2026-05-10",
+    memo: "",
+    ref_no: "",
+    party_id: 1,
+    expense_account_code: "5900",
+    base_paise: 1_000_000,
+    section: "194C",
+    settle_account: "bank",
+  });
+  const items = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  assert.equal(items.filter((i) => i.regime === "tds").length, 16);
+  // The deduction sits in FY 2026-27 — the year before shows no TDS rows.
+  const prior = generateItems(db, "2025-26", settingsWith(db, {}), "2026-04-01");
+  assert.equal(prior.filter((i) => i.regime === "tds").length, 0);
+});
+
+test("status derives from the injected today, strictly after the due date", () => {
+  const db = complianceDb();
+  const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5" });
+  const on = (today: string) =>
+    generateItems(db, FY, s, today).find(
+      (i) => i.rule_code === "gstr1" && i.period === "2026-04"
+    )!;
+  assert.equal(on("2026-05-11").status, "pending"); // due today = still pending
+  assert.equal(on("2026-05-12").status, "overdue");
+  assert.equal(on("2026-04-01").status, "pending");
+});
+
+test("a mark overrides the derived status — done or na, however late", () => {
+  const db = complianceDb();
+  const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5" });
+  db.prepare(
+    `INSERT INTO compliance_marks (rule_code, period, status, marked_at, note)
+     VALUES ('gstr1', '2026-04', 'done', '2026-05-09T00:00:00Z', 'filed early'),
+            ('gstr3b', '2026-04', 'na', '2026-06-01T00:00:00Z', '')`
+  ).run();
+  const items = generateItems(db, FY, s, "2027-01-01"); // long past both dues
+  const g1 = items.find((i) => i.rule_code === "gstr1" && i.period === "2026-04")!;
+  const g3 = items.find((i) => i.rule_code === "gstr3b" && i.period === "2026-04")!;
+  assert.equal(g1.status, "done");
+  assert.equal(g1.note, "filed early");
+  assert.equal(g3.status, "na");
+  // An unmarked sibling in the same run still derives overdue.
+  const may = items.find((i) => i.rule_code === "gstr1" && i.period === "2026-05")!;
+  assert.equal(may.status, "overdue");
+});
+
+test("items come back sorted by due date", () => {
+  const db = complianceDb();
+  const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" });
+  const items = generateItems(db, FY, s, "2026-04-01");
+  for (let i = 1; i < items.length; i++) {
+    assert.ok(items[i - 1].due_date <= items[i].due_date);
+  }
+});
+
+// markCompliance validates a mark against generateItems run at the server's
+// own clock date — that is only sound if WHICH items exist never depends on
+// today. Pin it: two distant todays must yield the identical item set, with
+// only statuses differing.
+test("board membership is independent of today — only statuses change", () => {
+  const db = complianceDb();
+  const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" });
+  const keys = (today: string) =>
+    generateItems(db, FY, s, today).map((i) => `${i.rule_code} ${i.period}`);
+  assert.deepEqual(keys("2026-04-01"), keys("2028-12-31"));
+});
+
+test("generateItems rejects a malformed today", () => {
+  const db = complianceDb();
+  assert.throws(() => generateItems(db, FY, settingsWith(db, {}), "today"));
+  assert.throws(() => generateItems(db, FY, settingsWith(db, {}), ""));
+});

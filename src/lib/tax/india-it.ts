@@ -1,0 +1,486 @@
+import { roundHalfUp } from "./india-gst";
+import type { EntityType, ItRegime, Presumptive } from "../types";
+
+/**
+ * Income tax, India — rate tables and the pure functions over them.
+ *
+ * EVERY figure here is keyed by TAX YEAR and carries where it came from and
+ * whether it has been confirmed. That is deliberate: a wrong rate in this file
+ * becomes a wrong return, and the failure is silent — the arithmetic still
+ * balances, the page still renders a confident number. So the design rule is
+ * that an unconfirmed year must be VISIBLE, never merely assumed:
+ *
+ *   - `ratesFor()` returns `provisional: true` when the year has no table of
+ *     its own and the previous year's had to be carried forward, and every
+ *     caller surfaces that. It does NOT silently inherit.
+ *   - A year before the earliest table throws rather than guessing backwards.
+ *   - No section numbers appear in any output. The Income-tax Act, 2025 took
+ *     effect 1 April 2026 — inside the range this code computes — and
+ *     renumbered the 1961 Act's sections; available sources disagree on the
+ *     new numbering. Section labels would be display metadata anyway and must
+ *     never be load-bearing. See HANDOFF.md's P7 pre-flight notes.
+ *
+ * Money is integer paise throughout. Statutory rounding is to the nearest ₹10.
+ *
+ * CA to verify — every table below needs confirming against the bare Act for
+ * the year being filed before anything here is relied on.
+ */
+
+const LAKH = 10_000_000; // paise
+const CRORE = 100 * LAKH;
+
+export interface Slab {
+  /** Upper bound of the band in paise; null = no ceiling. */
+  upto_paise: number | null;
+  rate: number; // percent
+}
+
+export interface SurchargeTier {
+  above_paise: number;
+  rate: number; // percent
+}
+
+export interface Rebate {
+  /** Total income at or below which the rebate applies. */
+  limit_paise: number;
+  /** Maximum rebate. */
+  max_paise: number;
+  /** Marginal relief caps tax at (income − limit) just past the limit. */
+  marginal_relief: boolean;
+}
+
+export interface TaxYearRates {
+  tax_year: string; // FY key, e.g. "2026-27"
+  /** False = these numbers have NOT been confirmed against the Act. */
+  verified: boolean;
+  source: string;
+  slabs_new: Slab[];
+  slabs_old: Slab[];
+  rebate_new: Rebate;
+  rebate_old: Rebate;
+  /** Individual surcharge ladder, highest applicable tier wins. */
+  surcharge: SurchargeTier[];
+  /** The new regime caps surcharge below the old regime's top tier. */
+  surcharge_cap_new: number;
+  cess_rate: number;
+  firm_rate: number;
+  firm_surcharge: SurchargeTier;
+  /** Domestic company: normal rate for a small company, and the
+   * concessional-election rate with its own flat surcharge. */
+  company_rate: number;
+  company_concessional_rate: number;
+  company_surcharge: SurchargeTier[];
+  company_concessional_surcharge: number;
+  presumptive_business_rate: number;
+  presumptive_business_digital_rate: number;
+  presumptive_profession_rate: number;
+  /** Partner-remuneration ceiling: the higher of `first_min_paise` or
+   * `first_rate`% of the first `first_slab_paise` of book profit, then
+   * `balance_rate`% of the rest. */
+  partner_remuneration: {
+    first_slab_paise: number;
+    first_min_paise: number;
+    first_rate: number;
+    balance_rate: number;
+  };
+  /** Cumulative advance-tax instalments: [label, cumulative %]. */
+  advance_tax: { due: string; cumulative_percent: number }[];
+}
+
+/**
+ * Rate tables, oldest first.
+ *
+ * NOTHING here is confirmed. The Budget-2025 ladder is carried into 2026-27 on
+ * the basis that Budget 2026 announced no change to the slabs — but much of the
+ * published material conflates "FY 2026-27" with "AY 2026-27" (a different
+ * year), and this was assembled from secondary sources. Flip `verified` to true
+ * ONLY after checking a year against the bare Act, and put the citation in
+ * `source` when you do.
+ */
+export const TAX_YEARS: TaxYearRates[] = [
+  {
+    tax_year: "2025-26",
+    verified: false,
+    source:
+      "Budget 2025 new-regime ladder, from secondary sources — UNCONFIRMED, verify against the Act",
+    slabs_new: [
+      { upto_paise: 4 * LAKH, rate: 0 },
+      { upto_paise: 8 * LAKH, rate: 5 },
+      { upto_paise: 12 * LAKH, rate: 10 },
+      { upto_paise: 16 * LAKH, rate: 15 },
+      { upto_paise: 20 * LAKH, rate: 20 },
+      { upto_paise: 24 * LAKH, rate: 25 },
+      { upto_paise: null, rate: 30 },
+    ],
+    slabs_old: [
+      { upto_paise: 2.5 * LAKH, rate: 0 },
+      { upto_paise: 5 * LAKH, rate: 5 },
+      { upto_paise: 10 * LAKH, rate: 20 },
+      { upto_paise: null, rate: 30 },
+    ],
+    rebate_new: { limit_paise: 12 * LAKH, max_paise: 60_000 * 100, marginal_relief: true },
+    rebate_old: { limit_paise: 5 * LAKH, max_paise: 12_500 * 100, marginal_relief: false },
+    surcharge: [
+      { above_paise: 50 * LAKH, rate: 10 },
+      { above_paise: 1 * CRORE, rate: 15 },
+      { above_paise: 2 * CRORE, rate: 25 },
+      { above_paise: 5 * CRORE, rate: 37 },
+    ],
+    surcharge_cap_new: 25,
+    cess_rate: 4,
+    firm_rate: 30,
+    firm_surcharge: { above_paise: 1 * CRORE, rate: 12 },
+    company_rate: 25,
+    company_concessional_rate: 22,
+    company_surcharge: [
+      { above_paise: 1 * CRORE, rate: 7 },
+      { above_paise: 10 * CRORE, rate: 12 },
+    ],
+    company_concessional_surcharge: 10,
+    presumptive_business_rate: 8,
+    presumptive_business_digital_rate: 6,
+    presumptive_profession_rate: 50,
+    partner_remuneration: {
+      first_slab_paise: 6 * LAKH,
+      first_min_paise: 3 * LAKH,
+      first_rate: 90,
+      balance_rate: 60,
+    },
+    advance_tax: [
+      { due: "15 Jun", cumulative_percent: 15 },
+      { due: "15 Sep", cumulative_percent: 45 },
+      { due: "15 Dec", cumulative_percent: 75 },
+      { due: "15 Mar", cumulative_percent: 100 },
+    ],
+  },
+];
+
+export interface ResolvedRates {
+  rates: TaxYearRates;
+  /** True when the year has no table of its own and an earlier one was used. */
+  provisional: boolean;
+  /** Why the caller should show a warning, or "" when the year is confirmed. */
+  caveat: string;
+}
+
+/**
+ * The rates to use for a tax year. Carries the most recent earlier table
+ * forward when the year isn't listed — but says so, loudly, rather than
+ * letting stale slabs pass as current. Throws for a year before the earliest
+ * table, since guessing backwards has no defensible basis.
+ */
+export function ratesFor(taxYear: string): ResolvedRates {
+  const exact = TAX_YEARS.find((t) => t.tax_year === taxYear);
+  const chosen =
+    exact ??
+    [...TAX_YEARS].reverse().find((t) => t.tax_year < taxYear) ??
+    null;
+  if (!chosen) {
+    throw new Error(
+      `No income-tax rates on file for ${taxYear} or any earlier year — add a table to india-it.ts before computing.`
+    );
+  }
+  const provisional = !exact;
+  const notes: string[] = [];
+  if (provisional) {
+    notes.push(
+      `No rate table for ${taxYear}: computed using ${chosen.tax_year} rates. Confirm this year's rates before filing.`
+    );
+  }
+  if (!chosen.verified) {
+    notes.push(
+      `The ${chosen.tax_year} rates are unconfirmed (${chosen.source}). Verify against the Act.`
+    );
+  }
+  return { rates: chosen, provisional, caveat: notes.join(" ") };
+}
+
+/** Statutory rounding: to the nearest ₹10. */
+export function roundToTenRupees(paise: number): number {
+  const sign = paise < 0 ? -1 : 1;
+  return sign * roundHalfUp(Math.abs(paise) / 1000) * 1000;
+}
+
+/** Tax on an amount across a slab ladder. */
+export function slabTax(taxablePaise: number, slabs: Slab[]): number {
+  if (taxablePaise <= 0) return 0;
+  let tax = 0;
+  let floor = 0;
+  for (const s of slabs) {
+    const ceiling = s.upto_paise ?? Infinity;
+    const band = Math.min(taxablePaise, ceiling) - floor;
+    if (band > 0) tax += (band * s.rate) / 100;
+    floor = ceiling;
+    if (taxablePaise <= ceiling) break;
+  }
+  return roundHalfUp(tax);
+}
+
+/**
+ * Surcharge with marginal relief: crossing a threshold must never cost more in
+ * extra tax than the extra income earned.
+ *
+ * The ceiling is the FULL liability at the threshold — tax plus whatever
+ * surcharge already applied just below it — not the bare slab tax. At the
+ * second threshold and above, surcharge is already running at the previous
+ * tier's rate, so pricing the ceiling without it over-grants relief massively
+ * and total tax can *fall* as income rises. Hence the recursion: the liability
+ * at a threshold is itself computed with relief, one tier down. It terminates
+ * because tiers apply strictly above their bound, so at exactly `above_paise`
+ * only lower tiers can match.
+ *
+ * `taxBeforeSurcharge` prices tax at any income on the same basis as the
+ * caller (post-rebate for an individual, flat rate for a firm or company), so
+ * the ceiling and the actual liability are always measured the same way.
+ */
+export function surchargeWithRelief(
+  totalIncomePaise: number,
+  taxBeforeSurcharge: (incomePaise: number) => number,
+  tiers: SurchargeTier[],
+  capRate: number | null
+): { surcharge_paise: number; marginal_relief_paise: number } {
+  const tier = [...tiers]
+    .sort((a, b) => a.above_paise - b.above_paise)
+    .filter((t) => totalIncomePaise > t.above_paise)
+    .pop();
+  if (!tier) return { surcharge_paise: 0, marginal_relief_paise: 0 };
+
+  const rate = capRate === null ? tier.rate : Math.min(tier.rate, capRate);
+  const tax = taxBeforeSurcharge(totalIncomePaise);
+  const gross = roundHalfUp((tax * rate) / 100);
+
+  const atThreshold = surchargeWithRelief(
+    tier.above_paise,
+    taxBeforeSurcharge,
+    tiers,
+    capRate
+  );
+  const liabilityAtThreshold =
+    taxBeforeSurcharge(tier.above_paise) + atThreshold.surcharge_paise;
+  const ceiling = liabilityAtThreshold + (totalIncomePaise - tier.above_paise);
+
+  const relief = Math.max(0, tax + gross - ceiling);
+  const capped = Math.max(0, gross - relief);
+  return {
+    surcharge_paise: capped,
+    marginal_relief_paise: gross - capped,
+  };
+}
+
+export interface TaxResult {
+  taxable_paise: number;
+  tax_before_rebate_paise: number;
+  rebate_paise: number;
+  surcharge_paise: number;
+  surcharge_marginal_relief_paise: number;
+  cess_paise: number;
+  total_tax_paise: number;
+  basis: string;
+}
+
+/** Individual (proprietorship) — slabs, rebate with marginal relief, then
+ * surcharge and cess. */
+export function taxForIndividual(
+  taxablePaise: number,
+  regime: ItRegime,
+  rates: TaxYearRates
+): TaxResult {
+  const isNew = regime === "new";
+  const slabs = isNew ? rates.slabs_new : rates.slabs_old;
+  const rebateRule = isNew ? rates.rebate_new : rates.rebate_old;
+
+  /** Slab tax less any rebate, at any income — the basis surcharge sits on. */
+  const afterRebateAt = (income: number): number => {
+    const t = slabTax(income, slabs);
+    if (income <= rebateRule.limit_paise) {
+      return t - Math.min(t, rebateRule.max_paise);
+    }
+    if (rebateRule.marginal_relief) {
+      // Just past the limit, tax cannot exceed the income earned beyond it.
+      return Math.min(t, income - rebateRule.limit_paise);
+    }
+    return t;
+  };
+
+  const base = slabTax(taxablePaise, slabs);
+  const afterRebate = afterRebateAt(taxablePaise);
+  const rebate = base - afterRebate;
+
+  const { surcharge_paise, marginal_relief_paise } = surchargeWithRelief(
+    taxablePaise,
+    afterRebateAt,
+    rates.surcharge,
+    isNew ? rates.surcharge_cap_new : null
+  );
+  const cess = roundHalfUp(
+    ((afterRebate + surcharge_paise) * rates.cess_rate) / 100
+  );
+  return {
+    taxable_paise: taxablePaise,
+    tax_before_rebate_paise: base,
+    rebate_paise: rebate,
+    surcharge_paise,
+    surcharge_marginal_relief_paise: marginal_relief_paise,
+    cess_paise: cess,
+    total_tax_paise: roundToTenRupees(afterRebate + surcharge_paise + cess),
+    basis: `Individual, ${isNew ? "new" : "old"} regime`,
+  };
+}
+
+/** Partnership firm / LLP — flat rate, one surcharge threshold. */
+export function taxForFirm(
+  taxablePaise: number,
+  rates: TaxYearRates
+): TaxResult {
+  const flatTax = (income: number): number =>
+    roundHalfUp((Math.max(0, income) * rates.firm_rate) / 100);
+  const base = flatTax(taxablePaise);
+  const { surcharge_paise, marginal_relief_paise } = surchargeWithRelief(
+    taxablePaise,
+    flatTax,
+    [rates.firm_surcharge],
+    null
+  );
+  const cess = roundHalfUp(((base + surcharge_paise) * rates.cess_rate) / 100);
+  return {
+    taxable_paise: taxablePaise,
+    tax_before_rebate_paise: base,
+    rebate_paise: 0,
+    surcharge_paise,
+    surcharge_marginal_relief_paise: marginal_relief_paise,
+    cess_paise: cess,
+    total_tax_paise: roundToTenRupees(base + surcharge_paise + cess),
+    basis: `Firm at ${rates.firm_rate}%`,
+  };
+}
+
+/**
+ * Domestic company. `concessional` elects the lower rate (which carries its
+ * own flat surcharge and gives up most incentives) instead of the normal rate.
+ */
+export function taxForCompany(
+  taxablePaise: number,
+  concessional: boolean,
+  rates: TaxYearRates
+): TaxResult {
+  const rate = concessional
+    ? rates.company_concessional_rate
+    : rates.company_rate;
+  const flatTax = (income: number): number =>
+    roundHalfUp((Math.max(0, income) * rate) / 100);
+  const base = flatTax(taxablePaise);
+
+  let surcharge = 0;
+  let relief = 0;
+  if (concessional) {
+    // Flat, with no threshold — so no marginal relief to compute.
+    surcharge = roundHalfUp(
+      (base * rates.company_concessional_surcharge) / 100
+    );
+  } else {
+    const s = surchargeWithRelief(
+      taxablePaise,
+      flatTax,
+      rates.company_surcharge,
+      null
+    );
+    surcharge = s.surcharge_paise;
+    relief = s.marginal_relief_paise;
+  }
+  const cess = roundHalfUp(((base + surcharge) * rates.cess_rate) / 100);
+  return {
+    taxable_paise: taxablePaise,
+    tax_before_rebate_paise: base,
+    rebate_paise: 0,
+    surcharge_paise: surcharge,
+    surcharge_marginal_relief_paise: relief,
+    cess_paise: cess,
+    total_tax_paise: roundToTenRupees(base + surcharge + cess),
+    basis: `Domestic company at ${rate}%${concessional ? " (concessional election)" : ""}`,
+  };
+}
+
+/** Tax for the book's entity type. For a company, `regime === "new"` is read
+ * as electing the concessional rate — the settings model has one regime flag
+ * and this is what it means for a company. */
+export function taxFor(
+  taxablePaise: number,
+  entity: EntityType,
+  regime: ItRegime,
+  rates: TaxYearRates
+): TaxResult {
+  switch (entity) {
+    case "partnership":
+      return taxForFirm(taxablePaise, rates);
+    case "company":
+      return taxForCompany(taxablePaise, regime === "new", rates);
+    case "proprietorship":
+      return taxForIndividual(taxablePaise, regime, rates);
+  }
+}
+
+/** Presumptive income: a percentage of turnover instead of actual profit.
+ * `digitalReceiptsPaise` gets the lower business rate. */
+export function presumptiveIncome(
+  scheme: Presumptive,
+  turnoverPaise: number,
+  digitalReceiptsPaise: number,
+  rates: TaxYearRates
+): number {
+  if (scheme === "") return 0;
+  if (scheme === "44ADA") {
+    return roundHalfUp(
+      (turnoverPaise * rates.presumptive_profession_rate) / 100
+    );
+  }
+  const digital = Math.min(Math.max(0, digitalReceiptsPaise), turnoverPaise);
+  const cash = turnoverPaise - digital;
+  return (
+    roundHalfUp((digital * rates.presumptive_business_digital_rate) / 100) +
+    roundHalfUp((cash * rates.presumptive_business_rate) / 100)
+  );
+}
+
+/** The most a firm may deduct for partner remuneration, given book profit. */
+export function partnerRemunerationCeiling(
+  bookProfitPaise: number,
+  rates: TaxYearRates
+): number {
+  const r = rates.partner_remuneration;
+  if (bookProfitPaise <= 0) return r.first_min_paise;
+  const first = Math.min(bookProfitPaise, r.first_slab_paise);
+  const balance = Math.max(0, bookProfitPaise - r.first_slab_paise);
+  const onFirst = Math.max(
+    r.first_min_paise,
+    roundHalfUp((first * r.first_rate) / 100)
+  );
+  return onFirst + roundHalfUp((balance * r.balance_rate) / 100);
+}
+
+export interface AdvanceTaxInstalment {
+  due: string;
+  cumulative_percent: number;
+  cumulative_paise: number;
+  instalment_paise: number;
+}
+
+/** Cumulative advance-tax instalments for a net liability. */
+export function advanceTaxSchedule(
+  netTaxPaise: number,
+  rates: TaxYearRates
+): AdvanceTaxInstalment[] {
+  let paid = 0;
+  return rates.advance_tax.map((a) => {
+    const cumulative = roundToTenRupees(
+      (Math.max(0, netTaxPaise) * a.cumulative_percent) / 100
+    );
+    const instalment = cumulative - paid;
+    paid = cumulative;
+    return {
+      due: a.due,
+      cumulative_percent: a.cumulative_percent,
+      cumulative_paise: cumulative,
+      instalment_paise: instalment,
+    };
+  });
+}

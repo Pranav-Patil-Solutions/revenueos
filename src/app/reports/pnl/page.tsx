@@ -1,18 +1,27 @@
 import { getDb } from "@/lib/db";
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
+import { FySelect } from "@/components/fy-select";
 import { inr, monthLabel } from "@/lib/format";
-import { profitAndLoss } from "@/lib/reports";
+import { fyEnd, fyLabel, fyList, fyStart } from "@/lib/fy";
+import { profitAndLoss, type PnlPeriod } from "@/lib/reports";
 
 export const dynamic = "force-dynamic";
 
 export default async function PnlPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string }>;
+  searchParams: Promise<{ month?: string; fy?: string }>;
 }) {
   const sp = await searchParams;
-  const month = /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month : undefined;
-  const pnl = profitAndLoss(getDb(), month);
+  const db = getDb();
+  const fys = fyList(db);
+  const fy = fys.includes(sp.fy ?? "") ? sp.fy! : undefined;
+  const month =
+    !fy && /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month : undefined;
+  const period: PnlPeriod | undefined = fy
+    ? { from: fyStart(fy), to: fyEnd(fy) }
+    : month;
+  const pnl = profitAndLoss(db, period);
   const hasData = pnl.income_lines.length > 0 || pnl.expense_lines.length > 0;
 
   const line = "flex items-center justify-between px-5 py-2.5 text-[13px]";
@@ -23,15 +32,18 @@ export default async function PnlPage({
         <div>
           <h1 className="text-[22px] font-semibold tracking-tight">Profit &amp; loss</h1>
           <p className="mt-1 text-[13.5px] text-ink-3">
-            {month ? monthLabel(month) : "All time"} — income against purchases and expenses.
+            {fy ? fyLabel(fy) : month ? monthLabel(month) : "All time"} — income
+            against purchases and expenses.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <form className="flex items-center gap-2" method="GET">
+            <FySelect fys={fys} value={fy} allowBlank />
             <input
               type="month"
               name="month"
               defaultValue={month}
+              aria-label="Month"
               className="rounded-lg border border-hairline bg-surface-2 px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
             />
             <button
@@ -41,7 +53,9 @@ export default async function PnlPage({
               Apply
             </button>
           </form>
-          <ExportLinks base={`/api/export/pnl${month ? `?month=${month}` : ""}`} />
+          <ExportLinks
+            base={`/api/export/pnl${fy ? `?fy=${fy}` : month ? `?month=${month}` : ""}`}
+          />
         </div>
       </div>
 

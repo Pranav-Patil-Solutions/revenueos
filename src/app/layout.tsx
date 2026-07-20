@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
+import { Shortcuts } from "@/components/shortcuts";
 import { Sidebar } from "@/components/sidebar";
+import { Statusbar } from "@/components/statusbar";
+import { Topbar } from "@/components/topbar";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -19,6 +17,9 @@ export const metadata: Metadata = {
     "Photograph a ledger page, review the extracted rows, post to proper double-entry books, and get statements plus GST filing prep.",
 };
 
+// Restore the persisted sidebar state before first paint (no flash).
+const SIDEBAR_BOOT = `try{if(localStorage.getItem("revenueos.sidebar")==="rail")document.documentElement.dataset.sidebar="rail"}catch(e){}`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -27,13 +28,18 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+      className={`${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT }} />
         <Sidebar />
-        <main className="ml-60 min-h-screen">
-          <div className="mx-auto max-w-6xl px-8 py-8">{children}</div>
-        </main>
+        <div className="content-shell min-h-screen">
+          <Topbar />
+          <main className="mx-auto max-w-6xl px-8 pt-8 pb-16">{children}</main>
+        </div>
+        <Statusbar />
+        <Shortcuts />
       </body>
     </html>
   );

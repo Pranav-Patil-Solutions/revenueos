@@ -63,13 +63,34 @@ export default function DocumentsPage() {
                       href={`/documents/${d.id}`}
                       className="flex items-center gap-3 font-medium text-ink hover:text-accent"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`/api/uploads/${d.id}`}
-                        alt=""
-                        className="size-9 rounded-md border border-hairline object-cover"
-                      />
+                      {d.source_type === "photo" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={`/api/uploads/${d.id}`}
+                          alt=""
+                          className="size-9 rounded-md border border-hairline object-cover"
+                        />
+                      ) : (
+                        <span className="grid size-9 shrink-0 place-items-center rounded-md border border-hairline bg-surface-2">
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="size-4 stroke-ink-3"
+                            fill="none"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M4 5h16v14H4z" />
+                            <path d="M4 10h16M9 10v9" />
+                          </svg>
+                        </span>
+                      )}
                       #{d.id}
+                      {d.source_type !== "photo" && (
+                        <span className="rounded-full border border-hairline bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ink-3">
+                          {d.source_type}
+                        </span>
+                      )}
                     </Link>
                   </td>
                   <td className="px-5 py-3.5 text-ink-2">{d.party_name}</td>

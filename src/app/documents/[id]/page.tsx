@@ -30,6 +30,16 @@ export default async function DocumentReviewPage({
   const rows = db
     .prepare("SELECT * FROM staged_rows WHERE document_id = ? ORDER BY row_no")
     .all(doc.id) as StagedRow[];
+  const isPhoto = doc.source_type === "photo";
+  // Imports carry a party per row — the review grid shows who each row books to.
+  const partyNames = isPhoto
+    ? undefined
+    : Object.fromEntries(
+        (db.prepare("SELECT id, name FROM parties").all() as {
+          id: number;
+          name: string;
+        }[]).map((p) => [p.id, p.name])
+      );
   const duplicateOf = db
     .prepare(
       "SELECT id FROM documents WHERE image_sha256 = ? AND id < ? ORDER BY id LIMIT 1"
@@ -52,9 +62,10 @@ export default async function DocumentReviewPage({
             <StatusBadge status={doc.status} />
           </h1>
           <p className="mt-1 text-[13.5px] text-ink-3">
-            {doc.party_name} · {doc.party_kind} · captured{" "}
+            {doc.party_name} · {doc.party_kind} ·{" "}
+            {isPhoto ? "captured" : `imported from ${doc.source_type}`}{" "}
             {formatTimestamp(doc.created_at)}
-            {doc.model ? ` · extracted by ${doc.model}` : ""}
+            {isPhoto && doc.model ? ` · extracted by ${doc.model}` : ""}
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -79,7 +90,7 @@ export default async function DocumentReviewPage({
 
       {duplicateOf && doc.status !== "posted" && (
         <div className="mt-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-2.5 text-[12.5px] text-warning">
-          This photo is byte-identical to page{" "}
+          This {isPhoto ? "photo" : "file"} is byte-identical to page{" "}
           <Link href={`/documents/${duplicateOf.id}`} className="font-semibold underline">
             #{duplicateOf.id}
           </Link>{" "}
@@ -108,20 +119,28 @@ export default async function DocumentReviewPage({
         </div>
       )}
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(260px,340px)_1fr]">
-        <div className="lg:sticky lg:top-8 lg:self-start">
-          <LedgerImage documentId={doc.id} />
-          {doc.status === "extracted" && (
-            <form action={extractAction} className="mt-3">
-              <button
-                type="submit"
-                className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink"
-              >
-                Re-extract from photo
-              </button>
-            </form>
-          )}
-        </div>
+      <div
+        className={
+          isPhoto
+            ? "mt-6 grid gap-6 lg:grid-cols-[minmax(260px,340px)_1fr]"
+            : "mt-6"
+        }
+      >
+        {isPhoto && (
+          <div className="lg:sticky lg:top-8 lg:self-start">
+            <LedgerImage documentId={doc.id} />
+            {doc.status === "extracted" && (
+              <form action={extractAction} className="mt-3">
+                <button
+                  type="submit"
+                  className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink"
+                >
+                  Re-extract from photo
+                </button>
+              </form>
+            )}
+          </div>
+        )}
 
         <div className="min-w-0">
           {busy ? (
@@ -137,25 +156,31 @@ export default async function DocumentReviewPage({
           ) : rows.length === 0 ? (
             <div className="rounded-xl border border-hairline bg-surface px-6 py-14 text-center">
               <p className="text-[13.5px] font-medium text-ink-2">
-                No rows extracted yet
+                No rows {isPhoto ? "extracted" : "imported"} yet
               </p>
               <p className="mt-1 text-[12.5px] text-ink-3">
-                Run extraction to read this page into editable rows.
+                {isPhoto
+                  ? "Run extraction to read this page into editable rows."
+                  : "The file had no usable rows — fix it and import again."}
               </p>
-              <form action={extractAction} className="mt-4">
-                <button
-                  type="submit"
-                  className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
-                >
-                  Run extraction
-                </button>
-              </form>
+              {isPhoto && (
+                <form action={extractAction} className="mt-4">
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Run extraction
+                  </button>
+                </form>
+              )}
             </div>
           ) : (
             <ReviewTable
               docId={doc.id}
               rows={rows}
               readOnly={doc.status === "posted"}
+              partyNames={partyNames}
+              defaultPartyName={isPhoto ? undefined : doc.party_name}
             />
           )}
         </div>

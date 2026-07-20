@@ -1,5 +1,13 @@
 import type Database from "better-sqlite3";
-import type { AccountType, EntryType, PartyKind, PartyRow } from "./types";
+import { ACCOUNT_GROUPS, DEFAULT_GROUP_BY_TYPE, groupFor, labelForEntity } from "./coa";
+import { fyOf, fyStart } from "./fy";
+import type {
+  AccountType,
+  EntryType,
+  PartyKind,
+  PartyRow,
+  SettingsRow,
+} from "./types";
 
 /** Read-model queries for statements, trial balance, P&L, day book, GST
  * filing prep, and the dashboard. All amounts INTEGER paise. */
@@ -19,19 +27,30 @@ export interface TrialBalance {
   balanced: true;
 }
 
-/** Net balance per account on its natural side. Throws if the books don't
- * sum to zero — the last of the three balance-invariant layers. */
-export function trialBalance(db: Database.Database): TrialBalance {
+/** Net balance per account on its natural side, optionally as of a date
+ * (inclusive). Throws if the books don't sum to zero — the last of the three
+ * balance-invariant layers. */
+export function trialBalance(
+  db: Database.Database,
+  asOf?: string
+): TrialBalance {
   const rows = db
     .prepare(
       `SELECT a.code, a.name, a.type,
-              COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+              COALESCE(SUM(CASE WHEN @asOf IS NULL OR j.entry_date <= @asOf
+                THEN jl.debit_paise - jl.credit_paise END), 0) AS net
        FROM accounts a
        LEFT JOIN journal_lines jl ON jl.account_id = a.id
+       LEFT JOIN journals j ON j.id = jl.journal_id
        GROUP BY a.id
        ORDER BY a.code`
     )
-    .all() as { code: string; name: string; type: AccountType; net: number }[];
+    .all({ asOf: asOf ?? null }) as {
+    code: string;
+    name: string;
+    type: AccountType;
+    net: number;
+  }[];
 
   const lines: TrialBalanceLine[] = rows
     .filter((r) => r.net !== 0)
@@ -79,10 +98,15 @@ export interface PartyStatement {
  * run on AR (debit balance = they owe us); suppliers on AP (credit balance =
  * we owe them). Legs the same party carries on the other control account
  * (purchases/payments in a customer khata, sales/receipts in a supplier one)
- * are reported as cross_ledger_paise rather than silently dropped. */
+ * are reported as cross_ledger_paise rather than silently dropped.
+ *
+ * `asOf` (inclusive) limits BOTH ledgers to entries on or before that date —
+ * the CA pack's annexure reads FY-end positions this way. Omitted = full
+ * history, byte-identical to the pre-asOf behaviour. */
 export function partyStatement(
   db: Database.Database,
-  partyId: number
+  partyId: number,
+  asOf?: string
 ): PartyStatement | null {
   const party = db
     .prepare("SELECT * FROM parties WHERE id = ?")
@@ -97,10 +121,14 @@ export function partyStatement(
        FROM journal_lines jl
        JOIN journals j ON j.id = jl.journal_id
        JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = ? AND a.code = ?
+       WHERE jl.party_id = @partyId AND a.code = @code
+         AND (@asOf IS NULL OR j.entry_date <= @asOf)
        ORDER BY j.entry_date, j.id`
     )
-    .all(partyId, control) as Omit<StatementLine, "balance_paise">[];
+    .all({ partyId, code: control, asOf: asOf ?? null }) as Omit<
+    StatementLine,
+    "balance_paise"
+  >[];
 
   let balance = 0;
   const lines = rows.map((r) => {
@@ -118,10 +146,12 @@ export function partyStatement(
                 THEN jl.credit_paise - jl.debit_paise
                 ELSE jl.debit_paise - jl.credit_paise END), 0) AS net
        FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
        JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = ? AND a.code = ?`
+       WHERE jl.party_id = @partyId AND a.code = @code
+         AND (@asOf IS NULL OR j.entry_date <= @asOf)`
     )
-    .get(partyId, other) as { net: number };
+    .get({ partyId, code: other, asOf: asOf ?? null }) as { net: number };
 
   return {
     party,
@@ -184,11 +214,18 @@ export interface PnlReport {
   net_profit_paise: number;
 }
 
-/** Income (net credit) vs expenses (net debit); month optional = all time. */
+/** P&L period: a month "YYYY-MM" (back-compat) or an inclusive date range
+ * (used for FY windows). Omit for all time. */
+export type PnlPeriod = string | { from: string; to: string };
+
+/** Income (net credit) vs expenses (net debit) over an optional period. */
 export function profitAndLoss(
   db: Database.Database,
-  month?: string
+  period?: PnlPeriod
 ): PnlReport {
+  const month = typeof period === "string" ? period : null;
+  const from = typeof period === "object" ? period.from : null;
+  const to = typeof period === "object" ? period.to : null;
   const rows = db
     .prepare(
       `SELECT a.code, a.name, a.type,
@@ -197,11 +234,12 @@ export function profitAndLoss(
        LEFT JOIN journal_lines jl ON jl.account_id = a.id
        LEFT JOIN journals j ON j.id = jl.journal_id
        WHERE a.type IN ('income', 'expense')
-         AND (? IS NULL OR substr(j.entry_date, 1, 7) = ?)
+         AND (@month IS NULL OR substr(j.entry_date, 1, 7) = @month)
+         AND (@from IS NULL OR (j.entry_date >= @from AND j.entry_date <= @to))
        GROUP BY a.id
        ORDER BY a.code`
     )
-    .all(month ?? null, month ?? null) as {
+    .all({ month, from, to }) as {
     code: string;
     name: string;
     type: AccountType;
@@ -222,6 +260,169 @@ export function profitAndLoss(
     total_income_paise,
     total_expense_paise,
     net_profit_paise: total_income_paise - total_expense_paise,
+  };
+}
+
+export interface BalanceSheetLine {
+  code: string;
+  name: string;
+  amount_paise: number; // debit-positive in asset groups, credit-positive elsewhere
+}
+
+export interface BalanceSheetGroup {
+  group_code: string;
+  label: string;
+  section: "assets" | "liabilities" | "equity";
+  lines: BalanceSheetLine[];
+  total_paise: number;
+}
+
+export interface BalanceSheetReport {
+  as_of: string;
+  fy: string; // FY containing as_of — the current-year-profit window
+  groups: BalanceSheetGroup[]; // statement order
+  total_assets_paise: number;
+  total_liabilities_paise: number;
+  total_equity_paise: number;
+  retained_prior_paise: number;
+  current_year_profit_paise: number;
+  balanced: true;
+}
+
+/** Net P&L (income − expense) for an inclusive entry-date window. */
+function netProfitBetween(
+  db: Database.Database,
+  from: string | null,
+  toExclusive: string | null,
+  toInclusive: string | null
+): number {
+  const r = db
+    .prepare(
+      `SELECT COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
+       JOIN accounts a ON a.id = jl.account_id
+       WHERE a.type IN ('income', 'expense')
+         AND (@from IS NULL OR j.entry_date >= @from)
+         AND (@toExclusive IS NULL OR j.entry_date < @toExclusive)
+         AND (@toInclusive IS NULL OR j.entry_date <= @toInclusive)`
+    )
+    .get({ from, toExclusive, toInclusive }) as { net: number };
+  return r.net;
+}
+
+/** Balance sheet as of a date. P&L balances are NEVER posted to equity —
+ * retained earnings (prior FYs) and current-year profit are computed here and
+ * injected as derived lines in the capital group (post-only books preserved).
+ * Throws unless assets = liabilities + equity — the fourth balance guard. */
+export function balanceSheet(
+  db: Database.Database,
+  asOf: string,
+  settings: SettingsRow
+): BalanceSheetReport {
+  const fy = fyOf(asOf);
+  const yearStart = fyStart(fy);
+
+  const rows = db
+    .prepare(
+      `SELECT a.code, a.name, a.type, a.group_code,
+              COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+       FROM accounts a
+       JOIN journal_lines jl ON jl.account_id = a.id
+       JOIN journals j ON j.id = jl.journal_id
+       WHERE j.entry_date <= ?
+       GROUP BY a.id
+       ORDER BY a.code`
+    )
+    .all(asOf) as {
+    code: string;
+    name: string;
+    type: AccountType;
+    group_code: string | null;
+    net: number;
+  }[];
+
+  const groups = new Map<string, BalanceSheetGroup>();
+  const groupOf = (groupCode: string): BalanceSheetGroup => {
+    let g = groups.get(groupCode);
+    if (!g) {
+      const meta = groupFor(groupCode);
+      if (!meta || meta.statement !== "bs") {
+        throw new Error(`Account group "${groupCode}" is not a balance-sheet group`);
+      }
+      g = {
+        group_code: groupCode,
+        label: labelForEntity(groupCode, settings.entity_type),
+        section: meta.section as "assets" | "liabilities" | "equity",
+        lines: [],
+        total_paise: 0,
+      };
+      groups.set(groupCode, g);
+    }
+    return g;
+  };
+
+  for (const r of rows) {
+    if (r.type === "income" || r.type === "expense") continue; // rolls into profit
+    if (r.net === 0) continue;
+    const g = groupOf(r.group_code ?? DEFAULT_GROUP_BY_TYPE[r.type]);
+    // Assets display debit-positive; liabilities & equity credit-positive.
+    const amount = g.section === "assets" ? r.net : -r.net;
+    g.lines.push({ code: r.code, name: r.name, amount_paise: amount });
+    g.total_paise += amount;
+  }
+
+  // Derived equity: cumulative P&L through FY start, then FY-to-asOf.
+  const retained_prior_paise = netProfitBetween(db, null, yearStart, null);
+  const current_year_profit_paise = netProfitBetween(db, yearStart, null, asOf);
+  if (retained_prior_paise !== 0 || current_year_profit_paise !== 0) {
+    const capital = groupOf("capital");
+    if (retained_prior_paise !== 0) {
+      capital.lines.push({
+        code: "",
+        name: "Retained earnings (prior years)",
+        amount_paise: retained_prior_paise,
+      });
+      capital.total_paise += retained_prior_paise;
+    }
+    if (current_year_profit_paise !== 0) {
+      capital.lines.push({
+        code: "",
+        name: "Current year profit",
+        amount_paise: current_year_profit_paise,
+      });
+      capital.total_paise += current_year_profit_paise;
+    }
+  }
+
+  const ordered = ACCOUNT_GROUPS.filter((g) => groups.has(g.code)).map(
+    (g) => groups.get(g.code)!
+  );
+  const sum = (section: BalanceSheetGroup["section"]): number =>
+    ordered
+      .filter((g) => g.section === section)
+      .reduce((s, g) => s + g.total_paise, 0);
+  const total_assets_paise = sum("assets");
+  const total_liabilities_paise = sum("liabilities");
+  const total_equity_paise = sum("equity");
+
+  if (total_assets_paise !== total_liabilities_paise + total_equity_paise) {
+    throw new Error(
+      `BALANCE SHEET OUT OF BALANCE as of ${asOf}: assets ${total_assets_paise} ≠ ` +
+        `liabilities ${total_liabilities_paise} + equity ${total_equity_paise} paise`
+    );
+  }
+
+  return {
+    as_of: asOf,
+    fy,
+    groups: ordered,
+    total_assets_paise,
+    total_liabilities_paise,
+    total_equity_paise,
+    retained_prior_paise,
+    current_year_profit_paise,
+    balanced: true,
   };
 }
 
@@ -259,7 +460,9 @@ export function gstr3b(db: Database.Database, month: string): Gstr3bSummary {
   const cgst_paise = acc(["2200"], outward);
   const sgst_paise = acc(["2210"], outward);
   const igst_paise = acc(["2220"], outward);
-  const itc_paise = -acc(["1300"], inward); // ITC is an asset — net debit
+  // ITC is an asset — net debit. `|| 0` normalises the -0 the negation
+  // produces on an empty month, which would otherwise print as "-₹0.00".
+  const itc_paise = -acc(["1300"], inward) || 0;
   const net_payable_paise =
     cgst_paise + sgst_paise + igst_paise - itc_paise;
   return {

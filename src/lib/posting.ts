@@ -5,6 +5,7 @@ import {
   splitExclusive,
   splitInclusive,
 } from "./tax/india-gst";
+import { assertNotLocked } from "./vouchers";
 import type {
   DocumentRow,
   DraftRowInput,
@@ -25,7 +26,9 @@ import type {
  * manual opposite entry.
  */
 
-const ACC = {
+/** The account codes the posting engine moves. Exported so importers classify
+ * ledgers against the same codes this engine posts to — one source of truth. */
+export const ACC = {
   cash: "1000",
   bank: "1100",
   ar: "1200",
@@ -244,9 +247,19 @@ export function postDocument(
           : `Document is '${doc.status}' — only reviewed (extracted) documents can be posted.`
       );
     }
-    const party = db
-      .prepare("SELECT * FROM parties WHERE id = ?")
-      .get(doc.party_id) as PartyRow;
+    // Imports can carry a party per staged row (row.party_id); NULL falls back
+    // to the document's party, so the photo path is untouched.
+    const getParty = db.prepare("SELECT * FROM parties WHERE id = ?");
+    const partyCache = new Map<number, PartyRow>();
+    const partyFor = (partyId: number): PartyRow => {
+      let p = partyCache.get(partyId);
+      if (!p) {
+        p = getParty.get(partyId) as PartyRow | undefined;
+        if (!p) throw new Error(`party ${partyId} not found`);
+        partyCache.set(partyId, p);
+      }
+      return p;
+    };
     const settings = db
       .prepare("SELECT * FROM settings WHERE id = 1")
       .get() as SettingsRow;
@@ -284,7 +297,8 @@ export function postDocument(
       if (!row.entry_date) {
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
-      const legs = buildLegs(row, party, settings);
+      assertNotLocked(db, row.entry_date);
+      const legs = buildLegs(row, partyFor(row.party_id ?? doc.party_id), settings);
       assertBalanced(legs);
       const journalId = insertJournal.run(
         row.entry_date,
