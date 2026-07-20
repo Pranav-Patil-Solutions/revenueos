@@ -113,6 +113,39 @@ the reason suffixed onto particulars so review shows it:
 Multiple same-type revenue legs DO import (buildLegs sums them into Sales).
 
 ## Next phase: P7 income tax
+
+### READ FIRST — P7 pre-flight findings (researched 2026-07-20, not yet coded)
+Two things the spec did not anticipate. Resolve BOTH before writing constants.
+
+1. **The Income-tax Act, 2025 is in force from 1 April 2026** — i.e. from FY
+   2026-27, the very year the demo books sit in. It replaces the 1961 Act and
+   RENUMBERS almost everything, and swaps "Assessment Year"/"Previous Year"
+   for "Tax Year". Every section number in RVOS-002-SPEC.md P7/P8 (87A, 288A,
+   288B, 40(b), 44AD, 44ADA, 115BAA, and P6's s.32) is a 1961-Act number and
+   needs re-mapping before it goes on any client-facing output. Sources I found
+   CONFLICT on the new rebate clause — some say 156, others 157 — so do not
+   trust a single SEO tax blog. Verify against the bare Act / an official
+   source, and keep section labels as DISPLAY METADATA ONLY so a wrong label
+   can never change a computed number.
+
+2. **Rates for FY 2026-27 appear unchanged** — Budget 2026 announced no change
+   to slabs or the basic exemption, so the Budget-2025 new-regime ladder
+   carries forward: nil to ₹4L · 5% ₹4–8L · 10% ₹8–12L · 15% ₹12–16L ·
+   20% ₹16–20L · 25% ₹20–24L · 30% above ₹24L, rebate ₹60,000 up to ₹12L
+   total income, standard deduction ₹75,000 for salary, surcharge 10%/15%/25%
+   with the new regime capped at 25%, cess 4%. TREAT THIS AS UNVERIFIED: much
+   of the web content conflates "FY 2026-27" with "AY 2026-27" (which is FY
+   2025-26), and this assistant's training cutoff predates Budget 2026.
+
+**Design consequence — build the uncertainty into the code, don't paper over
+it.** Key `india-it.ts` by TAX YEAR with an explicit `verified: boolean` and a
+`source` string per table. A tax year with no table of its own must NOT
+silently inherit last year's rates: carry the most recent table forward but
+mark the whole computation `provisional`, and surface that on the page AND in
+the export next to the existing "CA to verify" line. Getting a rate wrong here
+becomes a wrong return, so a visible "rates not confirmed for this year" beats
+a confident number. Pinned boundary tests are spec risk #5's mitigation.
+
 Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md: new
 `src/lib/tax/india-it.ts` — AY-TAGGED constants + pure fns: individual slabs
 old/new, 87A rebate + new-regime marginal relief, surcharge tiers + marginal
