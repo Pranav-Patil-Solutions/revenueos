@@ -1,5 +1,7 @@
 import type Database from "better-sqlite3";
 import { assertBalanced, buildLegs, type Leg } from "./posting";
+import { roundHalfUp } from "./tax/india-gst";
+import { computeTds, type TdsComputation } from "./tax/tds";
 import type {
   JournalKind,
   PartyRow,
@@ -246,4 +248,155 @@ export function postManualVoucher(
     return journalId;
   });
   return { journalId: tx() };
+}
+
+// ---------------------------------------------------------------------------
+// TDS at the point of payment
+// ---------------------------------------------------------------------------
+
+export interface TdsVoucherInput {
+  entry_date: string;
+  memo: string;
+  ref_no: string;
+  /** The payee. Their PAN (or its absence) sets the rate. */
+  party_id: number;
+  /** What the payment is for, e.g. "5900" expenses. */
+  expense_account_code: string;
+  /** The gross bill, before deduction. */
+  base_paise: number;
+  section: string;
+  use_alt?: boolean;
+  settle_account: SettleAccount;
+  /** For sections with no standard rate (salary), the office's own figure.
+   * Ignored otherwise. */
+  tds_paise_override?: number | null;
+}
+
+/**
+ * Pay a bill net of TDS: ONE journal splitting the gross three ways, plus the
+ * register row that points at it — written in a single transaction so the
+ * books and the register can never disagree. A ₹10,000 contractor bill at 1%
+ * paid by bank posts Dr 5900 ₹10,000 / Cr 2300 ₹100 / Cr Bank ₹9,900.
+ *
+ * If the register insert fails for any reason the journal goes with it. That
+ * is the point of the transaction: a deduction claimed on a return must have
+ * a book entry behind it, and a book entry crediting 2300 must be traceable
+ * to a payee on a return.
+ */
+export function postVoucherWithTds(
+  db: Database.Database,
+  input: TdsVoucherInput
+): { journalId: number; tdsEntryId: number; computation: TdsComputation } {
+  const tx = db.transaction(() => {
+    assertDate(input.entry_date);
+    assertNotLocked(db, input.entry_date);
+    if (!Number.isInteger(input.base_paise) || input.base_paise <= 0) {
+      throw new Error("The bill amount must be a positive amount in paise.");
+    }
+
+    const party = db
+      .prepare("SELECT * FROM parties WHERE id = ?")
+      .get(input.party_id) as PartyRow | undefined;
+    if (!party) throw new Error("Payee not found.");
+
+    const computation = computeTds(
+      input.base_paise,
+      input.section,
+      party.pan.trim() !== "",
+      input.use_alt ?? false
+    );
+
+    let tdsPaise = computation.tds_paise;
+    if (input.tds_paise_override !== null && input.tds_paise_override !== undefined) {
+      if (
+        !Number.isInteger(input.tds_paise_override) ||
+        input.tds_paise_override < 0 ||
+        input.tds_paise_override > input.base_paise
+      ) {
+        throw new Error(
+          "The TDS amount must be a whole number of paise between zero and the bill."
+        );
+      }
+      tdsPaise = input.tds_paise_override;
+    }
+    // The register's rate must describe what was actually deducted — an
+    // override at a different amount stores its EFFECTIVE rate, not the
+    // section default it didn't use (audit trail, not decoration).
+    const rateBp =
+      tdsPaise === computation.tds_paise
+        ? computation.bp
+        : roundHalfUp((tdsPaise * 10_000) / input.base_paise);
+
+    const settleCode = SETTLE[input.settle_account];
+    const legs: Leg[] = [
+      {
+        accountCode: input.expense_account_code,
+        partyId: null,
+        debitPaise: input.base_paise,
+        creditPaise: 0,
+      },
+    ];
+    if (tdsPaise > 0) {
+      legs.push({
+        accountCode: "2300",
+        partyId: null,
+        debitPaise: 0,
+        creditPaise: tdsPaise,
+      });
+    }
+    const net = input.base_paise - tdsPaise;
+    if (net > 0) {
+      legs.push({
+        accountCode: settleCode,
+        partyId: null,
+        debitPaise: 0,
+        creditPaise: net,
+      });
+    }
+    assertBalanced(legs);
+
+    const accounts = db
+      .prepare("SELECT id, code FROM accounts")
+      .all() as { id: number; code: string }[];
+    const accountId = new Map(accounts.map((a) => [a.code, a.id]));
+    const now = new Date().toISOString();
+
+    const journalId = db
+      .prepare(
+        `INSERT INTO journals (entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
+         VALUES (?, 'tds_deduction', ?, ?, NULL, NULL, ?)`
+      )
+      .run(input.entry_date, input.memo, input.ref_no, now)
+      .lastInsertRowid as number;
+
+    const insertLine = db.prepare(
+      `INSERT INTO journal_lines (journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    legs.forEach((l, i) => {
+      const acc = accountId.get(l.accountCode);
+      if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
+      insertLine.run(journalId, i + 1, acc, l.partyId, l.debitPaise, l.creditPaise);
+    });
+
+    const tdsEntryId = db
+      .prepare(
+        `INSERT INTO tds_entries
+           (party_id, section, entry_date, base_paise, tds_paise, rate_bp, journal_id, challan_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+      )
+      .run(
+        input.party_id,
+        computation.section,
+        input.entry_date,
+        input.base_paise,
+        tdsPaise,
+        rateBp,
+        journalId,
+        now
+      ).lastInsertRowid as number;
+
+    return { journalId, tdsEntryId: Number(tdsEntryId), computation };
+  });
+  return tx();
 }

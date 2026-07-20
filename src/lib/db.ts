@@ -98,9 +98,45 @@ const DDL = `
   CREATE INDEX IF NOT EXISTS idx_lines_account ON journal_lines(account_id);
   CREATE INDEX IF NOT EXISTS idx_lines_party   ON journal_lines(party_id);
 
-  -- Tally ledger name → this book's account or party. Persistent: a ledger
-  -- mapped once is never asked about again on later imports. ledger_name is
-  -- UNIQUE so a name can only ever point at one target.
+  -- TDS deducted, one row per deduction, each pointing at the journal that
+  -- booked it. The register is derived from journals that exist, so it can
+  -- never drift from the books — postVoucherWithTds writes both together.
+  CREATE TABLE IF NOT EXISTS tds_challans (
+    id           INTEGER PRIMARY KEY,
+    fy           TEXT NOT NULL,
+    quarter      INTEGER NOT NULL CHECK (quarter BETWEEN 1 AND 4),
+    -- One challan covers ONE return form; a quarter can hold one of each, so
+    -- the row must say which or the preparer can't pick the right challan
+    -- number off the page.
+    form         TEXT NOT NULL CHECK (form IN ('26Q','24Q')),
+    challan_no   TEXT NOT NULL DEFAULT '',
+    bsr_code     TEXT NOT NULL DEFAULT '',
+    paid_on      TEXT NOT NULL,
+    amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+    -- Same invariant as tds_entries: a challan claiming money was deposited
+    -- must have the Dr 2300 / Cr Bank journal behind it.
+    journal_id   INTEGER NOT NULL REFERENCES journals(id),
+    created_at   TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS tds_entries (
+    id           INTEGER PRIMARY KEY,
+    party_id     INTEGER NOT NULL REFERENCES parties(id),
+    section      TEXT NOT NULL,
+    entry_date   TEXT NOT NULL,
+    base_paise   INTEGER NOT NULL CHECK (base_paise >= 0),
+    tds_paise    INTEGER NOT NULL CHECK (tds_paise >= 0),
+    rate_bp      INTEGER NOT NULL CHECK (rate_bp >= 0),
+    -- The journal this deduction lives in. NOT NULL: a register row without a
+    -- posted journal behind it would be a claim with no book entry.
+    journal_id   INTEGER NOT NULL REFERENCES journals(id),
+    -- NULL until the deduction is deposited on a challan.
+    challan_id   INTEGER REFERENCES tds_challans(id),
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_tds_entries_date ON tds_entries(entry_date);
+  CREATE INDEX IF NOT EXISTS idx_tds_entries_challan ON tds_entries(challan_id);
+
   -- Computation metadata: never posted to the books, so freely editable.
   -- Addbacks raise taxable income (disallowances, unpaid statutory dues),
   -- deductions lower it. The section label is the office's own note — this
@@ -165,6 +201,9 @@ const DDL = `
     UNIQUE (fy, block)
   );
 
+  -- Tally ledger name → this book's account or party. Persistent: a ledger
+  -- mapped once is never asked about again on later imports. ledger_name is
+  -- UNIQUE so a name can only ever point at one target.
   CREATE TABLE IF NOT EXISTS ledger_mappings (
     id          INTEGER PRIMARY KEY,
     ledger_name TEXT NOT NULL UNIQUE,
@@ -231,6 +270,9 @@ export function initSchema(db: Database.Database): void {
   );
   // NULL = the document's party; imports may carry a party per row.
   ensureColumn(db, "staged_rows", "party_id", "INTEGER REFERENCES parties(id)");
+  // A payee's PAN — its absence forces the penal TDS rate, so it is a fact
+  // about the party, not about any one deduction.
+  ensureColumn(db, "parties", "pan", "TEXT NOT NULL DEFAULT ''");
 }
 
 /** Settings singleton + chart of accounts. Idempotent — also backfills

@@ -104,12 +104,37 @@
   (measured on book profit with depreciation added back, overstating a firm's
   ceiling by the whole charge) — caught on re-review. All fixed pre-commit ->
   EVOLUTION #15.
+- **P8 tds** — `src/lib/tax/tds.ts`: `TDS_SECTIONS` (194C 1%/alt 2% · 194J
+  10%/alt 2% · 194I 10%/alt 2% · 194H 2% · 192B manual; basis points,
+  thresholds, per-section `verified: false` that surfaces in every
+  computation's warnings), `computeTds` (no-PAN penal 20% as a FLOOR;
+  thresholds warn, never auto-skip — the aggregate annual test is the
+  office's), `tdsRegister`, `q26Summary`/`q24Summary` (payee+section grouping,
+  missing-PAN flags, undeposited). vouchers.ts `postVoucherWithTds` — ONE tx:
+  Dr expense gross / Cr 2300 / Cr settle net + the register row pointing at
+  the journal (rate_bp stores the EFFECTIVE rate on an override); zero-TDS and
+  full-TDS edges never emit a zero-amount leg. db.ts: `parties.pan`
+  (ensureColumn) + DDL `tds_entries` (journal_id NOT NULL) + `tds_challans`
+  (journal_id NOT NULL — live table recreated for it). actions
+  `createTdsVoucher` + `createTdsChallan` (per-FORM deposit 26Q|24Q, amount
+  computed never typed, one tx: journal + challan + stamp). `/tax/tds` page
+  (deduct form, quarterly 26Q/24Q cards, challan form w/ Covers selector,
+  missing-PAN + unverified-rates banners), parties page + createParty PAN
+  (format-validated), export `case "tds-26q"/"tds-24q"` (CSV leads with the
+  caveat). 203 tests (16 new incl. atomicity: a sabotaged register insert
+  leaves NO journal). Smoke: 194C ₹10,000 → ₹100 in 2300 → 26Q one line →
+  challan → 2300 zero, TB zero (posts 2026-10, after every earlier pin; the
+  demo payee gets a PAN first or the penal 20% correctly fires). Review:
+  0 blockers, 3 warns (audit trail: override rate_bp, nullable challan
+  journal, mixed-form challans) all fixed + pinned; re-review added the
+  `tds_challans.form` column (a quarter can hold a 26Q and a 24Q challan and
+  the rows must be distinguishable) -> EVOLUTION #16.
 
 ## Current state
-- Branch `feat/rvos-002-accountant-edition`; all four gates green at P7.
-- EVOLUTION.md at #15 (P7: price a relief's reference point with the SAME
-  function as the thing it caps, and test the PROPERTY — monotonicity —
-  not worked examples; qualifying metadata must reach EVERY output format).
+- Branch `feat/rvos-002-accountant-edition`; all four gates green at P8.
+- EVOLUTION.md at #16 (P8: audit-trail columns are part of a transaction's
+  truth — derive them from what happened, constrain them like their siblings,
+  partition them the way downstream reconciliation partitions).
 - Live-DB compat spot-checked on a COPY of `data/revenueos.db` (+WAL):
   `ledger_mappings` created additively, 6 documents / 27 journal lines intact.
 - Live-DB compat also re-checked at P6: `fixed_assets` + `wdv_openings` are
@@ -163,30 +188,26 @@ flag. Two things still need a human with the source material:
 To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
 put the citation in `source`. `ratesFor()` and every caveat follow from there.
 
-## Next phase: P8 TDS
-Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md: new
-`src/lib/tax/tds.ts` — `TDS_SECTIONS` (194C 1%/2%, 194J 10%, 194I 10%/2%,
-194H 2%, 192B manual; basis points + threshold notes — but see the OPEN
-section above about section numbering before putting those labels on output),
-`computeTds(basePaise, section, hasPan)` (no PAN → 20%), `q26Summary(db, fy,
-quarter)`, `q24Summary`. db.ts: ensureColumn `parties.pan`; DDL `tds_entries`
-(party_id, section, entry_date, base_paise, tds_paise, journal_id REFERENCES
-journals, challan_id) + `tds_challans` (fy, quarter, challan_no, bsr_code,
-paid_on, amount_paise). vouchers.ts `postVoucherWithTds` — ONE transaction:
-journal (e.g. Dr 5900 ₹10,000 / Cr 2300 ₹100 / Cr Bank ₹9,900) plus the
-tds_entries row, rolling back together. Voucher-form gains an optional TDS
-section on payment/expense kinds with a live net-payable figure; parties page
-and `createParty` gain PAN. New `/tax/tds` page (register, quarterly
-summaries + exports, challan form — the deposit posts Dr 2300 / Cr Bank via
-postManualVoucher with `entry_type: 'tds_challan'`, which P6 already added
-support for — plus missing-PAN warnings). Export `case "tds-26q"` and
-`"tds-24q"`. Flip the TDS tab in tax-tabs.tsx to `ready: true`.
-Accept: `test/tds.test.ts` — basis-point math exact, no-PAN 20%, quarterly
-grouping via `quarterOf`, ATOMICITY (a forced tds_entries failure must leave
-no journal behind), challan deposit zeroes account 2300. Smoke: a 194C
-voucher → ₹100 in 2300 pinned → 26Q shows one row → challan → 2300 back to
-zero, TB zero. Commit: `RVOS-002 P8: tds — section rates, deduct-on-voucher
-register linked to journals, challan tracking, 26Q/24Q prep exports`.
+## Next phase: P9 compliance calendar
+Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md (follow the PLAN's
+shapes, not a paraphrase): new `src/lib/compliance.ts` — `RULES` (GSTR-1 11th
+monthly; GSTR-3B 20th; TDS deposit 7th of the next month, Mar→Apr 30; TDS
+returns Jul 31/Oct 31/Jan 31/May 31; advance tax Jun/Sep/Dec 15 + Mar 15; ITR
+Jul 31 or Oct 31 by `fy_audit_case`) and `generateItems(fy, settings, today)`
+→ status done|na|pending|overdue merging `compliance_marks`; skip GST rules
+when gstin='' and TDS rules when no tds_entries and no TAN. `today` is passed
+IN, never read from the clock inside the rules. db.ts DDL `compliance_marks`
+(rule_code, period, status CHECK('done','na'), marked_at, note,
+UNIQUE(rule_code, period)). New `src/app/compliance/page.tsx` (FY select,
+month-grouped board, status pills via the status-badge dot pattern, mark
+done/na); actions `markCompliance`; sidebar NAV + Compliance (its own entry —
+NOT a tax-tabs tab, per the plan). Due-date DATES are law-adjacent: same
+unverified/source discipline as india-it.ts and tds.ts, caveat on the page.
+Accept: `test/compliance.test.ts` — full-FY item count pinned (GSTIN+TAN
+row); quarter dues incl. Q4→May 31 landing in the NEXT FY; overdue with
+injected `today`; marks override; na-skip. Smoke: generate the board, mark
+one done, regenerate shows it. Commit: `RVOS-002 P9: compliance — due-date
+rules engine, FY status board with manual marks and derived overdue`.
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
@@ -280,13 +301,16 @@ register linked to journals, challan tracking, 26Q/24Q prep exports`.
   July GST + BS pins stay untouched. Any new smoke leg must post after them
   too, or re-pin the figures deliberately.
 
-## Files touched (P7)
-src/lib/tax/india-it.ts (new) · src/lib/tax/computation.ts (new) ·
-src/app/tax/computation/page.tsx (new) ·
-test/india-it.test.ts (new) · test/computation.test.ts (new) ·
-src/lib/{db,types,actions}.ts · src/components/tax-tabs.tsx ·
-src/app/tax/page.tsx · src/app/api/export/[report]/route.ts ·
+## Files touched (P8)
+src/lib/tax/tds.ts (new) · src/app/tax/tds/page.tsx (new) ·
+test/tds.test.ts (new) ·
+src/lib/{db,types,vouchers,actions}.ts · src/app/parties/page.tsx ·
+src/components/tax-tabs.tsx · src/app/api/export/[report]/route.ts ·
 scripts/smoke.ts · EVOLUTION.md · HANDOFF.md
+(P7 touched: src/lib/tax/{india-it,computation}.ts,
+src/app/tax/computation/page.tsx, test/{india-it,computation}.test.ts,
+src/lib/{db,types,actions}.ts, src/components/tax-tabs.tsx,
+src/app/tax/page.tsx, export route, smoke.)
 (P6 touched: src/lib/tax/depreciation.ts, src/app/tax/depreciation/page.tsx,
 src/components/{tax-tabs,sidebar}.tsx, test/depreciation.test.ts,
 src/lib/{db,types,fy,vouchers,actions}.ts.)

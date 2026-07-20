@@ -23,8 +23,10 @@ import {
 } from "./import-tally";
 import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
+import { tdsSection } from "./tax/tds";
 import {
   postManualVoucher,
+  postVoucherWithTds,
   type JournalLegInput,
   type StructuredKind,
   type VoucherInput,
@@ -117,18 +119,22 @@ export async function createParty(formData: FormData): Promise<void> {
   const name = String(formData.get("name") ?? "").trim();
   const kind = String(formData.get("kind") ?? "");
   const gstin = String(formData.get("gstin") ?? "").trim().toUpperCase();
+  const pan = String(formData.get("pan") ?? "").trim().toUpperCase();
   const stateCode = String(formData.get("state_code") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
   if (!name) throw new Error("Party name is required.");
   if (kind !== "customer" && kind !== "supplier") {
     throw new Error("Party kind must be customer or supplier.");
   }
+  if (pan !== "" && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) {
+    throw new Error("PAN must look like ABCPV1234F (or be left blank).");
+  }
   getDb()
     .prepare(
-      `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO parties (name, kind, gstin, pan, state_code, phone, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(name, kind, gstin, stateCode, phone, new Date().toISOString());
+    .run(name, kind, gstin, pan, stateCode, phone, new Date().toISOString());
   revalidatePath("/parties");
   redirect("/parties");
 }
@@ -696,6 +702,123 @@ export async function addTaxPayment(formData: FormData): Promise<void> {
   revalidatePath("/tax/computation");
   redirect(`/tax/computation?fy=${fy}`);
 }
+
+// ---------------------------------------------------------------------------
+// TDS — deduct on payment, deposit on challan
+// ---------------------------------------------------------------------------
+
+/** Pay a bill net of TDS — one journal + one register row, atomically. */
+export async function createTdsVoucher(formData: FormData): Promise<void> {
+  const entry_date = String(formData.get("entry_date") ?? "").trim();
+  if (!ISO_DATE.test(entry_date)) {
+    throw new Error("Payment date is required (YYYY-MM-DD).");
+  }
+  const party_id = Number(formData.get("party_id"));
+  if (!Number.isInteger(party_id) || party_id <= 0) {
+    throw new Error("Pick the payee.");
+  }
+  const section = String(formData.get("section") ?? "");
+  if (!tdsSection(section)) throw new Error("Pick a TDS section.");
+  const base_paise = formPaise(formData, "base", "Bill amount");
+  if (base_paise === 0) throw new Error("Bill amount must be more than zero.");
+
+  const overrideRaw = String(formData.get("tds_override") ?? "").trim();
+  let tds_paise_override: number | null = null;
+  if (overrideRaw !== "") {
+    tds_paise_override = rupeeStringToPaise(overrideRaw);
+    if (tds_paise_override < 0) throw new Error("TDS must not be negative.");
+  }
+
+  postVoucherWithTds(getDb(), {
+    entry_date,
+    memo: String(formData.get("memo") ?? "").trim(),
+    ref_no: String(formData.get("ref_no") ?? "").trim(),
+    party_id,
+    expense_account_code: "5900",
+    base_paise,
+    section,
+    use_alt: formData.get("use_alt") === "on",
+    settle_account: formData.get("settle_account") === "cash" ? "cash" : "bank",
+    tds_paise_override,
+  });
+  revalidatePath("/tax/tds");
+  revalidatePath("/reports");
+  revalidatePath("/");
+  redirect("/tax/tds");
+}
+
+/**
+ * Deposit the undeposited deductions of one quarter: Dr 2300 / Cr Bank, a
+ * challan row, and the covered entries stamped — ONE transaction. The amount
+ * is computed from the entries being covered, never typed, so the challan can
+ * neither over- nor under-clear account 2300.
+ */
+export async function createTdsChallan(formData: FormData): Promise<void> {
+  const fy = String(formData.get("fy") ?? "").trim();
+  fyStart(fy);
+  const quarter = Number(formData.get("quarter"));
+  if (![1, 2, 3, 4].includes(quarter)) throw new Error("Pick a quarter.");
+  const form = String(formData.get("form") ?? "26Q");
+  if (form !== "26Q" && form !== "24Q") {
+    throw new Error("A challan covers either 26Q (non-salary) or 24Q (salary).");
+  }
+  const paid_on = String(formData.get("paid_on") ?? "").trim();
+  if (!ISO_DATE.test(paid_on)) {
+    throw new Error("Deposit date is required (YYYY-MM-DD).");
+  }
+  const challan_no = String(formData.get("challan_no") ?? "").trim();
+  const bsr_code = String(formData.get("bsr_code") ?? "").trim();
+
+  const db = getDb();
+  const q = QUARTER_RANGES[quarter as 1 | 2 | 3 | 4](fy);
+  db.transaction(() => {
+    // One challan covers one return form: mixing salary and non-salary
+    // deductions in a single deposit would make the 26Q/24Q undeposited
+    // figures impossible to reconcile from the challan rows.
+    const pending = db
+      .prepare(
+        `SELECT id, tds_paise FROM tds_entries
+         WHERE challan_id IS NULL AND entry_date BETWEEN ? AND ?
+           AND (CASE WHEN ? = '24Q' THEN section = '192B' ELSE section <> '192B' END)`
+      )
+      .all(q.from, q.to, form) as { id: number; tds_paise: number }[];
+    const amount = pending.reduce((s, e) => s + e.tds_paise, 0);
+    if (amount <= 0) {
+      throw new Error(`Nothing undeposited for ${form} in that quarter.`);
+    }
+    const { journalId } = postManualVoucher(db, {
+      kind: "journal",
+      entry_type: "tds_challan",
+      entry_date: paid_on,
+      memo: `TDS deposit (${form}) — Q${quarter} ${fyLabel(fy)}`,
+      ref_no: challan_no,
+      legs: [
+        { account_code: "2300", party_id: null, debit_paise: amount, credit_paise: 0 },
+        { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: amount },
+      ],
+    });
+    const challanId = db
+      .prepare(
+        `INSERT INTO tds_challans (fy, quarter, form, challan_no, bsr_code, paid_on, amount_paise, journal_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(fy, quarter, form, challan_no, bsr_code, paid_on, amount, journalId, new Date().toISOString())
+      .lastInsertRowid as number;
+    const stamp = db.prepare("UPDATE tds_entries SET challan_id = ? WHERE id = ?");
+    for (const e of pending) stamp.run(challanId, e.id);
+  })();
+  revalidatePath("/tax/tds");
+  revalidatePath("/reports");
+  redirect(`/tax/tds?fy=${fy}&q=${quarter}`);
+}
+
+/** FY quarter date ranges, Apr-start. */
+const QUARTER_RANGES: Record<1 | 2 | 3 | 4, (fy: string) => { from: string; to: string }> = {
+  1: (fy) => ({ from: fyStart(fy), to: `${fyStart(fy).slice(0, 4)}-06-30` }),
+  2: (fy) => ({ from: `${fyStart(fy).slice(0, 4)}-07-01`, to: `${fyStart(fy).slice(0, 4)}-09-30` }),
+  3: (fy) => ({ from: `${fyStart(fy).slice(0, 4)}-10-01`, to: `${fyStart(fy).slice(0, 4)}-12-31` }),
+  4: (fy) => ({ from: `${Number(fyStart(fy).slice(0, 4)) + 1}-01-01`, to: fyEnd(fy) }),
+};
 
 export async function runExtraction(docId: number): Promise<void> {
   try {

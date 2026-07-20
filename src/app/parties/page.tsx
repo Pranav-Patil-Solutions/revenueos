@@ -49,6 +49,7 @@ export default function PartiesPage() {
                     <th className="px-5 py-3 font-medium">Name</th>
                     <th className="px-5 py-3 font-medium">Kind</th>
                     <th className="px-5 py-3 font-medium">GSTIN</th>
+                    <th className="px-5 py-3 font-medium">PAN</th>
                     <th className="px-5 py-3 font-medium">State</th>
                     <th className="px-5 py-3 text-right font-medium">Added</th>
                   </tr>
@@ -71,6 +72,7 @@ export default function PartiesPage() {
                         <KindPill kind={p.kind} />
                       </td>
                       <td className="px-5 py-3.5 text-ink-2">{p.gstin || "—"}</td>
+                      <td className="px-5 py-3.5 text-ink-2">{p.pan || "—"}</td>
                       <td className="px-5 py-3.5 text-ink-2">{p.state_code || "—"}</td>
                       <td className="px-5 py-3.5 text-right text-ink-3">
                         {formatDate(p.created_at)}
@@ -103,6 +105,13 @@ export default function PartiesPage() {
             <div>
               <label className={label} htmlFor="gstin">GSTIN (optional)</label>
               <input id="gstin" name="gstin" className={field} />
+            </div>
+            <div>
+              <label className={label} htmlFor="pan">PAN (optional)</label>
+              <input id="pan" name="pan" placeholder="ABCPV1234F" maxLength={10} className={field} />
+              <p className="mt-1 text-[11.5px] text-ink-3">
+                Without a PAN, TDS on payments to this party deducts at 20%.
+              </p>
             </div>
             <div>
               <label className={label} htmlFor="state_code">State code (optional)</label>

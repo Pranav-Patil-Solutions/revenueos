@@ -455,6 +455,68 @@ async function main(): Promise<void> {
   );
   ok("Computation: turnover ₹36,000 · book profit ₹3,500 · dep bridge nets to nil · tax NIL · rates flagged provisional");
 
+  step = "tds: deduct on payment → 26Q → challan deposit";
+  // Posts in 2026-10 (Q3), AFTER the computation leg has pinned its FY
+  // figures — the expense would otherwise shift book profit.
+  const { postVoucherWithTds } = await import("../src/lib/vouchers");
+  const { q26Summary } = await import("../src/lib/tax/tds");
+  // Without a PAN the engine correctly deducts the penal 20% — record the
+  // payee's PAN first so this leg pins the section rate.
+  db.prepare("UPDATE parties SET pan = 'ABCPG1234H' WHERE id = ?").run(gupta!.id);
+  const tdsPost = postVoucherWithTds(db, {
+    entry_date: "2026-10-15",
+    memo: "Shed repair contractor",
+    ref_no: "TDS-SMOKE",
+    party_id: gupta!.id,
+    expense_account_code: "5900",
+    base_paise: 1_000_000, // ₹10,000
+    section: "194C",
+    settle_account: "bank",
+  });
+  assert.equal(tdsPost.computation.tds_paise, 10_000, "1% of ₹10,000 = ₹100");
+  const bal2300 = () =>
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(jl.debit_paise) - SUM(jl.credit_paise), 0) b
+           FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id WHERE a.code = '2300'`
+        )
+        .get() as { b: number }
+    ).b;
+  assert.equal(bal2300(), -10_000, "₹100 held in TDS Payable");
+  const q3 = q26Summary(db, "2026-27", 3);
+  assert.equal(q3.lines.length, 1, "26Q Q3 shows one payee line");
+  assert.equal(q3.total_tds_paise, 10_000);
+  assert.equal(q3.undeposited_paise, 10_000);
+
+  // Deposit: same one-transaction shape as the createTdsChallan action.
+  db.transaction(() => {
+    const dep = postManualVoucher(db, {
+      kind: "journal",
+      entry_type: "tds_challan",
+      entry_date: "2026-11-07",
+      memo: "TDS deposit — Q3 FY 2026-27",
+      ref_no: "CHLN-SMOKE",
+      legs: [
+        { account_code: "2300", party_id: null, debit_paise: 10_000, credit_paise: 0 },
+        { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: 10_000 },
+      ],
+    });
+    const challanId = db
+      .prepare(
+        `INSERT INTO tds_challans (fy, quarter, form, challan_no, bsr_code, paid_on, amount_paise, journal_id, created_at)
+         VALUES ('2026-27', 3, '26Q', 'CHLN-SMOKE', '0001234', '2026-11-07', 10000, ?, ?)`
+      )
+      .run(dep.journalId, new Date().toISOString()).lastInsertRowid as number;
+    db.prepare(
+      `UPDATE tds_entries SET challan_id = ? WHERE challan_id IS NULL AND entry_date BETWEEN '2026-10-01' AND '2026-12-31'`
+    ).run(challanId);
+  })();
+  assert.equal(bal2300(), 0, "challan clears 2300 to zero");
+  assert.equal(q26Summary(db, "2026-27", 3).undeposited_paise, 0);
+  assert.equal(trialBalance(db).balanced, true, "TB zero after TDS cycle");
+  ok("TDS: 194C ₹10,000 → ₹100 held in 2300 · 26Q one line · challan deposit → 2300 zero · TB zero");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

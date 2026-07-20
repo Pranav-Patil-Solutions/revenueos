@@ -9,7 +9,7 @@ import { usePathname } from "next/navigation";
 const TABS: { href: string; label: string; ready: boolean }[] = [
   { href: "/tax/computation", label: "Computation", ready: true },
   { href: "/tax/depreciation", label: "Depreciation", ready: true },
-  { href: "/tax/tds", label: "TDS", ready: false },
+  { href: "/tax/tds", label: "TDS", ready: true },
 ];
 
 /** Segmented control (macOS style) for the Tax & filing section. */

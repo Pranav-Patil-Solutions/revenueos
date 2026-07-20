@@ -360,3 +360,39 @@ non-zero depreciation. Second, prefer removing dead code to inventing a use
 for it: "make the unused function used" invites a guess about semantics that
 nobody asked for. If it is genuinely needed, the requirement will state what
 it should be computed on.
+
+## 16. RVOS-002 P8 (2026-07-20): the review came back clean on the money — the warns were all about the audit trail
+
+**What happened:** the first phase of this build whose pre-commit review found
+ZERO blocking money defects — evidence the accumulated rules (#10–#15) are
+compounding: entry/exit predicates matched, every rendering carried the
+unverified-rates caveat, the reference points were priced consistently, and
+the atomicity test was written before the UI. What the review did find was
+three WARNs, all the same species: **the audit trail claiming something the
+transaction didn't do.** A rate override stored the section's default
+`rate_bp` rather than the effective rate actually deducted; `tds_challans`
+allowed a "deposited" row with no journal behind it while its sibling table
+enforced the opposite; and one challan could silently mix salary and
+non-salary deductions, making the 26Q/24Q undeposited figures irreconcilable
+from the challan rows.
+
+**Resolution:** effective rate stored on override (section bp kept when they
+coincide); `journal_id NOT NULL` on challans, with the empty live table
+deliberately recreated (EVOLUTION #14's CREATE-TABLE-IF-NOT-EXISTS trap);
+challans are per-form (26Q or 24Q), enforced in the pending query and named in
+the memo. Each fix pinned by a test targeting the case that exposes it.
+The re-review then applied #15's own rule back at the per-form fix: making
+challans per-form means a quarter can hold two, and rows that differ must be
+DISTINGUISHABLE — so `tds_challans` gained a `form` column (NOT NULL CHECK),
+written by the action and rendered on the page, live table recreated again.
+
+**Delta (rule):** metadata columns that DESCRIBE a transaction (a rate, a
+form, a link to the journal) are part of the transaction's truth, not
+decoration — they must be derived from what actually happened, constrained
+like their siblings, and partitioned the way the downstream reconciliation
+partitions. "Not currently rendered anywhere" is not a defence: an audit
+trail exists precisely for the reader who arrives later, and a wrong
+`rate_bp` today is a wrong answer in next year's assessment query. When two
+sibling tables share an invariant ("no claim without a journal"), enforce it
+on both the day the second table is born — asymmetry between siblings is the
+same bug as EVOLUTION #14's entry/exit asymmetry, one level up.

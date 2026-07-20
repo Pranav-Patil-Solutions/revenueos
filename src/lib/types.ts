@@ -28,6 +28,7 @@ export type JournalKind =
   | "journal"
   | "contra"
   | "depreciation"
+  | "tds_deduction"
   | "tds_challan";
 
 // Row types mirror the sqlite column names exactly (snake_case) so queries
@@ -64,6 +65,7 @@ export interface PartyRow {
   name: string;
   kind: PartyKind;
   gstin: string;
+  pan: string;
   state_code: string;
   phone: string;
   created_at: string;
@@ -120,6 +122,32 @@ export interface DraftRowInput {
   gst_rate: number | null;
   settle_account: SettleAccount;
   include: boolean;
+}
+
+export interface TdsEntryRow {
+  id: number;
+  party_id: number;
+  section: string;
+  entry_date: string;
+  base_paise: number;
+  tds_paise: number;
+  rate_bp: number;
+  journal_id: number;
+  challan_id: number | null; // NULL until deposited
+  created_at: string;
+}
+
+export interface TdsChallanRow {
+  id: number;
+  fy: string;
+  quarter: number;
+  form: "26Q" | "24Q";
+  challan_no: string;
+  bsr_code: string;
+  paid_on: string;
+  amount_paise: number;
+  journal_id: number | null;
+  created_at: string;
 }
 
 export type ItAdjustmentKind = "addback" | "deduction";

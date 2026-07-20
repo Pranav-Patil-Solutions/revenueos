@@ -13,6 +13,7 @@ import {
   type PnlPeriod,
 } from "@/lib/reports";
 import { buildComputation } from "@/lib/tax/computation";
+import { q24Summary, q26Summary } from "@/lib/tax/tds";
 import {
   blockFor,
   depreciationSchedule,
@@ -380,6 +381,57 @@ export async function GET(
           instalment: rupees(a.instalment_paise),
         })),
         note: "Filing preparation only. CA to verify.",
+      };
+      break;
+    }
+    case "tds-26q":
+    case "tds-24q": {
+      const fy = parseFy(sp);
+      const quarter = Number(sp.get("quarter"));
+      if (!fy || ![1, 2, 3, 4].includes(quarter)) {
+        return NextResponse.json(
+          { error: "needs fy and quarter, e.g. ?fy=2026-27&quarter=1" },
+          { status: 400 }
+        );
+      }
+      const s =
+        report === "tds-26q"
+          ? q26Summary(db, fy, quarter as 1 | 2 | 3 | 4)
+          : q24Summary(db, fy, quarter as 1 | 2 | 3 | 4);
+      filename = `${report}-${fy}-q${quarter}`;
+      headers = ["Payee", "PAN", "Section", "Deductions", "Base", "TDS"];
+      rows = [
+        // CSV-shaped return PREP, not the filing format itself — and every
+        // rendering carries the unverified-rates note (EVOLUTION #15).
+        ["NOTE — section rates unconfirmed against the renumbered Act; verify before filing. CA to verify.", "", "", "", "", ""],
+        ...s.lines.map((l) => [
+          l.party_name,
+          l.party_pan || "MISSING",
+          l.section,
+          l.deductions,
+          rupees(l.base_paise),
+          rupees(l.tds_paise),
+        ]),
+        ["TOTAL", "", "", "", rupees(s.total_base_paise), rupees(s.total_tds_paise)],
+      ];
+      json = {
+        form: s.form,
+        fy: s.fy,
+        quarter: s.quarter,
+        lines: s.lines.map((l) => ({
+          payee: l.party_name,
+          pan: l.party_pan || null,
+          section: l.section,
+          deductions: l.deductions,
+          base: rupees(l.base_paise),
+          tds: rupees(l.tds_paise),
+          missing_pan: l.missing_pan,
+        })),
+        total_base: rupees(s.total_base_paise),
+        total_tds: rupees(s.total_tds_paise),
+        missing_pan_count: s.missing_pan_count,
+        undeposited: rupees(s.undeposited_paise),
+        note: "Return prep only — section rates unconfirmed against the renumbered Act. CA to verify.",
       };
       break;
     }
