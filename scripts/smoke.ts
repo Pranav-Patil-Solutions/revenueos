@@ -551,6 +551,60 @@ async function main(): Promise<void> {
   assert.equal(trialBalance(db).balanced, true, "TB untouched by marks");
   ok("Compliance: 21-item board (TDS auto-on, GST off) · Oct deposit marked done · regenerate shows it · sibling overdue");
 
+  step = "ca pack: composition + reconciliations";
+  // The pack composes the SAME functions the pages use, so this leg asserts
+  // the pack-level reconciliation properties instead of re-pinning figures.
+  // It posts nothing — safe after every earlier pin.
+  const packSettings = db
+    .prepare("SELECT * FROM settings WHERE id = 1")
+    .get() as import("../src/lib/types").SettingsRow;
+  const packBs = balanceSheet(db, "2027-03-31", packSettings);
+  const packBsLines = packBs.groups.flatMap((g) => g.lines);
+  const packAr = packBsLines.find((l) => l.code === "1200")?.amount_paise ?? 0;
+  const packAp = packBsLines.find((l) => l.code === "2100")?.amount_paise ?? 0;
+  // Both sides of every party: own ledger AND cross ledger, dated at FY end —
+  // a customer's payable belongs in creditors or the AP control won't tie
+  // (this exact assert caught the own-ledger-only annexure in the build).
+  let packDebtors = 0;
+  let packCreditors = 0;
+  for (const p of db
+    .prepare("SELECT id, kind FROM parties")
+    .all() as { id: number; kind: string }[]) {
+    const st = partyStatement(db, p.id, "2027-03-31");
+    if (!st) continue;
+    if (p.kind === "customer") {
+      packDebtors += st.closing_paise;
+      packCreditors += st.cross_ledger_paise;
+    } else {
+      packCreditors += st.closing_paise;
+      packDebtors += st.cross_ledger_paise;
+    }
+  }
+  assert.equal(packDebtors, packAr, "annexure debtors reconcile to the AR control");
+  assert.equal(packCreditors, packAp, "annexure creditors reconcile to the AP control");
+  const { monthsOfFy } = await import("../src/lib/fy");
+  const packGst = monthsOfFy("2026-27").map((m) => gstr3b(db, m));
+  assert.equal(packGst.length, 12, "GST sweep covers the FY incl. the Dec→Jan seam");
+  const packComp = buildComputation(db, "2026-27");
+  assert.ok(
+    packComp.provisional && packComp.caveat.length > 0,
+    "computation caveat travels into the pack"
+  );
+  const { TDS_SECTIONS } = await import("../src/lib/tax/tds");
+  assert.ok(
+    TDS_SECTIONS.every((s) => s.verified === false),
+    "TDS sections still flagged unverified for the pack banner"
+  );
+  const packPosted = postedDepreciation(db, "2026-27");
+  const packSchedule = depreciationSchedule(db, "2026-27");
+  assert.ok(packPosted, "smoke books carry the posted depreciation entry");
+  assert.equal(
+    packPosted!.amount_paise,
+    packSchedule.total_depreciation_paise,
+    "pack drift check: schedule matches the posted journal"
+  );
+  ok("CA pack: annexure == AR/AP controls · 12-month GST sweep · caveats travel · dep schedule == posted journal");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

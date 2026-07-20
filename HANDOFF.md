@@ -163,12 +163,39 @@
   validates fy ∈ fyList(db) + engine membership; clear requires only that
   the mark exists → EVOLUTION #17. Warn (blanket banner) fixed by gating.
 
+- **P10 CA pack** — `src/app/pack/page.tsx` (`?fy=`): cover (company,
+  entity, FY, PAN/TAN/GSTIN, regime, contents, pack-level provisional
+  banner) → BS → P&L → Computation (row-for-row parity with
+  /tax/computation incl. its caveat, payments itemised, advance-tax table,
+  40(b) note) → GST 12-month gstr3b sweep + totals → TDS quarterly 26Q/24Q
+  totals + challans + undeposited line → depreciation block schedule + FAR
+  (+ drift/not-posted banners) → debtors/creditors annexure. Composed 100%
+  from existing fns; only row-enumeration SQL (parties/challans/assets,
+  same as existing pages). `print-button.tsx` client comp; globals.css
+  gained the app's first `@media print` block (`--sidebar-w:0` collapses
+  the shell, chrome `display:none`, white/black, `print-color-adjust:
+  exact` so caveat banners survive onto paper, `tr { break-inside: avoid }`,
+  sections `print:break-before-page`). **Engine change:** `partyStatement`
+  gained optional INCLUSIVE `asOf` dating BOTH ledgers (named @params;
+  omitted = byte-identical, pinned by deepEqual test); gstr3b's itc_paise
+  normalises `-0`. **Annexure lists BOTH sides of every party** — own
+  ledger on its own side, cross-ledger tagged on the side it sits — and a
+  critical banner fires if totals don't tie to the BS AR/AP lines. The
+  smoke reconciliation assert caught the first (own-ledger-only) version
+  hiding a customer's ₹3,900 payable → EVOLUTION #18. Smoke pack leg:
+  annexure==controls, 12-month sweep, caveats travel, schedule==posted.
+  222 tests. Review: 0 blockers, 3 cosmetic warns (tax-block parity,
+  presumptive tag, dead print rule) fixed + re-verified. Print preview
+  checked via headless-shell PDF: 8 pages, one section each, no chrome,
+  white, banners printed. README: Accountant Edition section + refreshed
+  Deferred list.
+
 ## Current state
-- Branch `feat/rvos-002-accountant-edition`; all four gates green at P9.
-- EVOLUTION.md at #17 (P9: a server-side allowlist must be derived by the
-  SAME function, with the SAME inputs, that rendered the user's choices — a
-  superset re-opens the bypass; pin that uncontrolled generator inputs can't
-  change the generated set).
+- Branch `feat/rvos-002-accountant-edition`; all four gates green at P10.
+- EVOLUTION.md at #18 (P10: write a new view's reconciliation-to-control
+  assert FIRST — a summary can look complete while omitting a whole class
+  of rows; past lessons attach to the DATA SHAPE, not the page they were
+  learned on).
 - Live-DB compat spot-checked on a COPY of `data/revenueos.db` (+WAL):
   `ledger_mappings` created additively, 6 documents / 27 journal lines intact.
 - Live-DB compat also re-checked at P6: `fixed_assets` + `wdv_openings` are
@@ -222,25 +249,22 @@ flag. Two things still need a human with the source material:
 To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
 put the citation in `source`. `ratesFor()` and every caveat follow from there.
 
-## Next phase: P10 CA sign-off pack + hardening + docs
-Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md §P10 (follow the
-PLAN's shapes): new `src/app/pack/page.tsx` (`?fy=`) — cover (company,
-entity label, FY, PAN/TAN/GSTIN) → BS → P&L → Computation → GST summary
-(12 × gstr3b) → TDS summary + challans → depreciation schedule/FAR →
-debtors/creditors annexure. Composed ENTIRELY from existing functions —
-zero new query logic. Print button (`window.print` tiny client comp).
-Mod `globals.css` `@media print` (white/black overrides, page-break section
-classes, hide chrome); sidebar `print:hidden`, layout `print:ml-0`; smoke
-pack-composition assert; README Accountant Edition section + updated
-Deferred list; EVOLUTION entries; final HANDOFF.md. Remember the P7/P9
-lesson: derived figures shown beside posted ones must be reconciled, and
-the unverified caveats (rates AND due dates) must reach the printed pack —
-it is the artefact most likely to be handed to a CA. Accept: all tests
-green; full smoke green; build green; manual print-preview check (light,
-paginated, no sidebar). Commit: `RVOS-002 P10: ca pack — print-optimized
-FY bundle (FS + computation + GST/TDS + annexures), docs & final smoke`.
-Then: the ship gate (RVOS-002-SPEC.md §SHIP GATE — code-reviewer on the
-full branch diff + qa-runner driving :3322) and merge to master.
+## Next: SHIP GATE, then merge
+Per RVOS-002-SPEC.md §SHIP GATE, in order:
+1. npm test + smoke + lint + build green (all green at P10 commit).
+2. **code-reviewer agent on the FULL branch diff** (`master...feat/
+   rvos-002-accountant-edition`) — zero blockers required. Fresh eyes over
+   the whole edition, not any one phase.
+3. **qa-runner agent driving :3322** (DEMO_MODE=1): entity switch → COA add
+   → manual voucher incl. F8/F5/F7 key-driven kind switching + Ctrl+A post
+   → CSV import → Tally import → BS → computation → TDS → compliance →
+   pack print — zero blockers.
+4. EVOLUTION #9+ complete (it is: #10–#18).
+5. Merge to master (LOCAL only — no remote exists; the merge is the ship).
+Note for the qa run: the dev server on :3322 may be a stale process started
+before this build — restart it first. The LIVE db must come out of the run
+byte-identical (drive test artifacts through the same delete-and-verify
+routine P5/P6 used, or run against a scratch copy).
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
@@ -358,6 +382,29 @@ full branch diff + qa-runner driving :3322) and merge to master.
 - Regime switches live in generateItems, not the page: GST iff gstin,
   TDS iff TAN OR tds_entries-in-FY. The page's "rows hidden" hints re-derive
   from the same predicates via the items themselves.
+
+- `partyStatement(db, id, asOf?)`: asOf is INCLUSIVE and dates BOTH the own
+  ledger and the cross ledger; omitted = full history, byte-identical.
+  Never mix date bases inside one composed view (EVOLUTION #18).
+- Any new view over party balances must list BOTH sides (own + cross) or
+  its totals will not tie to the AR/AP controls — the statement page and
+  the pack annexure are the two implementations; keep them in agreement.
+- The pack renders each section with the SAME functions and the SAME
+  row-set conditions as the section's live page — parity is a review
+  criterion, not a nicety (P10 warn). New pack sections must mirror their
+  page, and new page caveats must be added to the pack the same commit.
+- @media print lives at the END of globals.css: chrome hides via
+  `--sidebar-w: 0` + display:none on `.sidebar` / `.content-shell > header`
+  / `.statusbar-shell`; `print-color-adjust: exact` keeps caveat tints on
+  paper. New chrome components must be added to that hide list.
+- gstr3b itc_paise: keep the `|| 0` — a bare negation of an empty SUM
+  prints "-₹0.00" on every empty month.
+
+## Files touched (P10)
+src/app/pack/page.tsx (new) · src/components/print-button.tsx (new) ·
+src/lib/reports.ts (partyStatement asOf, gstr3b -0) ·
+src/app/globals.css (@media print) · test/reports.test.ts ·
+scripts/smoke.ts · README.md · EVOLUTION.md · HANDOFF.md
 
 ## Files touched (P9)
 src/lib/compliance.ts (new) · src/app/compliance/page.tsx (new) ·

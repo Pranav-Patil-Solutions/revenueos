@@ -451,3 +451,36 @@ pin with a test that the input cannot change the generated SET; and when a
 guard carries a comment arguing why looseness is fine, treat the comment as
 a review flag — the argument for the exception is usually the defect's own
 description.
+
+## 18. RVOS-002 P10 (2026-07-20): the annexure that re-hid what RVOS-001 exposed
+
+**What happened:** the CA pack's debtors/creditors annexure was first composed
+as "each party's own-ledger closing at FY end" — plausible, clean, and wrong.
+The smoke leg written alongside it asserted the annexure ties to the Balance
+Sheet's control accounts, and failed immediately: creditors ₹5,900 vs AP
+control ₹9,800. The missing ₹3,900 was Sharma's payable — a CUSTOMER's
+balance on the AP ledger, i.e. exactly the cross-ledger class RVOS-001's
+ship gate forced party statements to expose. The lesson had been learned for
+the statement page and silently un-learned in the next view composed over
+the same data. A rendered pack with the ₹3,900 missing looked perfectly
+fine; only the reconciliation assert could see it.
+
+**Resolution:** `partyStatement` gained an optional inclusive `asOf` that
+dates BOTH its ledgers (named params, omitted = byte-identical to before,
+pinned by test); the annexure lists both sides of every party — own-ledger
+closing on its own side, cross-ledger balance tagged on the side it actually
+sits — and a critical banner fires when the totals still fail to tie
+(control postings without a party). The zero-context review then returned
+zero blockers; its three cosmetic warns (pack/page row-set parity in the tax
+block, missing presumptive tag, dead print rule) were fixed and re-verified.
+
+**Delta (rule):** when composing a NEW view over posted data, write its
+reconciliation-to-control assert FIRST, before trusting any rendering — a
+summary can look complete while omitting a whole class of rows, and only
+the tie-out sees that. If a component of the summary cannot be dated to the
+same basis as the rest (cross-ledger had no as-at), extend the source
+function rather than approximate with a different date basis. And treat
+every past lesson as attached to the DATA SHAPE, not the page it was
+learned on: any new view over party balances re-inherits the cross-ledger
+lesson, any new importer re-inherits "explicitly consume or refuse every
+leg" (#13), any new allowlist re-inherits #17.

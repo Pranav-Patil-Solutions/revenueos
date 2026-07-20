@@ -98,10 +98,15 @@ export interface PartyStatement {
  * run on AR (debit balance = they owe us); suppliers on AP (credit balance =
  * we owe them). Legs the same party carries on the other control account
  * (purchases/payments in a customer khata, sales/receipts in a supplier one)
- * are reported as cross_ledger_paise rather than silently dropped. */
+ * are reported as cross_ledger_paise rather than silently dropped.
+ *
+ * `asOf` (inclusive) limits BOTH ledgers to entries on or before that date —
+ * the CA pack's annexure reads FY-end positions this way. Omitted = full
+ * history, byte-identical to the pre-asOf behaviour. */
 export function partyStatement(
   db: Database.Database,
-  partyId: number
+  partyId: number,
+  asOf?: string
 ): PartyStatement | null {
   const party = db
     .prepare("SELECT * FROM parties WHERE id = ?")
@@ -116,10 +121,14 @@ export function partyStatement(
        FROM journal_lines jl
        JOIN journals j ON j.id = jl.journal_id
        JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = ? AND a.code = ?
+       WHERE jl.party_id = @partyId AND a.code = @code
+         AND (@asOf IS NULL OR j.entry_date <= @asOf)
        ORDER BY j.entry_date, j.id`
     )
-    .all(partyId, control) as Omit<StatementLine, "balance_paise">[];
+    .all({ partyId, code: control, asOf: asOf ?? null }) as Omit<
+    StatementLine,
+    "balance_paise"
+  >[];
 
   let balance = 0;
   const lines = rows.map((r) => {
@@ -137,10 +146,12 @@ export function partyStatement(
                 THEN jl.credit_paise - jl.debit_paise
                 ELSE jl.debit_paise - jl.credit_paise END), 0) AS net
        FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id
        JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = ? AND a.code = ?`
+       WHERE jl.party_id = @partyId AND a.code = @code
+         AND (@asOf IS NULL OR j.entry_date <= @asOf)`
     )
-    .get(partyId, other) as { net: number };
+    .get({ partyId, code: other, asOf: asOf ?? null }) as { net: number };
 
   return {
     party,
@@ -449,7 +460,9 @@ export function gstr3b(db: Database.Database, month: string): Gstr3bSummary {
   const cgst_paise = acc(["2200"], outward);
   const sgst_paise = acc(["2210"], outward);
   const igst_paise = acc(["2220"], outward);
-  const itc_paise = -acc(["1300"], inward); // ITC is an asset — net debit
+  // ITC is an asset — net debit. `|| 0` normalises the -0 the negation
+  // produces on an empty month, which would otherwise print as "-₹0.00".
+  const itc_paise = -acc(["1300"], inward) || 0;
   const net_payable_paise =
     cgst_paise + sgst_paise + igst_paise - itc_paise;
   return {

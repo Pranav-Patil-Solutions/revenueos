@@ -193,3 +193,42 @@ html[data-sidebar="rail"] .sidebar.peek {
   left: var(--sidebar-w);
   transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* ---------- Print (the CA pack, and anything else sent to paper) ---------- */
+@media print {
+  /* Zeroing the var collapses .content-shell padding and .statusbar-shell
+   * offset in one move; the chrome itself is hidden outright. */
+  :root {
+    --sidebar-w: 0px;
+  }
+  .sidebar,
+  .content-shell > header,
+  .statusbar-shell {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  main {
+    max-width: none;
+    padding: 0;
+  }
+  /* Caveat banners and status tints are qualifying metadata — they MUST
+   * survive onto paper, so force background printing. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  section {
+    box-shadow: none;
+    break-inside: auto;
+  }
+  table,
+  thead {
+    break-inside: auto;
+  }
+  tr {
+    break-inside: avoid;
+  }
+}
