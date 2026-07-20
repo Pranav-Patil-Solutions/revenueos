@@ -101,6 +101,33 @@ const DDL = `
   -- Tally ledger name → this book's account or party. Persistent: a ledger
   -- mapped once is never asked about again on later imports. ledger_name is
   -- UNIQUE so a name can only ever point at one target.
+  -- Computation metadata: never posted to the books, so freely editable.
+  -- Addbacks raise taxable income (disallowances, unpaid statutory dues),
+  -- deductions lower it. The section label is the office's own note — this
+  -- app asserts no statutory numbering.
+  CREATE TABLE IF NOT EXISTS it_adjustments (
+    id           INTEGER PRIMARY KEY,
+    fy           TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('addback','deduction')),
+    section      TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL,
+    amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_it_adjustments_fy ON it_adjustments(fy);
+
+  -- Tax already paid for the year, netted off the computed liability.
+  CREATE TABLE IF NOT EXISTS tax_payments (
+    id           INTEGER PRIMARY KEY,
+    fy           TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('advance','tds','self_assessment')),
+    paid_on      TEXT NOT NULL,
+    amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_tax_payments_fy ON tax_payments(fy);
+
   -- Fixed-asset register. Depreciation runs on the IT-Act BLOCK, not per
   -- asset, so these rows exist to compute additions/disposals per block —
   -- the block CHECK list is frozen alongside IT_BLOCKS in tax/depreciation.ts.

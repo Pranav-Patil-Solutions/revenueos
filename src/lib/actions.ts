@@ -9,7 +9,7 @@ import { groupFor } from "./coa";
 import { getDb, UPLOADS_DIR } from "./db";
 import { extractDocument } from "./extraction";
 import { rupeeStringToPaise } from "./format";
-import { fyEnd, fyLabel } from "./fy";
+import { fyEnd, fyLabel, fyStart } from "./fy";
 import {
   blockFor,
   depreciationSchedule,
@@ -620,6 +620,81 @@ export async function postDepreciationEntry(formData: FormData): Promise<void> {
   revalidatePath("/reports");
   revalidatePath("/");
   redirect(`/tax/depreciation?fy=${fy}&posted=${journalId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Income-tax computation metadata (never posted — freely editable)
+// ---------------------------------------------------------------------------
+
+export async function addItAdjustment(formData: FormData): Promise<void> {
+  const fy = String(formData.get("fy") ?? "").trim();
+  fyStart(fy); // throws on a malformed FY key
+  const kind = String(formData.get("kind") ?? "");
+  if (kind !== "addback" && kind !== "deduction") {
+    throw new Error("Adjustment must be an addback or a deduction.");
+  }
+  const description = String(formData.get("description") ?? "").trim();
+  if (!description) throw new Error("Describe the adjustment.");
+  const amount = formPaise(formData, "amount", "Amount");
+  if (amount === 0) throw new Error("Amount must be more than zero.");
+
+  getDb()
+    .prepare(
+      `INSERT INTO it_adjustments (fy, kind, section, description, amount_paise, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      fy,
+      kind,
+      String(formData.get("section") ?? "").trim(),
+      description,
+      amount,
+      new Date().toISOString()
+    );
+  revalidatePath("/tax/computation");
+  redirect(`/tax/computation?fy=${fy}`);
+}
+
+export async function deleteItAdjustment(formData: FormData): Promise<void> {
+  const id = Number(formData.get("id"));
+  const fy = String(formData.get("fy") ?? "").trim();
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Bad adjustment id.");
+  // Safe to delete outright: adjustments are computation metadata, never
+  // posted to the books, so nothing references them.
+  getDb().prepare("DELETE FROM it_adjustments WHERE id = ?").run(id);
+  revalidatePath("/tax/computation");
+  redirect(`/tax/computation?fy=${fy}`);
+}
+
+export async function addTaxPayment(formData: FormData): Promise<void> {
+  const fy = String(formData.get("fy") ?? "").trim();
+  fyStart(fy);
+  const kind = String(formData.get("kind") ?? "");
+  if (kind !== "advance" && kind !== "tds" && kind !== "self_assessment") {
+    throw new Error("Payment must be advance tax, TDS, or self-assessment.");
+  }
+  const paidOn = String(formData.get("paid_on") ?? "").trim();
+  if (!ISO_DATE.test(paidOn)) {
+    throw new Error("Payment date is required (YYYY-MM-DD).");
+  }
+  const amount = formPaise(formData, "amount", "Amount");
+  if (amount === 0) throw new Error("Amount must be more than zero.");
+
+  getDb()
+    .prepare(
+      `INSERT INTO tax_payments (fy, kind, paid_on, amount_paise, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      fy,
+      kind,
+      paidOn,
+      amount,
+      String(formData.get("note") ?? "").trim(),
+      new Date().toISOString()
+    );
+  revalidatePath("/tax/computation");
+  redirect(`/tax/computation?fy=${fy}`);
 }
 
 export async function runExtraction(docId: number): Promise<void> {

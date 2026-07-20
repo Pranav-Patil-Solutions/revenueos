@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 // shipped render as inert chips rather than links, so the IA is visible
 // without offering a 404.
 const TABS: { href: string; label: string; ready: boolean }[] = [
-  { href: "/tax/computation", label: "Computation", ready: false },
+  { href: "/tax/computation", label: "Computation", ready: true },
   { href: "/tax/depreciation", label: "Depreciation", ready: true },
   { href: "/tax/tds", label: "TDS", ready: false },
 ];

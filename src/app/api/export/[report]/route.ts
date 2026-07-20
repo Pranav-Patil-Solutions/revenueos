@@ -12,6 +12,7 @@ import {
   trialBalance,
   type PnlPeriod,
 } from "@/lib/reports";
+import { buildComputation } from "@/lib/tax/computation";
 import {
   blockFor,
   depreciationSchedule,
@@ -292,6 +293,93 @@ export async function GET(
         total_depreciation: rupees(schedule.total_depreciation_paise),
         total_closing: rupees(schedule.total_closing_paise),
         note: "CA to verify.",
+      };
+      break;
+    }
+    case "computation": {
+      const fy = parseFy(sp);
+      if (!fy) {
+        return NextResponse.json(
+          { error: "computation needs fy, e.g. ?fy=2026-27" },
+          { status: 400 }
+        );
+      }
+      const c = buildComputation(db, fy);
+      filename = `computation-${fy}`;
+      headers = ["Line", "Note", "Amount"];
+      rows = [
+        // The CSV is what gets pasted into a filing workpaper, so the caveat
+        // has to lead — a spreadsheet of confident numbers with the warning
+        // only in the JSON would defeat the point of tracking it at all.
+        ...(c.caveat ? [["NOTE — rates not confirmed", c.caveat, ""]] : []),
+        ["Rates applied", `tax year ${c.rates_tax_year}`, ""],
+        ...c.lines.map((l) => [
+          l.subtract ? `Less: ${l.label.replace(/^Less: /, "")}` : l.label,
+          l.note ?? "",
+          rupees(l.subtract ? -l.amount_paise : l.amount_paise),
+        ]),
+        ["Gross total income", "", rupees(c.gross_total_income_paise)],
+        ["Total income (rounded)", "", rupees(c.taxable_income_paise)],
+        [`Tax — ${c.tax.basis}`, "", rupees(c.tax.tax_before_rebate_paise)],
+        ["Less: rebate", "", rupees(-c.tax.rebate_paise)],
+        ["Add: surcharge", "", rupees(c.tax.surcharge_paise)],
+        ["Less: marginal relief on surcharge", "", rupees(-c.tax.surcharge_marginal_relief_paise)],
+        ["Add: cess", "", rupees(c.tax.cess_paise)],
+        ["Total tax", "", rupees(c.tax.total_tax_paise)],
+        ["Less: taxes paid", "", rupees(-c.payments_paise)],
+        [
+          c.net_payable_paise < 0 ? "Refund due" : "Balance payable",
+          "",
+          rupees(Math.abs(c.net_payable_paise)),
+        ],
+        ["Filing preparation only. CA to verify.", "", ""],
+      ];
+      // Stable shape — this is the seam a return-filing export would read.
+      json = {
+        fy: c.fy,
+        entity_type: c.entity_type,
+        regime: c.regime,
+        presumptive: c.presumptive || null,
+        rates_tax_year: c.rates_tax_year,
+        provisional: c.provisional,
+        caveat: c.caveat || null,
+        book_profit: rupees(c.book_profit_paise),
+        book_depreciation: rupees(c.book_depreciation_paise),
+        it_depreciation: rupees(c.it_depreciation_paise),
+        addbacks: rupees(c.addbacks_paise),
+        deductions: rupees(c.deductions_paise),
+        turnover: rupees(c.turnover_paise),
+        lines: c.lines.map((l) => ({
+          label: l.label,
+          note: l.note ?? null,
+          amount: rupees(l.subtract ? -l.amount_paise : l.amount_paise),
+        })),
+        gross_total_income: rupees(c.gross_total_income_paise),
+        total_income: rupees(c.taxable_income_paise),
+        tax: {
+          basis: c.tax.basis,
+          before_rebate: rupees(c.tax.tax_before_rebate_paise),
+          rebate: rupees(c.tax.rebate_paise),
+          surcharge: rupees(c.tax.surcharge_paise),
+          surcharge_marginal_relief: rupees(c.tax.surcharge_marginal_relief_paise),
+          cess: rupees(c.tax.cess_paise),
+          total: rupees(c.tax.total_tax_paise),
+        },
+        payments: c.payments.map((p) => ({
+          kind: p.kind,
+          paid_on: p.paid_on,
+          amount: rupees(p.amount_paise),
+          note: p.note || null,
+        })),
+        payments_total: rupees(c.payments_paise),
+        net_payable: rupees(c.net_payable_paise),
+        advance_tax: c.advance_tax.map((a) => ({
+          due: a.due,
+          cumulative_percent: a.cumulative_percent,
+          cumulative: rupees(a.cumulative_paise),
+          instalment: rupees(a.instalment_paise),
+        })),
+        note: "Filing preparation only. CA to verify.",
       };
       break;
     }

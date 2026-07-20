@@ -122,6 +122,29 @@ export interface DraftRowInput {
   include: boolean;
 }
 
+export type ItAdjustmentKind = "addback" | "deduction";
+export type TaxPaymentKind = "advance" | "tds" | "self_assessment";
+
+export interface ItAdjustmentRow {
+  id: number;
+  fy: string;
+  kind: ItAdjustmentKind;
+  section: string;
+  description: string;
+  amount_paise: number;
+  created_at: string;
+}
+
+export interface TaxPaymentRow {
+  id: number;
+  fy: string;
+  kind: TaxPaymentKind;
+  paid_on: string;
+  amount_paise: number;
+  note: string;
+  created_at: string;
+}
+
 /** IT-Act depreciation block. Frozen alongside the CHECK lists on
  * fixed_assets.block / wdv_openings.block and IT_BLOCKS. */
 export type BlockCode =

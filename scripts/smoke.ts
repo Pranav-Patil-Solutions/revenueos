@@ -426,6 +426,35 @@ async function main(): Promise<void> {
   assert.equal(depBs.balanced, true, "BS still balances after depreciation");
   ok("Depreciation: ₹1,00,000 computers mid-year → ₹20,000 at half of 40% · posted Dr 5800/Cr 1590 · TB zero · BS balanced");
 
+  step = "income-tax computation (proprietorship, new regime)";
+  const { buildComputation } = await import("../src/lib/tax/computation");
+  const comp = buildComputation(db, depFy);
+
+  // Rates for this year are NOT confirmed — the computation must say so
+  // rather than presenting a provisional figure as final.
+  assert.equal(comp.provisional, true, "unconfirmed year is flagged");
+  assert.match(comp.caveat, /Confirm this year's rates before filing/);
+
+  // Income ₹36,000 (July khata ₹16,000 + CSV sale ₹10,000 + Tally sale
+  // ₹10,000, all taxable-of-gross) less ₹32,500 of expenses.
+  assert.equal(comp.turnover_paise, 3_600_000, "FY turnover ₹36,000");
+  assert.equal(comp.book_profit_paise, 350_000, "book profit ₹3,500");
+  // The depreciation bridge nets to zero here: the books charged exactly what
+  // the Act allows, so it comes out and goes back in at the same figure.
+  assert.equal(comp.book_depreciation_paise, 2_000_000, "book charge added back");
+  assert.equal(comp.it_depreciation_paise, 2_000_000, "Act figure deducted");
+  assert.equal(comp.gross_total_income_paise, 350_000, "GTI ₹3,500");
+  assert.equal(comp.taxable_income_paise, 350_000, "already a ₹10 multiple");
+  assert.equal(comp.entity_type, "proprietorship");
+  assert.equal(comp.tax.total_tax_paise, 0, "nil — below the first slab");
+  assert.equal(comp.net_payable_paise, 0);
+  assert.equal(
+    comp.advance_tax.every((i) => i.instalment_paise === 0),
+    true,
+    "nothing owed, nothing scheduled"
+  );
+  ok("Computation: turnover ₹36,000 · book profit ₹3,500 · dep bridge nets to nil · tax NIL · rates flagged provisional");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

@@ -79,11 +79,37 @@
   (proceeds leaving a block the asset never entered; disposeAsset missing the
   in-use checks) + 2 warns (double-post race; no schema-level timeline) all
   fixed pre-commit -> EVOLUTION #14.
+- **P7 income tax** — `src/lib/tax/india-it.ts`: rate tables keyed by TAX YEAR,
+  each carrying `verified` + `source`. `ratesFor()` returns
+  `provisional: true` + a caveat when a year has no table of its own (carries
+  the latest earlier one forward but NEVER silently), and THROWS for a year
+  before the earliest table. Pure fns: `slabTax`, `taxForIndividual` (rebate
+  with its marginal relief), `surchargeWithRelief` (recursive ceiling — see
+  gotchas), `taxForFirm`, `taxForCompany`, `taxFor` (by entity),
+  `presumptiveIncome`, `partnerRemunerationCeiling`, `advanceTaxSchedule`,
+  `roundToTenRupees`. `src/lib/tax/computation.ts` `buildComputation(db, fy)`:
+  book profit -> add back book depreciation (5800) + addbacks -> less the
+  Act's block depreciation (P6) + deductions -> GTI -> round -> tax by entity
+  -> less payments -> net payable + instalments; presumptive bypasses the whole
+  book path. db.ts DDL `it_adjustments` + `tax_payments` (unposted metadata,
+  freely deletable). `/tax/computation` page + actions addItAdjustment /
+  deleteItAdjustment / addTaxPayment; export `case "computation"` (CSV + the
+  stable JSON filing seam); tax-tabs Computation flipped ready and `/tax`
+  repointed to it. 186 tests (29 new); smoke pins turnover ₹36,000 -> book
+  profit ₹3,500 -> dep bridge nets to nil -> tax NIL -> provisional flagged.
+  Review: 2 blockers (marginal relief priced against the wrong baseline, so
+  tax FELL as income rose past any threshold after the first; the CSV export
+  dropped the provisional caveat) + 1 warn (unused 40(b) ceiling). Wiring the
+  40(b) ceiling in to clear that warn introduced a THIRD blocker of its own
+  (measured on book profit with depreciation added back, overstating a firm's
+  ceiling by the whole charge) — caught on re-review. All fixed pre-commit ->
+  EVOLUTION #15.
 
 ## Current state
-- Branch `feat/rvos-002-accountant-edition`; all four gates green at P6.
-- EVOLUTION.md at #14 (P6: a pool must gate entry and exit on the SAME
-  predicate; derived figures shown beside posted ones must be reconciled).
+- Branch `feat/rvos-002-accountant-edition`; all four gates green at P7.
+- EVOLUTION.md at #15 (P7: price a relief's reference point with the SAME
+  function as the thing it caps, and test the PROPERTY — monotonicity —
+  not worked examples; qualifying metadata must reach EVERY output format).
 - Live-DB compat spot-checked on a COPY of `data/revenueos.db` (+WAL):
   `ledger_mappings` created additively, 6 documents / 27 journal lines intact.
 - Live-DB compat also re-checked at P6: `fixed_assets` + `wdv_openings` are
@@ -112,69 +138,55 @@ the reason suffixed onto particulars so review shows it:
 - an unmapped ledger, or a mapping with a broken target.
 Multiple same-type revenue legs DO import (buildLegs sums them into Sales).
 
-## Next phase: P7 income tax
+## OPEN — the rates are not confirmed (carry this into every later phase)
+`india-it.ts` ships with EVERY table `verified: false`, so the computation
+page, the CSV and the JSON all currently say "rates not confirmed". That is
+working as designed, not a bug — but it means the office sees a warning on
+every computation until someone checks a year against the Act and flips the
+flag. Two things still need a human with the source material:
 
-### READ FIRST — P7 pre-flight findings (researched 2026-07-20, not yet coded)
-Two things the spec did not anticipate. Resolve BOTH before writing constants.
+1. **Confirm FY 2026-27 rates.** The Budget-2025 new-regime ladder is carried
+   forward on the basis that Budget 2026 announced no change: nil to ₹4L ·
+   5% ₹4–8L · 10% ₹8–12L · 15% ₹12–16L · 20% ₹16–20L · 25% ₹20–24L · 30%
+   above ₹24L; rebate ₹60,000 up to ₹12L; surcharge 10/15/25/37 with the new
+   regime capped at 25%; cess 4%. Also confirm the firm/company rates, the
+   presumptive percentages, and the 40(b) ceiling (₹3,00,000-or-90% on the
+   first ₹6L, 60% on the balance — the SPEC's "90% of first ₹3L, min ₹1.5L"
+   is the pre-2024 version and was not used). Much published material
+   conflates "FY 2026-27" with "AY 2026-27", which is a different year.
+2. **Map the section numbers.** The Income-tax Act, 2025 took effect
+   1 April 2026 — inside the computed range — and renumbered the 1961 Act;
+   sources disagree on where the rebate now sits (156 vs 157). No section
+   number appears in any output today and none should be added until this is
+   settled. Section labels stay display metadata, never load-bearing.
 
-1. **The Income-tax Act, 2025 is in force from 1 April 2026** — i.e. from FY
-   2026-27, the very year the demo books sit in. It replaces the 1961 Act and
-   RENUMBERS almost everything, and swaps "Assessment Year"/"Previous Year"
-   for "Tax Year". Every section number in RVOS-002-SPEC.md P7/P8 (87A, 288A,
-   288B, 40(b), 44AD, 44ADA, 115BAA, and P6's s.32) is a 1961-Act number and
-   needs re-mapping before it goes on any client-facing output. Sources I found
-   CONFLICT on the new rebate clause — some say 156, others 157 — so do not
-   trust a single SEO tax blog. Verify against the bare Act / an official
-   source, and keep section labels as DISPLAY METADATA ONLY so a wrong label
-   can never change a computed number.
+To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
+put the citation in `source`. `ratesFor()` and every caveat follow from there.
 
-2. **Rates for FY 2026-27 appear unchanged** — Budget 2026 announced no change
-   to slabs or the basic exemption, so the Budget-2025 new-regime ladder
-   carries forward: nil to ₹4L · 5% ₹4–8L · 10% ₹8–12L · 15% ₹12–16L ·
-   20% ₹16–20L · 25% ₹20–24L · 30% above ₹24L, rebate ₹60,000 up to ₹12L
-   total income, standard deduction ₹75,000 for salary, surcharge 10%/15%/25%
-   with the new regime capped at 25%, cess 4%. TREAT THIS AS UNVERIFIED: much
-   of the web content conflates "FY 2026-27" with "AY 2026-27" (which is FY
-   2025-26), and this assistant's training cutoff predates Budget 2026.
-
-**Design consequence — build the uncertainty into the code, don't paper over
-it.** Key `india-it.ts` by TAX YEAR with an explicit `verified: boolean` and a
-`source` string per table. A tax year with no table of its own must NOT
-silently inherit last year's rates: carry the most recent table forward but
-mark the whole computation `provisional`, and surface that on the page AND in
-the export next to the existing "CA to verify" line. Getting a rate wrong here
-becomes a wrong return, so a visible "rates not confirmed for this year" beats
-a confident number. Pinned boundary tests are spec risk #5's mitigation.
-
+## Next phase: P8 TDS
 Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md: new
-`src/lib/tax/india-it.ts` — AY-TAGGED constants + pure fns: individual slabs
-old/new, 87A rebate + new-regime marginal relief, surcharge tiers + marginal
-relief, 4% cess, 288A/288B ₹10 rounding; firm 30% (+12% surcharge >₹1cr);
-company 25% vs 115BAA 22% (+7%/12% vs flat 10%); 44AD (8%/6%) / 44ADA (50%);
-40(b) ceiling (90% of first ₹3L book profit, 60% of the rest, min ₹1.5L);
-advance-tax 15/45/75/100%. New `src/lib/tax/computation.ts`
-`buildComputation(db, fy)`: P&L over the FY → add back book depreciation
-(account 5800) + `it_adjustments` addbacks (43B, disallowances, 40(b) actuals)
-→ deduct IT depreciation (P6's `depreciationSchedule`) + deductions → GTI →
-presumptive override branch → taxable → tax by entity/regime → less
-`tax_payments` → net payable + instalment schedule. db.ts DDL `it_adjustments`
-(fy, kind CHECK('addback','deduction'), section, description, amount_paise) +
-`tax_payments` (fy, kind CHECK('advance','tds','self_assessment'), paid_on,
-amount_paise, note). New `/tax/computation` page (FY select, statement card,
-adjustments CRUD, 40(b) helper for firms, advance-tax table, AY disclaimer);
-actions `addItAdjustment`, `deleteItAdjustment` (unposted metadata, so
-deletable), `addTaxPayment`; export `case "computation"` (the ITR seam).
-**Flip `tax-tabs.tsx` Computation to `ready: true` and repoint `/tax` from
-depreciation to computation — both are stubbed for exactly this.**
-Accept: `test/india-it.test.ts` pinned — new regime ₹12L → nil via 87A,
-just-over-rebate marginal relief, ₹60L surcharge boundary + marginal relief,
-old regime, firm, company both elections, 44AD/44ADA, 288B rounding;
-`test/computation.test.ts` — dep addback/deduct netting, adjustments,
-presumptive override, TDS credit netting, 40(b) ceiling. Smoke: demo books
-(proprietorship, new regime) → pinned taxable income, nil tax via 87A. Commit:
-`RVOS-002 P7: income tax — computation of total income per entity type,
-slabs/surcharge/cess/rebate, presumptive & 40(b), advance-tax schedule,
-computation export seam`.
+`src/lib/tax/tds.ts` — `TDS_SECTIONS` (194C 1%/2%, 194J 10%, 194I 10%/2%,
+194H 2%, 192B manual; basis points + threshold notes — but see the OPEN
+section above about section numbering before putting those labels on output),
+`computeTds(basePaise, section, hasPan)` (no PAN → 20%), `q26Summary(db, fy,
+quarter)`, `q24Summary`. db.ts: ensureColumn `parties.pan`; DDL `tds_entries`
+(party_id, section, entry_date, base_paise, tds_paise, journal_id REFERENCES
+journals, challan_id) + `tds_challans` (fy, quarter, challan_no, bsr_code,
+paid_on, amount_paise). vouchers.ts `postVoucherWithTds` — ONE transaction:
+journal (e.g. Dr 5900 ₹10,000 / Cr 2300 ₹100 / Cr Bank ₹9,900) plus the
+tds_entries row, rolling back together. Voucher-form gains an optional TDS
+section on payment/expense kinds with a live net-payable figure; parties page
+and `createParty` gain PAN. New `/tax/tds` page (register, quarterly
+summaries + exports, challan form — the deposit posts Dr 2300 / Cr Bank via
+postManualVoucher with `entry_type: 'tds_challan'`, which P6 already added
+support for — plus missing-PAN warnings). Export `case "tds-26q"` and
+`"tds-24q"`. Flip the TDS tab in tax-tabs.tsx to `ready: true`.
+Accept: `test/tds.test.ts` — basis-point math exact, no-PAN 20%, quarterly
+grouping via `quarterOf`, ATOMICITY (a forced tds_entries failure must leave
+no journal behind), challan deposit zeroes account 2300. Smoke: a 194C
+voucher → ₹100 in 2300 pinned → 26Q shows one row → challan → 2300 back to
+zero, TB zero. Commit: `RVOS-002 P8: tds — section rates, deduct-on-voucher
+register linked to journals, challan tracking, 26Q/24Q prep exports`.
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
@@ -232,6 +244,34 @@ computation export seam`.
 - postManualVoucher opens its own transaction; better-sqlite3 nests these as
   savepoints, so a caller may wrap check-and-post in one db.transaction() to
   make a guard atomic (postDepreciationEntry does).
+- A cap/relief/floor computed against a REFERENCE POINT must price that
+  reference with the SAME function that prices the thing being capped. P7's
+  surcharge relief priced its ceiling as bare slab tax while the liability
+  included surcharge — identical at the first threshold, divergent at every
+  one after, and tax FELL as income rose (EVOLUTION #15).
+- Test the PROPERTY a rule guarantees, not worked examples. Monotonicity
+  (more income never means less tax) caught the above instantly; nine pinned
+  boundary numbers did not. Reach for a property test on any monotone or
+  conservation-style invariant.
+- Qualifying metadata ("provisional", "unconfirmed", "as-of") must reach EVERY
+  output format. P7's caveat made the page and the JSON but not the CSV — the
+  artefact most likely to be pasted into a workpaper (EVOLUTION #15). When
+  adding a qualifier, enumerate the renderings and check each.
+- `surchargeWithRelief` recurses one tier down to price its ceiling; it
+  terminates because tiers apply STRICTLY above their bound. Keep that strict
+  comparison or it will not terminate.
+- Tax rates live ONLY in `india-it.ts`, keyed by tax year with `verified` +
+  `source`. Never inline a rate elsewhere, and never let a missing year fall
+  through to last year's numbers without `provisional: true` travelling with
+  the result.
+- The 40(b) ceiling on /tax/computation is INDICATIVE and never auto-applied:
+  it is measured on net profit per the P&L and cannot see remuneration already
+  debited there (which the statute adds back first). Don't turn it into a
+  silent cap.
+- A fix written to clear a review finding is new code — re-review it, and test
+  the case that makes its decision visible. P7's only warn was an unused
+  function; wiring it in introduced a worse defect than the warn (EVOLUTION
+  #15). Prefer deleting dead code to inventing a use for it.
 - Money-adjacent diffs: code-review before commit (caught real bugs P2+P3+P4+P5).
 - Pinned demo BS figures (postedDb, 2027-03-31): assets 2,158,000p =
   liabilities 558,000p + equity 1,600,000p; profit 1,100,000p; AR 1,258,000p.
@@ -240,13 +280,16 @@ computation export seam`.
   July GST + BS pins stay untouched. Any new smoke leg must post after them
   too, or re-pin the figures deliberately.
 
-## Files touched (P6)
-src/lib/tax/depreciation.ts (new) · src/app/tax/page.tsx (new) ·
-src/app/tax/depreciation/page.tsx (new) · src/components/tax-tabs.tsx (new) ·
-test/depreciation.test.ts (new) ·
-src/lib/{db,types,fy,vouchers,actions}.ts · src/components/sidebar.tsx ·
-src/app/api/export/[report]/route.ts · scripts/smoke.ts ·
-EVOLUTION.md · HANDOFF.md
+## Files touched (P7)
+src/lib/tax/india-it.ts (new) · src/lib/tax/computation.ts (new) ·
+src/app/tax/computation/page.tsx (new) ·
+test/india-it.test.ts (new) · test/computation.test.ts (new) ·
+src/lib/{db,types,actions}.ts · src/components/tax-tabs.tsx ·
+src/app/tax/page.tsx · src/app/api/export/[report]/route.ts ·
+scripts/smoke.ts · EVOLUTION.md · HANDOFF.md
+(P6 touched: src/lib/tax/depreciation.ts, src/app/tax/depreciation/page.tsx,
+src/components/{tax-tabs,sidebar}.tsx, test/depreciation.test.ts,
+src/lib/{db,types,fy,vouchers,actions}.ts.)
 (P5 touched: src/lib/import-tally.ts, src/components/import-tally.tsx,
 src/app/api/import/tally/preview/route.ts, test/import-tally.test.ts,
 src/lib/{db,types,posting,actions}.ts, src/app/imports/page.tsx, package.json.)

@@ -302,3 +302,61 @@ books held the old one, with nothing flagging the divergence; on post-only
 books that gap is only closable by a manual reversing entry, so it has to be
 visible the moment it opens. Applies to P7's computation and P10's CA pack,
 both of which display derived tax figures against posted books.
+
+## 15. RVOS-002 P7 (2026-07-20): a relief priced against the wrong baseline
+
+**What happened:** surcharge marginal relief exists so that crossing an income
+threshold never costs more in tax than the income earned above it. The relief
+is computed against a reference point — the liability *at* the threshold — and
+the first cut priced that reference as bare slab tax while the actual
+liability it was capping included surcharge. At the FIRST threshold the two
+agree (no surcharge applies below ₹50L), so every hand-checked example passed.
+At every threshold after that they diverge by the surcharge already running
+just underneath, relief was over-granted by that whole amount, and **total tax
+fell as income rose** — an old-regime individual going from ₹1,00,00,000 to
+₹1,00,00,100 saw tax drop by ₹2,92,400, and a company crossing ₹10 crore
+dropped ₹18,19,900. Caught by the pre-commit code-review pass, which executed
+the boundaries rather than reading them.
+
+**Resolution:** `surchargeWithRelief` now computes the reference recursively —
+the liability at a threshold is itself relief-adjusted, one tier down — and
+takes a `taxBeforeSurcharge` callback so the reference and the actual are
+priced by the *same function* (post-rebate slabs for an individual, flat rate
+for a firm or company). Plus a property test asserting tax never falls as
+income rises, across all five pricing paths × every threshold × five deltas.
+
+**Delta (rule):** when a cap, floor, relief or discount is computed relative to
+a REFERENCE POINT, the reference must be priced with the identical function
+that prices the thing being capped. A reference computed "the simple way"
+silently diverges wherever the real calculation has picked up a term the
+simple one lacks — and it will agree at the first boundary you test, which is
+exactly why it survives review by example. Test the PROPERTY the rule exists
+to guarantee (here: monotonicity — more income never means less tax), not a
+handful of worked numbers. A property test over every boundary would have
+caught this on the first run; nine pinned examples did not.
+
+**Delta (rule, second):** metadata that qualifies a number — "these rates are
+unconfirmed", "provisional", "as-of" — must be attached to EVERY rendering
+path, and the format most likely to be consumed downstream is the one most
+likely to be forgotten. The provisional-rates caveat reached the page and the
+JSON export but not the CSV, which is precisely the artefact that gets pasted
+into a filing workpaper. When adding a qualifier, enumerate the outputs and
+check each one; a qualifier that travels with only some renderings is worse
+than none, because the ones missing it look authoritative.
+
+**Delta (rule, third):** a fix written to clear a review finding is new code
+and earns the same scrutiny as the original — the P7 review's only WARN was
+"`partnerRemunerationCeiling` is implemented but never called". Wiring it in
+looked like housekeeping, but choosing what to compute it ON is a substantive
+decision, and the basis chosen (book profit WITH depreciation added back) was
+wrong: it overstated a firm's ceiling by the entire depreciation charge, and
+was then rendered as filing guidance. The accompanying test only exercised
+the zero-depreciation case, so it passed. The re-review caught it.
+
+Two things follow. First, when a finding is closed by *adding* behaviour
+rather than removing it, re-read the fix as if it arrived unreviewed, and
+write the test for the case that makes the new code's decision visible — here,
+non-zero depreciation. Second, prefer removing dead code to inventing a use
+for it: "make the unused function used" invites a guess about semantics that
+nobody asked for. If it is genuinely needed, the requirement will state what
+it should be computed on.
