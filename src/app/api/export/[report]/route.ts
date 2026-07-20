@@ -12,6 +12,11 @@ import {
   trialBalance,
   type PnlPeriod,
 } from "@/lib/reports";
+import {
+  blockFor,
+  depreciationSchedule,
+  HALF_YEAR_DAYS,
+} from "@/lib/tax/depreciation";
 import type { SettingsRow } from "@/lib/types";
 
 const rupees = paiseToRupeeString;
@@ -233,6 +238,57 @@ export async function GET(
         total_liabilities: rupees(bs.total_liabilities_paise),
         total_equity: rupees(bs.total_equity_paise),
         balanced: bs.balanced,
+      };
+      break;
+    }
+    case "depreciation": {
+      const fy = parseFy(sp);
+      if (!fy) {
+        return NextResponse.json(
+          { error: "depreciation needs fy, e.g. ?fy=2026-27" },
+          { status: 400 }
+        );
+      }
+      const schedule = depreciationSchedule(db, fy);
+      filename = `depreciation-${fy}`;
+      headers = [
+        "Block", "Rate %", "Opening", "Additions (full rate)",
+        "Additions (half rate)", "Disposals", "Depreciation", "Closing",
+      ];
+      rows = schedule.blocks.map((b) => [
+        blockFor(b.block)?.label ?? b.block,
+        b.rate,
+        rupees(b.opening_paise),
+        rupees(b.additions_full_paise),
+        rupees(b.additions_half_paise),
+        rupees(b.disposals_paise),
+        rupees(b.depreciation_paise),
+        rupees(b.closing_paise),
+      ]);
+      rows.push([
+        "TOTAL", "", "", "", "", "",
+        rupees(schedule.total_depreciation_paise),
+        rupees(schedule.total_closing_paise),
+      ]);
+      json = {
+        fy: schedule.fy,
+        basis: "IT-Act written-down value, block method (s.32)",
+        half_year_rule_days: HALF_YEAR_DAYS,
+        blocks: schedule.blocks.map((b) => ({
+          block: b.block,
+          label: blockFor(b.block)?.label ?? b.block,
+          rate: b.rate,
+          opening: rupees(b.opening_paise),
+          opening_overridden: b.opening_overridden,
+          additions_full_rate: rupees(b.additions_full_paise),
+          additions_half_rate: rupees(b.additions_half_paise),
+          disposals: rupees(b.disposals_paise),
+          depreciation: rupees(b.depreciation_paise),
+          closing: rupees(b.closing_paise),
+        })),
+        total_depreciation: rupees(schedule.total_depreciation_paise),
+        total_closing: rupees(schedule.total_closing_paise),
+        note: "CA to verify.",
       };
       break;
     }

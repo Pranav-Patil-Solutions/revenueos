@@ -58,17 +58,45 @@
   pinned July/FY assertion). Review: 2 blockers (settlement defaulting to
   cash; unconsumed legs silently dropped) fixed + pinned pre-commit →
   EVOLUTION #13.
+- **P6 depreciation** — `src/lib/tax/depreciation.ts`: `IT_BLOCKS` (buildings 10 ·
+  furniture 10 · plant 15 · vehicles 15 · computers 40, each pinned to its seed
+  COA account) · `daysInUse` (both end days, so 3 Oct is the LAST date still
+  reaching 180) · `stepYear`/`blockWdv` rolling the opening forward year on year
+  (wdv_openings override wins for its FY and carries after it), additions split
+  >=180/<180 days at full/half rate, disposals capped at the block and taken off
+  the full-rate pool before the half-rate additions, integer paise via
+  roundHalfUp · `depreciationSchedule` (all blocks + totals) ·
+  `postedDepreciation` (the FY's entry AND its amount, so the page can spot a
+  register that moved after posting). db.ts DDL `fixed_assets` (block CHECK,
+  paired disposal CHECKs, timeline CHECKs) + `wdv_openings` (UNIQUE fy+block).
+  vouchers.ts: JournalVoucherInput gained optional `entry_type` so a generated
+  entry posts through the ONE audited journal path while staying identifiable in
+  the day book. actions `createAsset` / `disposeAsset` / `postDepreciationEntry`
+  (guard + schedule + post in ONE transaction). `/tax` redirect + tax-tabs.tsx +
+  `/tax/depreciation` (block schedule, register, inline dispose, add-asset form)
+  + sidebar "4 · Tax & filing" + export `case "depreciation"`. 157 tests (13 new);
+  smoke pins Rs 1,00,000 computers mid-year -> Rs 20,000. Review: 2 blockers
+  (proceeds leaving a block the asset never entered; disposeAsset missing the
+  in-use checks) + 2 warns (double-post race; no schema-level timeline) all
+  fixed pre-commit -> EVOLUTION #14.
 
 ## Current state
-- Branch `feat/rvos-002-accountant-edition`; all four gates green at P5.
-- EVOLUTION.md at #13 (P5: balance is not proof of faithfulness).
+- Branch `feat/rvos-002-accountant-edition`; all four gates green at P6.
+- EVOLUTION.md at #14 (P6: a pool must gate entry and exit on the SAME
+  predicate; derived figures shown beside posted ones must be reconciled).
 - Live-DB compat spot-checked on a COPY of `data/revenueos.db` (+WAL):
   `ledger_mappings` created additively, 6 documents / 27 journal lines intact.
-- The Tally flow was also driven end-to-end in a real browser on :3322
-  (map → stage → review, second import asked zero ledgers, duplicate-bytes
-  banner fired). Those test artifacts were then removed — the live book is
-  back to its exact prior baseline (6 docs / 40 staged rows / 0 mappings /
-  27 journal lines). Do NOT expect leftover tally documents there.
+- Live-DB compat also re-checked at P6: `fixed_assets` + `wdv_openings` are
+  created additively. NOTE the dev db's `fixed_assets` was recreated once (it
+  was empty) so it picked up the timeline CHECKs added after the review —
+  CREATE TABLE IF NOT EXISTS never revisits an existing table.
+- Both flows were driven end-to-end in a real browser on :3322 — Tally (map →
+  stage → review, second import asked zero ledgers, duplicate-bytes banner) and
+  depreciation (/tax redirect, add asset, ₹20,000 schedule, post, guard, CSV
+  export). All test artifacts were then removed, including the P6 depreciation
+  JOURNAL, and the live book verified back to its exact prior baseline (6 docs /
+  40 staged rows / 0 mappings / 9 journals / 27 journal lines / 0 assets, TB
+  zero). Do NOT expect leftover tally documents or fixed assets there.
 
 ## What the Tally path refuses (by design — never guess with money)
 Each of these lands `include=0`, entry_type `'other'`, confidence 0.2, with
@@ -84,27 +112,36 @@ the reason suffixed onto particulars so review shows it:
 - an unmapped ledger, or a mapping with a broken target.
 Multiple same-type revenue legs DO import (buildLegs sums them into Sales).
 
-## Next phase: P6 depreciation
+## Next phase: P7 income tax
 Per RVOS-002-SPEC.md §PHASES + dreamy-skipping-mango.md: new
-`src/lib/tax/depreciation.ts` `IT_BLOCKS` (building 10%, furniture 10%, plant
-& machinery 15%, vehicles 15%, computers 40% — rate + label + seed account) and
-`blockWdv(db, fy, block)` = opening (from `wdv_openings` first-FY override,
-else prior-FY closing) + additions split ≥180/<180 days to Mar 31 (half rate)
-− disposals → dep + closing, integer paise via `roundHalfUp`. db.ts DDL
-`fixed_assets` (name, block CHECK, cost_paise, purchase_date, put_to_use_date,
-disposed_date, disposal_paise) + `wdv_openings` (fy, block, opening_paise,
-UNIQUE(fy, block)). New `/tax` page (redirect → computation) +
-`tax-tabs.tsx` (Computation/Depreciation/TDS, ReportTabs clone) +
-`/tax/depreciation` (register, per-FY block summary, "Post depreciation
-entry"); actions `createAsset`, `disposeAsset`, `postDepreciationEntry(fy)`
-(Dr 5800 / Cr 1590 via postManualVoucher, journals.entry_type 'depreciation',
-refuses if an entry already exists for that FY). Sidebar NAV + Tax. Export
-`case "depreciation"`. Accept: `test/depreciation.test.ts` — 180-day boundary
-half-rate flip, block roll-forward across 2 FYs, opening override, disposal
-capped at block WDV, double-post guard. Smoke: ₹1,00,000 computers asset
-mid-year → dep ₹20,000 pinned → posted, TB zero, BS net block. Commit:
-`RVOS-002 P6: depreciation — fixed-asset register, IT-Act WDV blocks with
-half-year rule, generated FY depreciation journal`.
+`src/lib/tax/india-it.ts` — AY-TAGGED constants + pure fns: individual slabs
+old/new, 87A rebate + new-regime marginal relief, surcharge tiers + marginal
+relief, 4% cess, 288A/288B ₹10 rounding; firm 30% (+12% surcharge >₹1cr);
+company 25% vs 115BAA 22% (+7%/12% vs flat 10%); 44AD (8%/6%) / 44ADA (50%);
+40(b) ceiling (90% of first ₹3L book profit, 60% of the rest, min ₹1.5L);
+advance-tax 15/45/75/100%. New `src/lib/tax/computation.ts`
+`buildComputation(db, fy)`: P&L over the FY → add back book depreciation
+(account 5800) + `it_adjustments` addbacks (43B, disallowances, 40(b) actuals)
+→ deduct IT depreciation (P6's `depreciationSchedule`) + deductions → GTI →
+presumptive override branch → taxable → tax by entity/regime → less
+`tax_payments` → net payable + instalment schedule. db.ts DDL `it_adjustments`
+(fy, kind CHECK('addback','deduction'), section, description, amount_paise) +
+`tax_payments` (fy, kind CHECK('advance','tds','self_assessment'), paid_on,
+amount_paise, note). New `/tax/computation` page (FY select, statement card,
+adjustments CRUD, 40(b) helper for firms, advance-tax table, AY disclaimer);
+actions `addItAdjustment`, `deleteItAdjustment` (unposted metadata, so
+deletable), `addTaxPayment`; export `case "computation"` (the ITR seam).
+**Flip `tax-tabs.tsx` Computation to `ready: true` and repoint `/tax` from
+depreciation to computation — both are stubbed for exactly this.**
+Accept: `test/india-it.test.ts` pinned — new regime ₹12L → nil via 87A,
+just-over-rebate marginal relief, ₹60L surcharge boundary + marginal relief,
+old regime, firm, company both elections, 44AD/44ADA, 288B rounding;
+`test/computation.test.ts` — dep addback/deduct netting, adjustments,
+presumptive override, TDS credit netting, 40(b) ceiling. Smoke: demo books
+(proprietorship, new regime) → pinned taxable income, nil tax via 87A. Commit:
+`RVOS-002 P7: income tax — computation of total income per entity type,
+slabs/surcharge/cess/rebate, presumptive & 40(b), advance-tax schedule,
+computation export seam`.
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
@@ -143,16 +180,40 @@ half-year rule, generated FY depreciation journal`.
   collisions with earlier bindings in that one long main() (`dayBook` the
   report fn vs a day-book fixture).
 - Books lock is INCLUSIVE (entry_date <= locked_through rejects).
+- A pooled aggregate (depreciation block, batch, control total) must gate ENTRY
+  and EXIT on the SAME predicate — cost enters a block only when the asset is
+  put to use, so proceeds may leave only then. An asymmetry silently misstates
+  every OTHER member of the pool (EVOLUTION #14).
+- `CREATE TABLE IF NOT EXISTS` never revisits an EXISTING table, so a CHECK
+  added to a table that already shipped is a no-op on every live db (spec risk
+  #3). Either recreate the (empty) table deliberately, or make the code hold
+  the invariant on its own — P6's engine test runs against a fixed_assets
+  recreated WITHOUT the timeline CHECKs for exactly this reason.
+- A derived figure displayed beside a POSTED one must be reconciled against it
+  and flagged when they differ — /tax/depreciation compares the recomputed
+  schedule to the posted journal's own amount (EVOLUTION #14). Applies to P7
+  computation and P10's CA pack.
+- Generated journals (depreciation, later TDS challans) post through
+  postManualVoucher with `entry_type` set on JournalVoucherInput — ONE audited
+  posting path, still identifiable in the day book. Don't add a second inserter.
+- postManualVoucher opens its own transaction; better-sqlite3 nests these as
+  savepoints, so a caller may wrap check-and-post in one db.transaction() to
+  make a guard atomic (postDepreciationEntry does).
 - Money-adjacent diffs: code-review before commit (caught real bugs P2+P3+P4+P5).
 - Pinned demo BS figures (postedDb, 2027-03-31): assets 2,158,000p =
   liabilities 558,000p + equity 1,600,000p; profit 1,100,000p; AR 1,258,000p.
-  Smoke's CSV leg posts in 2026-08 and the Tally leg in 2026-09, both AFTER
-  these assertions run, so the July GST + BS pins stay untouched.
+  Smoke's CSV leg posts in 2026-08, the Tally leg in 2026-09 and the
+  depreciation entry on 2027-03-31 — ALL after these assertions run, so the
+  July GST + BS pins stay untouched. Any new smoke leg must post after them
+  too, or re-pin the figures deliberately.
 
-## Files touched (P5)
-src/lib/import-tally.ts (new) · src/components/import-tally.tsx (new) ·
-src/app/api/import/tally/preview/route.ts (new) ·
-test/import-tally.test.ts (new) ·
-src/lib/{db,types,posting,actions}.ts · src/app/imports/page.tsx ·
-scripts/smoke.ts · package.json (+fast-xml-parser) ·
+## Files touched (P6)
+src/lib/tax/depreciation.ts (new) · src/app/tax/page.tsx (new) ·
+src/app/tax/depreciation/page.tsx (new) · src/components/tax-tabs.tsx (new) ·
+test/depreciation.test.ts (new) ·
+src/lib/{db,types,fy,vouchers,actions}.ts · src/components/sidebar.tsx ·
+src/app/api/export/[report]/route.ts · scripts/smoke.ts ·
 EVOLUTION.md · HANDOFF.md
+(P5 touched: src/lib/import-tally.ts, src/components/import-tally.tsx,
+src/app/api/import/tally/preview/route.ts, test/import-tally.test.ts,
+src/lib/{db,types,posting,actions}.ts, src/app/imports/page.tsx, package.json.)

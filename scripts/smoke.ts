@@ -375,6 +375,57 @@ async function main(): Promise<void> {
   );
   ok("Tally import: ledgers mapped once · sale + receipt posted · journal excluded · TB zero");
 
+  step = "depreciation: asset → block schedule → posted FY entry";
+  const { blockFor, depreciationSchedule, postedDepreciation } = await import(
+    "../src/lib/tax/depreciation"
+  );
+  // ₹1,00,000 of computers put to use in November = under 180 days, so the
+  // 40% block rate halves to 20% → ₹20,000 for the year.
+  db.prepare(
+    `INSERT INTO fixed_assets (name, block, cost_paise, purchase_date, put_to_use_date, created_at)
+     VALUES ('Billing laptop', 'computers', 10000000, '2026-11-01', '2026-11-01', ?)`
+  ).run(nowIso);
+  const depFy = "2026-27";
+  const schedule = depreciationSchedule(db, depFy);
+  const computers = schedule.blocks.find((b) => b.block === "computers")!;
+  assert.equal(computers.additions_half_paise, 10_000_000, "addition at half rate");
+  assert.equal(computers.additions_full_paise, 0, "not a full-rate addition");
+  assert.equal(computers.depreciation_paise, 2_000_000, "half of 40% = ₹20,000");
+  assert.equal(computers.closing_paise, 8_000_000, "closing WDV ₹80,000");
+  assert.equal(schedule.total_depreciation_paise, 2_000_000, "nothing else to depreciate");
+  assert.equal(blockFor("computers")!.rate, 40, "computers block is 40%");
+
+  assert.equal(postedDepreciation(db, depFy), undefined, "not posted yet");
+  const dep = postManualVoucher(db, {
+    kind: "journal",
+    entry_type: "depreciation",
+    entry_date: "2027-03-31",
+    memo: "Depreciation for FY 2026-27 (IT-Act WDV)",
+    ref_no: `DEP-${depFy}`,
+    legs: [
+      { account_code: "5800", party_id: null, debit_paise: schedule.total_depreciation_paise, credit_paise: 0 },
+      { account_code: "1590", party_id: null, debit_paise: 0, credit_paise: schedule.total_depreciation_paise },
+    ],
+  });
+  assert.equal(postedDepreciation(db, depFy)?.id, dep.journalId, "guard sees the entry");
+  assert.equal(postedDepreciation(db, "2027-28"), undefined, "next FY still open");
+  assert.equal(trialBalance(db).balanced, true, "TB zero after depreciation");
+
+  // The charge lands in the P&L and the accumulated account nets off the block
+  // on the balance sheet — both dated inside FY 2026-27.
+  const depPnl = profitAndLoss(db, { from: "2026-04-01", to: "2027-03-31" });
+  assert.equal(
+    depPnl.total_expense_paise,
+    500_000 + // July khata purchases
+      250_000 + // manual rent journal
+      500_000 + // August CSV-import purchase (taxable of the ₹5,900 bill)
+      2_000_000, // this depreciation charge
+    "FY expenses now carry the depreciation charge"
+  );
+  const depBs = balanceSheet(db, "2027-03-31", db.prepare("SELECT * FROM settings WHERE id = 1").get() as import("../src/lib/types").SettingsRow);
+  assert.equal(depBs.balanced, true, "BS still balances after depreciation");
+  ok("Depreciation: ₹1,00,000 computers mid-year → ₹20,000 at half of 40% · posted Dr 5800/Cr 1590 · TB zero · BS balanced");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

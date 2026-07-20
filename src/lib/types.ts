@@ -122,6 +122,35 @@ export interface DraftRowInput {
   include: boolean;
 }
 
+/** IT-Act depreciation block. Frozen alongside the CHECK lists on
+ * fixed_assets.block / wdv_openings.block and IT_BLOCKS. */
+export type BlockCode =
+  | "building"
+  | "furniture"
+  | "plant"
+  | "vehicles"
+  | "computers";
+
+export interface FixedAssetRow {
+  id: number;
+  name: string;
+  block: BlockCode;
+  cost_paise: number;
+  purchase_date: string;
+  put_to_use_date: string | null; // NULL = not yet in use, so not yet depreciable
+  disposed_date: string | null;
+  disposal_paise: number | null;
+  created_at: string;
+}
+
+export interface WdvOpeningRow {
+  id: number;
+  fy: string;
+  block: BlockCode;
+  opening_paise: number;
+  created_at: string;
+}
+
 /** Tally ledger name → account or party. Exactly one target id is non-null,
  * enforced by paired SQL CHECKs. */
 export interface LedgerMappingRow {

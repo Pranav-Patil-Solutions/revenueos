@@ -19,6 +19,11 @@ function startYearOf(fy: string): number {
   return start;
 }
 
+/** Start calendar year of an FY key: "2026-27" → 2026. Validates the key. */
+export function fyStartYear(fy: string): number {
+  return startYearOf(fy);
+}
+
 /** FY key for a start year: 2026 → "2026-27". */
 export function fyKey(startYear: number): string {
   return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;

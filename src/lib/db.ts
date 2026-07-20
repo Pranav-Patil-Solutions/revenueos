@@ -101,6 +101,43 @@ const DDL = `
   -- Tally ledger name → this book's account or party. Persistent: a ledger
   -- mapped once is never asked about again on later imports. ledger_name is
   -- UNIQUE so a name can only ever point at one target.
+  -- Fixed-asset register. Depreciation runs on the IT-Act BLOCK, not per
+  -- asset, so these rows exist to compute additions/disposals per block —
+  -- the block CHECK list is frozen alongside IT_BLOCKS in tax/depreciation.ts.
+  CREATE TABLE IF NOT EXISTS fixed_assets (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL,
+    block           TEXT NOT NULL CHECK (block IN
+                    ('building','furniture','plant','vehicles','computers')),
+    cost_paise      INTEGER NOT NULL CHECK (cost_paise > 0),
+    purchase_date   TEXT NOT NULL,
+    -- NULL = bought but not yet in use: no depreciation until it is.
+    put_to_use_date TEXT,
+    disposed_date   TEXT,
+    disposal_paise  INTEGER,
+    created_at      TEXT NOT NULL,
+    CHECK ((disposed_date IS NULL) = (disposal_paise IS NULL)),
+    CHECK (disposal_paise IS NULL OR disposal_paise >= 0),
+    -- The timeline must hold at the schema level too: any direct-SQL path
+    -- (import, script) that wrote an impossible order would still produce a
+    -- confident-looking depreciation number.
+    CHECK (put_to_use_date IS NULL OR put_to_use_date >= purchase_date),
+    CHECK (disposed_date IS NULL OR
+           (put_to_use_date IS NOT NULL AND disposed_date >= put_to_use_date))
+  );
+
+  -- Opening WDV carried in from books kept elsewhere (Tally, a prior CA).
+  -- Overrides the rolled-forward closing for that FY only.
+  CREATE TABLE IF NOT EXISTS wdv_openings (
+    id            INTEGER PRIMARY KEY,
+    fy            TEXT NOT NULL,
+    block         TEXT NOT NULL CHECK (block IN
+                  ('building','furniture','plant','vehicles','computers')),
+    opening_paise INTEGER NOT NULL CHECK (opening_paise >= 0),
+    created_at    TEXT NOT NULL,
+    UNIQUE (fy, block)
+  );
+
   CREATE TABLE IF NOT EXISTS ledger_mappings (
     id          INTEGER PRIMARY KEY,
     ledger_name TEXT NOT NULL UNIQUE,

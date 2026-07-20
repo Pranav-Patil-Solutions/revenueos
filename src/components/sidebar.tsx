@@ -99,6 +99,21 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    header: "4 · Tax & filing",
+    items: [
+      {
+        href: "/tax",
+        label: "Tax",
+        icon: (
+          <>
+            <path d="M6 3h9l4 4v14H6z" />
+            <path d="M15 3v4h4M10 12h5M10 16h3M9.5 8.5h1" />
+          </>
+        ),
+      },
+    ],
+  },
+  {
     header: null,
     items: [
       {

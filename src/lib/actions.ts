@@ -8,6 +8,13 @@ import path from "node:path";
 import { groupFor } from "./coa";
 import { getDb, UPLOADS_DIR } from "./db";
 import { extractDocument } from "./extraction";
+import { rupeeStringToPaise } from "./format";
+import { fyEnd, fyLabel } from "./fy";
+import {
+  blockFor,
+  depreciationSchedule,
+  postedDepreciation,
+} from "./tax/depreciation";
 import {
   parseDayBook,
   tallyVouchersToRows,
@@ -28,6 +35,7 @@ import type {
   DraftRowInput,
   EntryType,
   EntityType,
+  FixedAssetRow,
   ItRegime,
   PartyKind,
   Presumptive,
@@ -464,6 +472,154 @@ export async function createTallyImport(formData: FormData): Promise<void> {
   revalidatePath("/documents");
   revalidatePath("/imports");
   redirect(`/documents/${docId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Fixed assets + IT-Act depreciation
+// ---------------------------------------------------------------------------
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Rupee text from a form field → integer paise. Uses the exact-string path,
+ * never parseFloat, so ₹1,00,000.50 can't drift. */
+function formPaise(formData: FormData, field: string, label: string): number {
+  const raw = String(formData.get(field) ?? "").trim();
+  if (raw === "") throw new Error(`${label} is required.`);
+  let paise: number;
+  try {
+    paise = rupeeStringToPaise(raw);
+  } catch (e) {
+    throw new Error(`${label}: ${e instanceof Error ? e.message : "bad amount"}`);
+  }
+  if (paise < 0) throw new Error(`${label} must not be negative.`);
+  return paise;
+}
+
+export async function createAsset(formData: FormData): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  const block = String(formData.get("block") ?? "");
+  const purchaseDate = String(formData.get("purchase_date") ?? "").trim();
+  const putToUseRaw = String(formData.get("put_to_use_date") ?? "").trim();
+  if (!name) throw new Error("Asset name is required.");
+  if (!blockFor(block)) throw new Error("Pick a depreciation block.");
+  if (!ISO_DATE.test(purchaseDate)) {
+    throw new Error("Purchase date is required (YYYY-MM-DD).");
+  }
+  if (putToUseRaw !== "" && !ISO_DATE.test(putToUseRaw)) {
+    throw new Error("Put-to-use date must be a date (YYYY-MM-DD) or blank.");
+  }
+  // Depreciation starts when the asset is USED, not when it is bought.
+  const putToUse = putToUseRaw === "" ? null : putToUseRaw;
+  if (putToUse !== null && putToUse < purchaseDate) {
+    throw new Error("An asset can't be put to use before it was bought.");
+  }
+  const cost = formPaise(formData, "cost", "Cost");
+  if (cost === 0) throw new Error("Cost must be more than zero.");
+
+  getDb()
+    .prepare(
+      `INSERT INTO fixed_assets
+         (name, block, cost_paise, purchase_date, put_to_use_date, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(name, block, cost, purchaseDate, putToUse, new Date().toISOString());
+  revalidatePath("/tax/depreciation");
+  redirect("/tax/depreciation");
+}
+
+export async function disposeAsset(formData: FormData): Promise<void> {
+  const id = Number(formData.get("id"));
+  const disposedDate = String(formData.get("disposed_date") ?? "").trim();
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Bad asset id.");
+  if (!ISO_DATE.test(disposedDate)) {
+    throw new Error("Disposal date is required (YYYY-MM-DD).");
+  }
+  const proceeds = formPaise(formData, "disposal", "Sale proceeds");
+
+  const db = getDb();
+  const asset = db
+    .prepare("SELECT * FROM fixed_assets WHERE id = ?")
+    .get(id) as FixedAssetRow | undefined;
+  if (!asset) throw new Error("Asset not found.");
+  if (asset.disposed_date) throw new Error("That asset is already disposed.");
+  if (disposedDate < asset.purchase_date) {
+    throw new Error("An asset can't be sold before it was bought.");
+  }
+  // An asset that never entered a block can't leave one: its cost was never
+  // added, so booking proceeds against the block would cut the depreciation
+  // of every other asset in it.
+  if (!asset.put_to_use_date) {
+    throw new Error(
+      "That asset was never put to use, so it never entered a depreciation block — record the sale as a manual voucher instead."
+    );
+  }
+  if (disposedDate < asset.put_to_use_date) {
+    throw new Error("An asset can't be sold before it was put to use.");
+  }
+  db.prepare(
+    "UPDATE fixed_assets SET disposed_date = ?, disposal_paise = ? WHERE id = ?"
+  ).run(disposedDate, proceeds, id);
+  revalidatePath("/tax/depreciation");
+  redirect("/tax/depreciation");
+}
+
+/**
+ * Book the FY's depreciation: Dr 5800 Depreciation / Cr 1590 Accumulated
+ * Depreciation, dated the last day of the FY, ONE entry per year.
+ *
+ * The amount is computed from the block schedule, never typed in. The guard
+ * against a second entry is a query for an existing 'depreciation' journal
+ * inside the FY — with post-only books there is no un-post, so a double
+ * click here would need a manual reversing entry to undo.
+ */
+export async function postDepreciationEntry(formData: FormData): Promise<void> {
+  const fy = String(formData.get("fy") ?? "").trim();
+  const db = getDb();
+  const to = fyEnd(fy); // the entry is dated the last day of the year
+
+  // Guard and insert in ONE transaction (postManualVoucher's own transaction
+  // nests as a savepoint). Checking outside it would let two quick submits
+  // both pass the guard before either wrote — and with post-only books the
+  // duplicate could only be undone by a manual reversing entry.
+  const journalId = db.transaction((): number => {
+    const existing = postedDepreciation(db, fy);
+    if (existing) {
+      throw new Error(
+        `${fyLabel(fy)} depreciation is already posted (journal #${existing.id}). Books are post-only — correct it with a manual reversing entry.`
+      );
+    }
+    const schedule = depreciationSchedule(db, fy);
+    if (schedule.total_depreciation_paise <= 0) {
+      throw new Error(
+        `Nothing to depreciate in ${fyLabel(fy)} — add assets and their put-to-use dates first.`
+      );
+    }
+    return postManualVoucher(db, {
+      kind: "journal",
+      entry_type: "depreciation",
+      entry_date: to,
+      memo: `Depreciation for ${fyLabel(fy)} (IT-Act WDV)`,
+      ref_no: `DEP-${fy}`,
+      legs: [
+        {
+          account_code: "5800",
+          party_id: null,
+          debit_paise: schedule.total_depreciation_paise,
+          credit_paise: 0,
+        },
+        {
+          account_code: "1590",
+          party_id: null,
+          debit_paise: 0,
+          credit_paise: schedule.total_depreciation_paise,
+        },
+      ],
+    }).journalId;
+  })();
+  revalidatePath("/tax/depreciation");
+  revalidatePath("/reports");
+  revalidatePath("/");
+  redirect(`/tax/depreciation?fy=${fy}&posted=${journalId}`);
 }
 
 export async function runExtraction(docId: number): Promise<void> {

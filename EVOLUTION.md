@@ -258,3 +258,47 @@ from a control total, the result still balances. **Balance is not proof of
 faithfulness:** assert that the parts were all accounted for, not just that
 the sum came out right. Applies to any future importer (bank statements,
 26AS, e-invoice JSON) that folds N source lines into one internal entry.
+
+## 14. RVOS-002 P6 (2026-07-20): a pool that let out what it never let in
+
+**What happened:** IT-Act depreciation pools every asset of a rate into one
+*block*. Cost enters the block only when an asset is PUT TO USE — an asset
+bought but never commissioned contributes nothing. The first cut of
+`stepYear` honoured that on the way in, but on the way out it gated disposals
+on `disposed_date` alone. So selling an asset that had never been put to use
+took its proceeds *out* of a block its cost had never gone *into*, shrinking
+the block and cutting the depreciation claimed on every other asset in it.
+Nothing looked wrong: the schedule balanced, the journal balanced, the trial
+balance stayed at zero, and the only symptom was a client under-claiming
+depreciation on a tax return. Caught by the pre-commit code-review pass.
+
+The same review found a matching hole in the UI path — `disposeAsset` checked
+only that a disposal wasn't dated before the *purchase*, so the office could
+dispose of an unused asset, or back-date a disposal before the in-use date,
+and get a wrong number with no error.
+
+**Resolution:** the disposal branch now requires `put_to_use_date` set and on
+or before the year end; `disposeAsset` refuses an asset that never entered a
+block ("record the sale as a manual voucher instead") and refuses a disposal
+before the in-use date; `fixed_assets` grew paired CHECKs so the timeline
+holds against direct SQL too. The engine test deliberately runs against a
+table recreated WITHOUT those CHECKs — `CREATE TABLE IF NOT EXISTS` never
+revisits an existing table, so every db built before this phase still has the
+old shape and the engine has to hold the line by itself.
+
+**Delta (rule):** a pooled aggregate — a depreciation block, a batch, any
+control total — must gate ENTRY and EXIT on the SAME condition. If a member's
+value enters only when some predicate holds, its value may leave only when
+that same predicate holds. An asymmetry between the add-condition and the
+remove-condition doesn't corrupt the offending member, it corrupts the pool,
+and therefore silently misstates every *other* member. When writing the exit
+path, re-read the entry path and copy its predicate rather than restating it.
+
+**Delta (rule, second):** when a page shows a DERIVED figure next to a POSTED
+one — a recomputed schedule beside the journal that booked it — it must
+reconcile the two and say so when they differ. Posting depreciation and then
+adding an asset left the page showing a freshly recomputed total while the
+books held the old one, with nothing flagging the divergence; on post-only
+books that gap is only closable by a manual reversing entry, so it has to be
+visible the moment it opens. Applies to P7's computation and P10's CA pack,
+both of which display derived tax figures against posted books.

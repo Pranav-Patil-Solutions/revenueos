@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { assertBalanced, buildLegs, type Leg } from "./posting";
 import type {
+  JournalKind,
   PartyRow,
   SettingsRow,
   SettleAccount,
@@ -57,6 +58,11 @@ export interface JournalVoucherInput {
   memo: string;
   ref_no: string;
   legs: JournalLegInput[];
+  /** Stamped onto journals.entry_type instead of "journal" — lets a generated
+   * entry (depreciation, TDS challan) stay identifiable in the day book while
+   * still posting through the one audited journal path. journals.entry_type
+   * has no CHECK; the frozen 8-value enum is staged_rows only. */
+  entry_type?: JournalKind;
 }
 
 export type VoucherInput =
@@ -222,7 +228,7 @@ export function postManualVoucher(
       )
       .run(
         input.entry_date,
-        input.kind,
+        input.kind === "journal" ? input.entry_type ?? input.kind : input.kind,
         input.memo,
         input.ref_no,
         new Date().toISOString()
