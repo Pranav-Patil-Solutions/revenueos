@@ -45,6 +45,16 @@ const NAV_GROUPS: NavGroup[] = [
           </>
         ),
       },
+      {
+        href: "/imports",
+        label: "Imports",
+        icon: (
+          <>
+            <path d="M12 3v10M7 8l5 5 5-5" />
+            <path d="M4 17v3h16v-3" />
+          </>
+        ),
+      },
     ],
   },
   {

@@ -197,3 +197,25 @@ purchase/payment/debit_note → supplier) + a pinned rejection test.
 *enforce*: every server action that accepts an entity id must re-validate the
 relationship the UI implied (party kind, account group, document status) —
 client-side filtering is UX, never validation.
+
+## 12. RVOS-002 P4 (2026-07-20): name-keyed lookup silently last-write-won
+
+**What happened:** the CSV importer resolved the template's `party` column via
+a `Map` keyed by lowercased party name — but `parties.name` has no UNIQUE
+constraint, so on a name collision the row silently booked to whichever party
+overwrote the map entry (highest id), with `include=1` and no reason. Every
+*other* bad input in the parser excluded the row with a visible reason; only
+the ambiguous case failed silent, and the review grid would show a
+correct-looking resolved name. Caught by the pre-commit code-review pass —
+tests only covered unique fixtures.
+
+**Resolution:** collision detection when building the map (`"ambiguous"`
+sentinel) → row excluded with "matches more than one party — rename one" +
+pinned test with two same-name parties.
+
+**Delta (rule):** resolving a human-entered NAME to a db id is only valid when
+the name is provably unique in that lookup set. Any name/label→id map built
+from a column without a UNIQUE constraint must detect collisions and turn
+them into a visible per-row error — last-write-wins map building is a silent
+misattribution bug, not a tiebreak. Applies to P5's Tally `ledger_mappings`
+flow and any future name-matching import.

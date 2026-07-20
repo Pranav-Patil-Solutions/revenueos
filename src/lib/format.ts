@@ -15,6 +15,27 @@ export function inr(paise: number): string {
   return inrFmt.format(paise / 100);
 }
 
+/** Rupee STRING from a file (CSV/XML import) → integer paise, exactly.
+ * Strips ₹/spaces and grouping commas ("1,23,456.78" → 12345678). Digit math
+ * only — never parseFloat on file data. Rejects >2 decimal places and
+ * anything that isn't a plain amount. */
+export function rupeeStringToPaise(s: string): number {
+  const t = s.trim().replace(/[₹\s]/g, "").replace(/,/g, "");
+  const m = t.match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
+  if (!m) {
+    if (/^-?\d+\.\d{3,}$/.test(t)) {
+      throw new Error(`"${s.trim()}" has more than 2 decimal places`);
+    }
+    throw new Error(`"${s.trim()}" is not a rupee amount`);
+  }
+  const [, sign, whole, frac = ""] = m;
+  const paise = Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+  if (!Number.isSafeInteger(paise)) {
+    throw new Error(`"${s.trim()}" is too large to book`);
+  }
+  return sign === "-" ? -paise : paise;
+}
+
 /** Paise → plain "12580.00" for CSV/JSON exports (no symbol, no grouping). */
 export function paiseToRupeeString(paise: number): string {
   const sign = paise < 0 ? "-" : "";

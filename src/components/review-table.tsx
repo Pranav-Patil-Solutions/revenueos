@@ -27,6 +27,7 @@ const RATES = ["", "0", "5", "12", "18", "28"];
 interface EditRow {
   id: number;
   row_no: number;
+  party_id: number | null;
   entry_date: string; // "" = null
   particulars: string;
   ref_no: string;
@@ -68,15 +69,23 @@ export function ReviewTable({
   docId,
   rows,
   readOnly,
+  partyNames,
+  defaultPartyName,
 }: {
   docId: number;
   rows: StagedRow[];
   readOnly: boolean;
+  /** id → name for the per-row party column (imports only). The column is
+   * hidden when absent, keeping the photo path's layout untouched. */
+  partyNames?: Record<number, string>;
+  defaultPartyName?: string;
 }) {
+  const showParty = partyNames !== undefined;
   const [edit, setEdit] = useState<EditRow[]>(() =>
     rows.map((r) => ({
       id: r.id,
       row_no: r.row_no,
+      party_id: r.party_id,
       entry_date: r.entry_date ?? "",
       particulars: r.particulars,
       ref_no: r.ref_no,
@@ -137,6 +146,12 @@ export function ReviewTable({
   }, [edit]);
 
   const emptyDateCount = useMemo(() => countEmptyDates(edit), [edit]);
+
+  // Party is fixed at import time (it decides AR vs AP legs) — display only.
+  const partyLabel = (r: EditRow): string =>
+    r.party_id === null
+      ? defaultPartyName ?? "—"
+      : partyNames?.[r.party_id] ?? `#${r.party_id}`;
 
   function set(i: number, patch: Partial<EditRow>) {
     setEdit((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -234,6 +249,7 @@ export function ReviewTable({
               <th className="px-2 py-3 font-medium">Date</th>
               <th className="px-2 py-3 font-medium">Particulars</th>
               <th className="px-2 py-3 font-medium">Ref</th>
+              {showParty && <th className="px-2 py-3 font-medium">Party</th>}
               <th className="px-2 py-3 text-right font-medium">Debit ₹</th>
               <th className="px-2 py-3 text-right font-medium">Credit ₹</th>
               <th className="px-2 py-3 font-medium">Type</th>
@@ -257,6 +273,11 @@ export function ReviewTable({
                     <td className="px-2 py-1.5 whitespace-nowrap">{r.entry_date || "—"}</td>
                     <td className="max-w-56 truncate px-2 py-1.5">{r.particulars || "—"}</td>
                     <td className="px-2 py-1.5">{r.ref_no || "—"}</td>
+                    {showParty && (
+                      <td className="max-w-36 truncate px-2 py-1.5 text-ink-2">
+                        {partyLabel(r)}
+                      </td>
+                    )}
                     <td className="px-2 py-1.5 text-right">{r.debit || ""}</td>
                     <td className="px-2 py-1.5 text-right">{r.credit || ""}</td>
                     <td className="px-2 py-1.5">{r.entry_type.replace("_", " ")}</td>
@@ -294,6 +315,11 @@ export function ReviewTable({
                         className={`${cellInput} w-16`}
                       />
                     </td>
+                    {showParty && (
+                      <td className="max-w-36 truncate px-2 py-1.5 text-[12.5px] text-ink-2">
+                        {partyLabel(r)}
+                      </td>
+                    )}
                     <td className="px-1 py-1">
                       <input
                         inputMode="decimal"
@@ -370,7 +396,7 @@ export function ReviewTable({
           </tbody>
           <tfoot>
             <tr className="border-t border-hairline text-[12.5px] font-medium">
-              <td className="px-3 py-3 text-ink-3" colSpan={4}>
+              <td className="px-3 py-3 text-ink-3" colSpan={showParty ? 5 : 4}>
                 Included totals
               </td>
               <td className="px-2 py-3 text-right">{inr(totals.dr)}</td>

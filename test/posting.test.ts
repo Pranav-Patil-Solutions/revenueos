@@ -283,3 +283,78 @@ test("postDocument: a dateless included row aborts the whole post", () => {
   const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
   assert.equal(journals.n, 0);
 });
+
+test("postDocument: staged party_id overrides the doc party per row; NULL falls back", () => {
+  const db = setupDb();
+  db.prepare(
+    `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
+     VALUES ('Gupta Suppliers', 'supplier', '', '07', '', '2026-07-01T00:00:00Z')`
+  ).run();
+  // Fresh doc for Sharma (id 1) with two rows: a sale with party_id NULL
+  // (doc fallback → Sharma) and a purchase booked to Gupta (id 2) per row.
+  db.prepare(
+    `INSERT INTO documents (party_id, image_path, image_sha256, status, source_type, created_at)
+     VALUES (1, 'data/uploads/import.csv', 'csv-sha', 'extracted', 'excel', '2026-07-16T00:00:00Z')`
+  ).run();
+  db.prepare(
+    `INSERT INTO staged_rows
+       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+     VALUES (2, 1, '2026-07-02', 'Cloth bill', '241', 1180000, NULL, 'sale', 18, 'cash', 1, 0, 1, NULL),
+            (2, 2, '2026-07-14', 'Packing inv 88', '88', NULL, 590000, 'purchase', 18, 'bank', 1, 0, 1, 2)`
+  ).run();
+
+  const staged = db
+    .prepare("SELECT * FROM staged_rows WHERE document_id = 2 ORDER BY row_no")
+    .all() as StagedRow[];
+  const drafts: DraftRowInput[] = staged.map((r) => ({
+    id: r.id,
+    entry_date: r.entry_date,
+    particulars: r.particulars,
+    ref_no: r.ref_no,
+    debit_paise: r.debit_paise,
+    credit_paise: r.credit_paise,
+    entry_type: r.entry_type,
+    gst_rate: r.gst_rate,
+    settle_account: r.settle_account,
+    include: true,
+  }));
+  const { journals } = postDocument(db, 2, drafts);
+  assert.equal(journals, 2);
+
+  const sum = db
+    .prepare("SELECT SUM(debit_paise) - SUM(credit_paise) AS d FROM journal_lines")
+    .get() as { d: number };
+  assert.equal(sum.d, 0);
+
+  // Sale row (NULL party) landed on Sharma's AR — the photo-path fallback.
+  const ar = db
+    .prepare(
+      `SELECT SUM(jl.debit_paise) - SUM(jl.credit_paise) AS bal
+       FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+       WHERE a.code = '1200' AND jl.party_id = 1`
+    )
+    .get() as { bal: number };
+  assert.equal(ar.bal, 1_180_000);
+
+  // Purchase row's per-row party landed on Gupta's AP, inter-state doesn't
+  // apply to inclusive ITC math here: AP gross 5900, ITC 900.
+  const ap = db
+    .prepare(
+      `SELECT SUM(jl.credit_paise) - SUM(jl.debit_paise) AS bal
+       FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+       WHERE a.code = '2100' AND jl.party_id = 2`
+    )
+    .get() as { bal: number };
+  assert.equal(ap.bal, 590_000);
+
+  // No AP line ever carries the doc party — the override is per row, not doc-wide.
+  const wrong = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM journal_lines jl
+       JOIN accounts a ON a.id = jl.account_id
+       WHERE a.code = '2100' AND jl.party_id = 1`
+    )
+    .get() as { n: number };
+  assert.equal(wrong.n, 0);
+});

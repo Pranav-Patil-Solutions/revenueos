@@ -173,6 +173,87 @@ async function main(): Promise<void> {
   await assert.rejects(() => extractDocument(docId), /posted/);
   ok("posted document is locked against re-extraction");
 
+  step = "excel (CSV) import → review → post";
+  const { parseImportCsv, TEMPLATE_HEADERS } = await import("../src/lib/import-csv");
+  const partyRows = db
+    .prepare("SELECT id, name FROM parties")
+    .all() as { id: number; name: string }[];
+  const gupta = partyRows.find((p) => p.name === "Gupta Suppliers");
+  assert.ok(gupta, "demo Gupta Suppliers present");
+  const csv = [
+    TEMPLATE_HEADERS.join(","),
+    '2026-08-02,"Cloth bill #301",301,,sale,"11,800.00",,18,cash', // blank party → doc's Sharma
+    "2026-08-05,Packing inv 92,92,Gupta Suppliers,purchase,,5900,18,bank",
+    "2026-08-09,Typo row,,Unknown Party,sale,10.123,,,cash", // must land excluded, not rejected
+  ].join("\n");
+  const parsed = parseImportCsv(csv, partyRows);
+  assert.equal(parsed.included, 2, "two clean rows");
+  assert.equal(parsed.excluded, 1, "bad row excluded with reason");
+  // Same one-transaction shape the /api/import/excel route writes.
+  const insertStaged = db.prepare(
+    `INSERT INTO staged_rows
+       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+     VALUES (@document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
+             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
+  );
+  const importDocId = db.transaction((): number => {
+    const id = db
+      .prepare(
+        `INSERT INTO documents
+           (party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
+         VALUES (?, 'data/uploads/smoke.csv', 'smoke-csv-sha', 'extracted', 'excel', 'csv-template', ?, ?)`
+      )
+      .run(sharma!.id, new Date().toISOString(), new Date().toISOString())
+      .lastInsertRowid as number;
+    for (const r of parsed.rows) {
+      insertStaged.run({
+        document_id: id,
+        row_no: r.row_no,
+        entry_date: r.entry_date,
+        particulars: r.particulars,
+        ref_no: r.ref_no,
+        debit_paise: r.debit_paise,
+        credit_paise: r.credit_paise,
+        entry_type: r.entry_type,
+        gst_rate: r.gst_rate,
+        settle_account: r.settle_account,
+        confidence: r.confidence,
+        include: r.include ? 1 : 0,
+        party_id: r.party_id,
+      });
+    }
+    return id;
+  })();
+  const importStaged = db
+    .prepare("SELECT * FROM staged_rows WHERE document_id = ? ORDER BY row_no")
+    .all(importDocId) as import("../src/lib/types").StagedRow[];
+  const importJournals = postDocument(db, importDocId, importStaged.map((r) => ({
+    id: r.id,
+    entry_date: r.entry_date,
+    particulars: r.particulars,
+    ref_no: r.ref_no,
+    debit_paise: r.debit_paise,
+    credit_paise: r.credit_paise,
+    entry_type: r.entry_type,
+    gst_rate: r.gst_rate,
+    settle_account: r.settle_account,
+    include: r.include === 1,
+  })));
+  assert.equal(importJournals.journals, 2, "2 import journals posted");
+  assert.equal(trialBalance(db).balanced, true, "TB zero after CSV import post");
+  assert.equal(
+    partyStatement(db, sharma!.id)?.closing_paise,
+    1_258_000 + 1_180_000,
+    "Sharma AR grew by the imported sale (doc-fallback party)"
+  );
+  assert.equal(
+    partyStatement(db, gupta!.id)?.closing_paise,
+    590_000,
+    "Gupta AP carries the per-row-party purchase"
+  );
+  ok("CSV import: both demo parties booked · bad row excluded with reason · TB zero");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

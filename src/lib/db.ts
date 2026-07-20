@@ -145,6 +145,14 @@ export function initSchema(db: Database.Database): void {
   ensureColumn(db, "settings", "presumptive", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "settings", "books_locked_through", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "settings", "fy_audit_case", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(
+    db,
+    "documents",
+    "source_type",
+    "TEXT NOT NULL DEFAULT 'photo' CHECK (source_type IN ('photo','excel','tally'))"
+  );
+  // NULL = the document's party; imports may carry a party per row.
+  ensureColumn(db, "staged_rows", "party_id", "INTEGER REFERENCES parties(id)");
 }
 
 /** Settings singleton + chart of accounts. Idempotent — also backfills

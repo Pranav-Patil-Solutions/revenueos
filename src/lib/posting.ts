@@ -245,9 +245,19 @@ export function postDocument(
           : `Document is '${doc.status}' — only reviewed (extracted) documents can be posted.`
       );
     }
-    const party = db
-      .prepare("SELECT * FROM parties WHERE id = ?")
-      .get(doc.party_id) as PartyRow;
+    // Imports can carry a party per staged row (row.party_id); NULL falls back
+    // to the document's party, so the photo path is untouched.
+    const getParty = db.prepare("SELECT * FROM parties WHERE id = ?");
+    const partyCache = new Map<number, PartyRow>();
+    const partyFor = (partyId: number): PartyRow => {
+      let p = partyCache.get(partyId);
+      if (!p) {
+        p = getParty.get(partyId) as PartyRow | undefined;
+        if (!p) throw new Error(`party ${partyId} not found`);
+        partyCache.set(partyId, p);
+      }
+      return p;
+    };
     const settings = db
       .prepare("SELECT * FROM settings WHERE id = 1")
       .get() as SettingsRow;
@@ -286,7 +296,7 @@ export function postDocument(
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
       assertNotLocked(db, row.entry_date);
-      const legs = buildLegs(row, party, settings);
+      const legs = buildLegs(row, partyFor(row.party_id ?? doc.party_id), settings);
       assertBalanced(legs);
       const journalId = insertJournal.run(
         row.entry_date,

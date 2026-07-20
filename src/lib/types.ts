@@ -16,6 +16,7 @@ export type EntryType =
   | "opening"
   | "other";
 export type SettleAccount = "cash" | "bank";
+export type SourceType = "photo" | "excel" | "tally";
 export type EntityType = "proprietorship" | "partnership" | "company";
 export type ItRegime = "old" | "new";
 export type Presumptive = "" | "44AD" | "44ADA";
@@ -73,6 +74,7 @@ export interface DocumentRow {
   image_path: string;
   image_sha256: string;
   status: DocumentStatus;
+  source_type: SourceType;
   error: string;
   model: string;
   created_at: string;
@@ -102,6 +104,7 @@ export interface StagedRow {
   is_balance_row: number; // 0 | 1
   include: number; // 0 | 1
   posted_journal_id: number | null;
+  party_id: number | null; // NULL = the document's party (photo path)
 }
 
 /** One edited review-grid row as sent by the client to save/post actions. */
