@@ -272,7 +272,10 @@ export async function GET(
       ]);
       json = {
         fy: schedule.fy,
-        basis: "IT-Act written-down value, block method (s.32)",
+        // No section number: the Income-tax Act, 2025 (in force 1 Apr 2026)
+        // renumbered the 1961 Act's, and an unverified citation must not ride
+        // out on an export a CA signs.
+        basis: "Written-down value, block method — Income-tax Act, India",
         half_year_rule_days: HALF_YEAR_DAYS,
         blocks: schedule.blocks.map((b) => ({
           block: b.block,

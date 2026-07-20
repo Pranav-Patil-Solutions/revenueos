@@ -4,7 +4,14 @@ import { roundHalfUp } from "./india-gst";
 import type { BlockCode, FixedAssetRow } from "../types";
 
 /**
- * Income-tax depreciation, India — the WDV *block* method of s.32.
+ * Income-tax depreciation, India — the written-down-value *block* method.
+ *
+ * Deliberately cites no section number. This was s.32 of the 1961 Act, but the
+ * Income-tax Act, 2025 took effect on 1 April 2026 — inside the range this
+ * code computes — and renumbered it. A statutory reference we can't verify has
+ * no business on output a CA signs, and it must never be load-bearing: section
+ * labels are display metadata, they never reach the arithmetic. See the P7
+ * pre-flight notes in HANDOFF.md before adding one back.
  *
  * The unit of depreciation is the BLOCK, never the individual asset: every
  * asset of a given rate pools together, additions go in at cost, disposals
