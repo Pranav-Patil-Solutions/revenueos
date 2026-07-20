@@ -249,22 +249,31 @@ flag. Two things still need a human with the source material:
 To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
 put the citation in `source`. `ratesFor()` and every caveat follow from there.
 
-## Next: SHIP GATE, then merge
-Per RVOS-002-SPEC.md §SHIP GATE, in order:
-1. npm test + smoke + lint + build green (all green at P10 commit).
-2. **code-reviewer agent on the FULL branch diff** (`master...feat/
-   rvos-002-accountant-edition`) — zero blockers required. Fresh eyes over
-   the whole edition, not any one phase.
-3. **qa-runner agent driving :3322** (DEMO_MODE=1): entity switch → COA add
-   → manual voucher incl. F8/F5/F7 key-driven kind switching + Ctrl+A post
-   → CSV import → Tally import → BS → computation → TDS → compliance →
-   pack print — zero blockers.
-4. EVOLUTION #9+ complete (it is: #10–#18).
-5. Merge to master (LOCAL only — no remote exists; the merge is the ship).
-Note for the qa run: the dev server on :3322 may be a stale process started
-before this build — restart it first. The LIVE db must come out of the run
-byte-identical (drive test artifacts through the same delete-and-verify
-routine P5/P6 used, or run against a scratch copy).
+## SHIP GATE: PASSED — merged to master 2026-07-20 (`a0b76ee`)
+1. ✅ npm test (222) + smoke + lint + build green at P10 (`a8dc04b`).
+2. ✅ code-reviewer on the FULL branch diff: 0 blockers. Confirmed
+   independently: one audited posting path, inclusive books-lock at all
+   three entry points, additive-only migrations, exact string→paise on all
+   file data, caveats reach every output incl. the pack, allowlists derived
+   from the rendering engines, no SDK/API-key, only new dep fast-xml-parser.
+3. ✅ qa-runner drove :3322 (DEMO_MODE=1, fresh server): 0 failures across
+   settings/COA-add/voucher→day-book→TB-balanced/CSV import/Tally preview/
+   BS/computation/TDS/compliance/pack (all 8 sections + banners, no -₹0.00,
+   annexure tied out silently even WITH the QA run's own new activity).
+   Keymap verified via its unit suite (client-side keys can't be curl'd).
+4. ✅ EVOLUTION #10–#18 complete.
+5. ✅ `git merge --no-ff` → master `a0b76ee`; master re-verified (222 tests
+   + SMOKE GREEN post-merge). LOCAL only — no remote exists; local disk is
+   the only copy.
+Live db restored byte-identical after QA (sha256 match) and the QA run's
+two orphan upload files removed; dev server restarted on :3322.
+
+## Future hardening (reviewer notes, explicitly non-blocking)
+- `coa.ts` SEED_GROUPS duplicates group_codes already inlined in db.ts
+  SEED_ACCOUNTS and is only self-tested — collapse to one source of truth.
+- `settings.entity_type / it_regime / presumptive` rely on server-action
+  validation with no SQL CHECK (unlike documents.source_type). Add CHECKs
+  if any non-action write path to settings ever appears.
 
 ## Gotchas
 - better-sqlite3: optional/reused SQL params MUST be `@named` (EVOLUTION #10).
