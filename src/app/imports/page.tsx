@@ -1,14 +1,19 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { ImportExcel } from "@/components/import-excel";
+import { ImportTally } from "@/components/import-tally";
 import type { PartyRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default function ImportsPage() {
-  const parties = getDb()
+  const db = getDb();
+  const parties = db
     .prepare("SELECT * FROM parties ORDER BY name")
     .all() as PartyRow[];
+  const accounts = db
+    .prepare("SELECT id, code, name FROM accounts ORDER BY code")
+    .all() as { id: number; code: string; name: string }[];
 
   return (
     <div>
@@ -50,17 +55,26 @@ export default function ImportsPage() {
           )}
         </section>
 
-        <section className="rounded-xl border border-hairline bg-surface p-5 opacity-70">
+        <section className="rounded-xl border border-hairline bg-surface p-5">
           <h2 className="text-[15px] font-semibold tracking-tight">
             Tally (Day Book XML)
           </h2>
-          <p className="mt-1 text-[12.5px] text-ink-3">
-            Export the Day Book from Tally as XML and bring vouchers across
-            with persistent ledger mapping.
+          <p className="mt-1 mb-4 text-[12.5px] text-ink-3">
+            Export the Day Book as XML. Each ledger is matched to a party or
+            account once and remembered — later imports go straight to review.
+            Journals and anything ambiguous come in unticked with the reason.
           </p>
-          <p className="mt-4 inline-block rounded-full border border-hairline bg-surface-2 px-3 py-1 text-[11.5px] font-medium text-ink-3">
-            Arriving next
-          </p>
+          {parties.length === 0 ? (
+            <p className="rounded-lg border border-hairline bg-surface-2/40 px-4 py-6 text-center text-[12.5px] text-ink-3">
+              Add a{" "}
+              <Link href="/parties" className="font-medium text-accent">
+                party
+              </Link>{" "}
+              first — imports need a default party.
+            </p>
+          ) : (
+            <ImportTally parties={parties} accounts={accounts} />
+          )}
         </section>
       </div>
     </div>

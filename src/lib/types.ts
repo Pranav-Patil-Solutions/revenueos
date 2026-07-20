@@ -17,6 +17,7 @@ export type EntryType =
   | "other";
 export type SettleAccount = "cash" | "bank";
 export type SourceType = "photo" | "excel" | "tally";
+export type LedgerTargetKind = "account" | "party";
 export type EntityType = "proprietorship" | "partnership" | "company";
 export type ItRegime = "old" | "new";
 export type Presumptive = "" | "44AD" | "44ADA";
@@ -119,6 +120,17 @@ export interface DraftRowInput {
   gst_rate: number | null;
   settle_account: SettleAccount;
   include: boolean;
+}
+
+/** Tally ledger name → account or party. Exactly one target id is non-null,
+ * enforced by paired SQL CHECKs. */
+export interface LedgerMappingRow {
+  id: number;
+  ledger_name: string;
+  target_kind: LedgerTargetKind;
+  account_id: number | null;
+  party_id: number | null;
+  created_at: string;
 }
 
 export interface JournalRow {

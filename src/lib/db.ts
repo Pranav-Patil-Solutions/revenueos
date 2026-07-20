@@ -97,6 +97,20 @@ const DDL = `
   CREATE INDEX IF NOT EXISTS idx_lines_journal ON journal_lines(journal_id);
   CREATE INDEX IF NOT EXISTS idx_lines_account ON journal_lines(account_id);
   CREATE INDEX IF NOT EXISTS idx_lines_party   ON journal_lines(party_id);
+
+  -- Tally ledger name → this book's account or party. Persistent: a ledger
+  -- mapped once is never asked about again on later imports. ledger_name is
+  -- UNIQUE so a name can only ever point at one target.
+  CREATE TABLE IF NOT EXISTS ledger_mappings (
+    id          INTEGER PRIMARY KEY,
+    ledger_name TEXT NOT NULL UNIQUE,
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('account','party')),
+    account_id  INTEGER REFERENCES accounts(id),
+    party_id    INTEGER REFERENCES parties(id),
+    created_at  TEXT NOT NULL,
+    CHECK ((target_kind = 'account') = (account_id IS NOT NULL)),
+    CHECK ((target_kind = 'party')   = (party_id   IS NOT NULL))
+  );
 `;
 
 /** Chart of accounts — seeded once, grouped via src/lib/coa.ts metadata. */

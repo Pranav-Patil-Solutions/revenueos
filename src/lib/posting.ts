@@ -26,7 +26,9 @@ import type {
  * manual opposite entry.
  */
 
-const ACC = {
+/** The account codes the posting engine moves. Exported so importers classify
+ * ledgers against the same codes this engine posts to — one source of truth. */
+export const ACC = {
   cash: "1000",
   bank: "1100",
   ar: "1200",

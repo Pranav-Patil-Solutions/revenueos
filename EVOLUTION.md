@@ -219,3 +219,42 @@ from a column without a UNIQUE constraint must detect collisions and turn
 them into a visible per-row error — last-write-wins map building is a silent
 misattribution bug, not a tiebreak. Applies to P5's Tally `ledger_mappings`
 flow and any future name-matching import.
+
+## 13. RVOS-002 P5 (2026-07-20): a balanced journal that was still wrong
+
+**What happened:** the Tally importer collapses a many-legged voucher into one
+staged row keyed on its single party ledger, letting `buildLegs` re-derive the
+account side. The first cut only *recognized* the legs it knew about — tax
+ledgers on a trade voucher, cash/bank on a settlement — and quietly ignored
+every other leg while still staging the full party-leg gross. So a receipt of
+₹10,000 that arrived as ₹9,000 bank + ₹1,000 TDS withheld staged as a clean
+₹10,000 receipt: Bank debited for money that never landed, the TDS never
+booked. Same shape for a discount or round-off on a sale, and for a fixed
+asset bought on a Purchase voucher (booked to Purchases, i.e. capex expensed).
+A sibling bug: a settlement whose non-party ledger mapped to neither Cash nor
+Bank fell through to a `"cash"` default, moving money through an account the
+voucher never touched.
+
+Every one of these produced a *balanced* journal — the party leg and the
+derived legs always summed to zero — and landed `include=1` with no reason, so
+nothing in review or the trial balance could flag it. The unit tests missed it
+because every fixture was a clean 2-leg settlement or a textbook
+party+revenue+CGST+SGST sale. Caught by the pre-commit code-review pass.
+
+**Resolution:** `MappedAccount` now carries the account `type`, and both
+branches partition the legs and refuse the remainder — settlements require
+exactly one cash/bank leg (no default), trade vouchers consume tax legs plus
+non-tax legs whose type matches the voucher's side (income for sale/credit
+note, expense for purchase/debit note) and refuse anything left over. Multiple
+same-type revenue legs still import, since summing those into Sales is
+faithful. Six pinned tests, including a discount on a *zero-tax* sale so GST
+reconciliation can't be what catches it.
+
+**Delta (rule):** when collapsing a many-legged source record into a
+lower-arity internal shape, every source leg must be explicitly consumed or
+explicitly refused. A partition that only matches the legs it recognizes
+discards the rest silently — and because the collapsed shape is re-derived
+from a control total, the result still balances. **Balance is not proof of
+faithfulness:** assert that the parts were all accounted for, not just that
+the sum came out right. Applies to any future importer (bank statements,
+26AS, e-invoice JSON) that folds N source lines into one internal entry.

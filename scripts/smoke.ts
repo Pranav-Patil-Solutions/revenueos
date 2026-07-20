@@ -254,6 +254,127 @@ async function main(): Promise<void> {
   );
   ok("CSV import: both demo parties booked · bad row excluded with reason · TB zero");
 
+  step = "tally (day book XML) import → map ledgers → review → post";
+  const { parseDayBook, tallyVouchersToRows } = await import("../src/lib/import-tally");
+  const accountsByCode = new Map(
+    (db.prepare("SELECT id, code FROM accounts").all() as { id: number; code: string }[]).map(
+      (a) => [a.code, a.id]
+    )
+  );
+  // Posts in 2026-09, after every pinned July/FY assertion above has run.
+  const dayBookXml = `<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA><TALLYMESSAGE>
+   <VOUCHER VCHTYPE="Sales"><DATE>20260902</DATE><VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+    <VOUCHERNUMBER>401</VOUCHERNUMBER><NARRATION>Tally sale #401</NARRATION>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Sharma Traders</LEDGERNAME><AMOUNT>-11800.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Sales Account</LEDGERNAME><AMOUNT>10000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Output CGST</LEDGERNAME><AMOUNT>900.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Output SGST</LEDGERNAME><AMOUNT>900.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+   </VOUCHER>
+   <VOUCHER VCHTYPE="Receipt"><DATE>20260905</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+    <VOUCHERNUMBER>R-40</VOUCHERNUMBER><NARRATION>Against #401</NARRATION>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Bank of Baroda</LEDGERNAME><AMOUNT>-5000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Sharma Traders</LEDGERNAME><AMOUNT>5000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+   </VOUCHER>
+   <VOUCHER VCHTYPE="Journal"><DATE>20260909</DATE><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+    <VOUCHERNUMBER>J-40</VOUCHERNUMBER><NARRATION>Rent accrual</NARRATION>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Rent</LEDGERNAME><AMOUNT>-2500.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+    <ALLLEDGERENTRIES.LIST><LEDGERNAME>Outstanding Rent</LEDGERNAME><AMOUNT>2500.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+   </VOUCHER>
+  </TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
+  const tallyVouchers = parseDayBook(dayBookXml);
+  assert.equal(tallyVouchers.length, 3, "3 vouchers in the day book");
+
+  // The mapping the UI form would save — persisted, so a second import asks nothing.
+  const insertMapping = db.prepare(
+    `INSERT INTO ledger_mappings (ledger_name, target_kind, account_id, party_id, created_at)
+     VALUES (@ledger_name, @target_kind, @account_id, @party_id, @created_at)
+     ON CONFLICT(ledger_name) DO UPDATE SET
+       target_kind = excluded.target_kind,
+       account_id  = excluded.account_id,
+       party_id    = excluded.party_id`
+  );
+  const nowIso = new Date().toISOString();
+  const ledgerTargets: [string, string, number | null, number | null][] = [
+    ["Sharma Traders", "party", null, sharma!.id],
+    ["Sales Account", "account", accountsByCode.get("4000")!, null],
+    ["Output CGST", "account", accountsByCode.get("2200")!, null],
+    ["Output SGST", "account", accountsByCode.get("2210")!, null],
+    ["Bank of Baroda", "account", accountsByCode.get("1100")!, null],
+  ];
+  for (const [ledger_name, target_kind, account_id, party_id] of ledgerTargets) {
+    insertMapping.run({ ledger_name, target_kind, account_id, party_id, created_at: nowIso });
+  }
+  const { unmappedLedgers } = await import("../src/lib/import-tally");
+  const savedMappings = db
+    .prepare("SELECT * FROM ledger_mappings")
+    .all() as import("../src/lib/import-tally").LedgerMapping[];
+  assert.deepEqual(
+    unmappedLedgers(tallyVouchers, savedMappings),
+    [],
+    "saved mappings cover every importable ledger"
+  );
+
+  const tallyParsed = tallyVouchersToRows(
+    tallyVouchers,
+    savedMappings,
+    db.prepare("SELECT id, code, type FROM accounts").all() as import("../src/lib/import-tally").MappedAccount[],
+    { taxInclusive: true }
+  );
+  assert.equal(tallyParsed.included, 2, "sale + receipt import; journal does not");
+  assert.equal(tallyParsed.excluded, 1, "journal excluded with a reason");
+  assert.match(tallyParsed.rows[2].reason, /post it manually via Vouchers/);
+
+  const tallyDocId = db.transaction((): number => {
+    const id = db
+      .prepare(
+        `INSERT INTO documents
+           (party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
+         VALUES (?, 'data/uploads/smoke-daybook.xml', 'smoke-tally-sha', 'extracted', 'tally', 'tally-daybook', ?, ?)`
+      )
+      .run(sharma!.id, nowIso, nowIso).lastInsertRowid as number;
+    for (const r of tallyParsed.rows) {
+      insertStaged.run({
+        document_id: id,
+        row_no: r.row_no,
+        entry_date: r.entry_date,
+        particulars: r.particulars,
+        ref_no: r.ref_no,
+        debit_paise: r.debit_paise,
+        credit_paise: r.credit_paise,
+        entry_type: r.entry_type,
+        gst_rate: r.gst_rate,
+        settle_account: r.settle_account,
+        confidence: r.confidence,
+        include: r.include ? 1 : 0,
+        party_id: r.party_id,
+      });
+    }
+    return id;
+  })();
+  const tallyStaged = db
+    .prepare("SELECT * FROM staged_rows WHERE document_id = ? ORDER BY row_no")
+    .all(tallyDocId) as import("../src/lib/types").StagedRow[];
+  const tallyPosted = postDocument(db, tallyDocId, tallyStaged.map((r) => ({
+    id: r.id,
+    entry_date: r.entry_date,
+    particulars: r.particulars,
+    ref_no: r.ref_no,
+    debit_paise: r.debit_paise,
+    credit_paise: r.credit_paise,
+    entry_type: r.entry_type,
+    gst_rate: r.gst_rate,
+    settle_account: r.settle_account,
+    include: r.include === 1,
+  })));
+  assert.equal(tallyPosted.journals, 2, "2 tally journals posted");
+  assert.equal(trialBalance(db).balanced, true, "TB zero after tally import post");
+  assert.equal(
+    partyStatement(db, sharma!.id)?.closing_paise,
+    1_258_000 + 1_180_000 + 1_180_000 - 500_000,
+    "Sharma AR carries the tally sale less the tally receipt"
+  );
+  ok("Tally import: ledgers mapped once · sale + receipt posted · journal excluded · TB zero");
+
   console.log("\nSMOKE GREEN — capture → extract → review → post → reports all verified.");
   process.exit(0);
 }

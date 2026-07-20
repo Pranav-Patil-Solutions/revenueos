@@ -2,11 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { groupFor } from "./coa";
-import { getDb } from "./db";
+import { getDb, UPLOADS_DIR } from "./db";
 import { extractDocument } from "./extraction";
+import {
+  parseDayBook,
+  tallyVouchersToRows,
+  type LedgerMapping,
+  type MappedAccount,
+} from "./import-tally";
 import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
 import {
@@ -333,6 +340,130 @@ export async function createVoucherParty(
     .run(trimmed, kind, new Date().toISOString()).lastInsertRowid as number;
   revalidatePath("/parties");
   return { id: Number(id), name: trimmed };
+}
+
+/** Step 2 of the Tally import: persist the ledger mappings the user just
+ * chose, re-read the parked Day Book against them, and stage every voucher —
+ * mappings, document and rows in ONE transaction, so a failure anywhere
+ * leaves neither half-saved mappings nor an orphan document. */
+export async function createTallyImport(formData: FormData): Promise<void> {
+  const token = String(formData.get("token") ?? "");
+  // The token names a file we wrote; anything but the UUID we minted (and so
+  // any traversal attempt) is refused before it reaches the filesystem.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.xml$/.test(token)) {
+    throw new Error("That upload has expired — pick the Day Book file again.");
+  }
+  const partyId = Number(formData.get("party_id"));
+  if (!Number.isInteger(partyId) || partyId <= 0) {
+    throw new Error("Pick a default party for vouchers without one.");
+  }
+
+  const db = getDb();
+  if (!db.prepare("SELECT id FROM parties WHERE id = ?").get(partyId)) {
+    throw new Error("Party not found.");
+  }
+  const partyIds = new Set(
+    (db.prepare("SELECT id FROM parties").all() as { id: number }[]).map((p) => p.id)
+  );
+  const accountIds = new Set(
+    (db.prepare("SELECT id FROM accounts").all() as { id: number }[]).map((a) => a.id)
+  );
+
+  // "map:<ledger name>" → "party:<id>" | "account:<id>".
+  const chosen: LedgerMapping[] = [];
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("map:")) continue;
+    const ledger_name = key.slice(4);
+    const raw = String(value);
+    if (raw === "") throw new Error(`Pick a target for the ledger "${ledger_name}".`);
+    const [kind, idRaw] = raw.split(":");
+    const id = Number(idRaw);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error(`Bad target for the ledger "${ledger_name}".`);
+    }
+    if (kind === "party") {
+      if (!partyIds.has(id)) throw new Error(`Party for "${ledger_name}" no longer exists.`);
+      chosen.push({ ledger_name, target_kind: "party", account_id: null, party_id: id });
+    } else if (kind === "account") {
+      if (!accountIds.has(id)) throw new Error(`Account for "${ledger_name}" no longer exists.`);
+      chosen.push({ ledger_name, target_kind: "account", account_id: id, party_id: null });
+    } else {
+      throw new Error(`Bad target for the ledger "${ledger_name}".`);
+    }
+  }
+
+  const filePath = path.join(UPLOADS_DIR, token);
+  const buf = await readFile(filePath).catch(() => {
+    throw new Error("That upload has expired — pick the Day Book file again.");
+  });
+  const vouchers = parseDayBook(buf.toString("utf8").replace(/^\uFEFF/, ""));
+  const sha256 = createHash("sha256").update(buf).digest("hex");
+  const now = new Date().toISOString();
+
+  const upsertMapping = db.prepare(
+    `INSERT INTO ledger_mappings (ledger_name, target_kind, account_id, party_id, created_at)
+     VALUES (@ledger_name, @target_kind, @account_id, @party_id, @created_at)
+     ON CONFLICT(ledger_name) DO UPDATE SET
+       target_kind = excluded.target_kind,
+       account_id  = excluded.account_id,
+       party_id    = excluded.party_id`
+  );
+  const insertRow = db.prepare(
+    `INSERT INTO staged_rows
+       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+     VALUES (@document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
+             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
+  );
+
+  const docId = db.transaction((): number => {
+    for (const m of chosen) upsertMapping.run({ ...m, created_at: now });
+    // Re-read AFTER the upsert so previously-saved mappings and the ones just
+    // chosen are both in play.
+    const mappings = db
+      .prepare("SELECT * FROM ledger_mappings")
+      .all() as LedgerMapping[];
+    const accounts = db
+      .prepare("SELECT id, code, type FROM accounts")
+      .all() as MappedAccount[];
+    const settings = db
+      .prepare("SELECT tax_inclusive FROM settings WHERE id = 1")
+      .get() as { tax_inclusive: number };
+    const parsed = tallyVouchersToRows(vouchers, mappings, accounts, {
+      taxInclusive: settings.tax_inclusive === 1,
+    });
+
+    const id = db
+      .prepare(
+        `INSERT INTO documents
+           (party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
+         VALUES (?, ?, ?, 'extracted', 'tally', 'tally-daybook', ?, ?)`
+      )
+      .run(partyId, path.join("data", "uploads", token), sha256, now, now)
+      .lastInsertRowid as number;
+    for (const r of parsed.rows) {
+      insertRow.run({
+        document_id: id,
+        row_no: r.row_no,
+        entry_date: r.entry_date,
+        particulars: r.particulars,
+        ref_no: r.ref_no,
+        debit_paise: r.debit_paise,
+        credit_paise: r.credit_paise,
+        entry_type: r.entry_type,
+        gst_rate: r.gst_rate,
+        settle_account: r.settle_account,
+        confidence: r.confidence,
+        include: r.include ? 1 : 0,
+        party_id: r.party_id,
+      });
+    }
+    return id;
+  })();
+
+  revalidatePath("/documents");
+  revalidatePath("/imports");
+  redirect(`/documents/${docId}`);
 }
 
 export async function runExtraction(docId: number): Promise<void> {
