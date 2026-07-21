@@ -17,42 +17,40 @@ Tailscale**.
 - **P2 foundation** `1343866` — schema, auth core, DAL, proxy, login page.
   227 tests pass, tsc clean.
 
-## IN FLIGHT — P2, roughly half done
-Written and compiling: `src/lib/auth.ts`, `src/lib/session.ts`,
-`src/lib/dal.ts`, `src/lib/auth-actions.ts`, `src/proxy.ts`,
-`src/app/login/page.tsx`, `src/components/login-form.tsx`, auth tables in
-`db.ts`, row types in `types.ts`.
+- **P2 guards wired** `719e362` — 20 actions + 7 handlers + 22 pages, logout,
+  session-gated chrome, +30 tests.
+- **P2 open-redirect fix** `76c8590` — see gotchas. Found by the zero-context
+  review, not by me.
 
-**NOT done — the app is NOT yet protected.** The proxy redirects anonymous
-users to /login, but that is the optimistic layer only. Nothing behind it
-checks a session yet.
+**P2 is functionally COMPLETE.** Gates: 260 tests · smoke GREEN · lint · tsc ·
+build, all clean. Zero-context code-reviewer on the full branch diff: 1 blocker
+(fixed), no others; it independently confirmed route/action/handler coverage by
+walking the tree rather than trusting the diff.
 
 ## NEXT (in this order)
-1. **Wire the guards — 49 call sites, enumerate from the router, default-deny:**
-   - 20 server actions in `src/lib/actions.ts` → `await requireSession()` as
-     the FIRST line of every export. The rule is absolute so a reviewer can
-     check it by eye; that is why the 3 public auth actions live in the
-     separate `auth-actions.ts`.
-   - 7 route handlers under `src/app/api/**/route.ts` →
-     `const gate = await requireApiSession(); if (gate instanceof Response) return gate;`
-   - 22 pages → `await requireSession()` before any data read.
-2. **`src/app/reports/page.tsx` and `src/app/tax/page.tsx` lack
-   `export const dynamic = "force-dynamic"`** — they render STATICALLY, and the
-   Next docs are explicit that a DAL does not protect a static route (data is
-   fetched at build time). Add force-dynamic to both, or confirm they are pure
-   redirects holding no data.
-3. Logout control in the app chrome (`logout()` already exists in
-   `auth-actions.ts`); show the signed-in username in the topbar.
-4. **Tests.** None exist yet. Minimum: scrypt round-trip · lockout at 5 and its
-   expiry (clock injected, no sleeping) · session expiry + sliding renewal ·
-   token→sha storage (assert the RAW token never appears in the db) · an
-   enumeration test that walks the router and asserts EVERY non-public route
-   401s/redirects anonymously. That last one is the one that catches the route
-   someone adds next year.
-5. `purgeExpiredSessions()` is written but never called — wire it to the P3
-   backup task or app start.
-6. Then P3 backups → P4 Windows installer → P5 Tailscale bind (STRICTLY after
+1. **`purgeExpiredSessions()` is written but never called.** Wire it to the P3
+   backup task or to app start.
+2. **qa-runner has NOT run** — ship-gate step 3. Drive :3322: login enforced,
+   books/reports/pack unchanged by auth, sign-out works, an anonymous curl of
+   `/api/export/...` gets 401 rather than a redirect.
+3. **EVOLUTION.md not yet written** for this build — candidates listed below.
+4. **P1 metadata work** — see the P1 section below. Not started in code.
+5. Then P3 backups → P4 Windows installer → P5 Tailscale bind (STRICTLY after
    P2 merges) → P6 docs.
+
+## P2 — decisions worth not re-litigating
+- Sessions are a TABLE, not a signed stateless cookie, because a signed cookie
+  cannot be revoked and "revoke access" is a real requirement for an office.
+- Only SHA-256 of the token is stored, so a copied db (backup, Syncthing,
+  stolen laptop) yields no usable cookie. Pinned by a test that greps the row
+  dump for the raw token.
+- The lockout counter is PERSISTED. In-memory would be cleared by the restart
+  that autostart-at-logon performs.
+- NO default credentials. First run turns /login into a create-account form,
+  guarded on `userCount() === 0`.
+- Chrome is session-gated in the root layout as PRESENTATION only (the topbar
+  prints company name + GSTIN). Pages still guard themselves — a layout does
+  not re-render on navigation.
 
 ## GOTCHAS (P2)
 - **Next 16 renamed Middleware → Proxy.** `middleware.ts` does not exist; the
@@ -82,6 +80,23 @@ checks a session yet.
 - `grep` silently returns NOTHING in this sandbox (even `grep -c`) while exit
   codes still work — several searches came back falsely clean. Use `sed -nE`
   or the Read tool. BSD `sed` also rejects `\?`; use `-E`.
+- **Never pattern-match a string a browser will later PARSE.** `safeNext()`
+  rejected a leading `//` but not a leading BACKSLASH, and the WHATWG URL
+  parser normalises `/\evil.com` → `//evil.com` → `http://evil.com/`. Because
+  /login is public, the payload arrived on a link to our OWN login page and
+  fired AFTER the victim authenticated. Now resolved against a reserved
+  sentinel origin with an origin equality check (`safeNextPath` in auth.ts).
+  The parser's normalisation rules ARE the attack surface.
+- A `"use server"` module may only export ASYNC functions — that is why
+  `safeNextPath` lives in `auth.ts` and not beside its caller. Anything in an
+  actions file that needs a unit test has to move out of it.
+- `requireSession()` works by THROWING a redirect. Any `try`/`catch` around a
+  guarded call site can swallow it and let the request continue
+  unauthenticated — `runExtraction` opens with `try {`, so its guard sits
+  ABOVE the try. Check this on every new action that catches broadly.
+- ESLint's `react-hooks/rules-of-hooks` fires on ANY function named `use*`,
+  including plain server helpers. `useSecureCookie` had to become
+  `wantSecureCookie`.
 
 ## P1 — what it actually needs (NOT a boolean flip)
 Detail in `RVOS-003-P1-FINDINGS.md`. Three metadata defects, one per file:
