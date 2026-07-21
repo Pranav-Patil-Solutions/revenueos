@@ -82,8 +82,11 @@ try {
 @echo off
 rem Starts RevenueOS. Close this window to stop it.
 cd /d "$AppRoot"
-set REVENUEOS_HTTPS=
-rem NOTE: binds to localhost only. P5 makes the tailnet bind an explicit opt-in.
+rem Binds to THIS MACHINE ONLY by default. To allow the office to reach it
+rem over Tailscale, find the tailnet address with "tailscale ip -4" and set:
+rem     set REVENUEOS_BIND=100.x.y.z
+rem Binding every interface is refused unless REVENUEOS_ALLOW_ANY=1 — that
+rem would serve the books on any network this machine ever joins.
 call npm run start
 "@ | Set-Content -Path $startCmd -Encoding ASCII
   Ok $startCmd
@@ -136,6 +139,16 @@ Then verify the backup can actually come back:
 
 A backup nobody has restored is a rumour.
 
-Remote access over Tailscale is NOT enabled yet (RVOS-003 P5). The app is
-bound to this machine only until then.
+To let the office reach it from another device:
+
+  a. Install Tailscale on this machine and sign in to the office tailnet.
+  b. Find this machine's address:   tailscale ip -4
+  c. Edit start-revenueos.bat and add, above the "call" line:
+         set REVENUEOS_BIND=100.x.y.z
+  d. Restart it. The capture page for phones is then at
+         http://100.x.y.z:3322/capture
+
+Tailscale sits BEHIND the login, not instead of it. Everyone still signs in.
+Binding every interface (0.0.0.0) is refused on purpose — it would serve the
+books on every network this machine ever joins.
 "@

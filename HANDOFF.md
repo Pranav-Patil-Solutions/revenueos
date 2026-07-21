@@ -41,16 +41,43 @@ every 401 into a 307. `route-guards.test.ts` is static and proves a handler
 WOULD answer 401 if reached, never that a request arrives. `test/proxy.test.ts`
 now closes that gap.
 
+- **P3 backups + WAL checkpoint** `962d157` — see EVOLUTION #23; this one
+  found and recovered a real ledger loss.
+- **P4 Windows install path** `e43ce97` — WINDOWS-UNVERIFIED.
+- **P5 bind policy** — loopback default, tailnet opt-in, 0.0.0.0 refused.
+
 ## NEXT (in this order)
-1. **P3 backups** — in progress; see below.
+1. **P6 onboarding docs** — the day-one runbook. Opening balances via account
+   3000 + the `opening` entry type is the most likely day-one stumble and is
+   still undocumented. ALSO: README still claims "Every statutory rate and due
+   date ships verified: false", which became false at `76f023a`.
 2. **P1 metadata work** — see the P1 section. Researched, no code changed. This
-   one touches TESTED, money-adjacent tax code and deserves a FRESH context
-   window, not the tail of a long one.
-3. P4 Windows installer → P5 Tailscale bind (STRICTLY after P2 merges) → P6
-   docs.
-4. Merge to master only after the full gate; master is untouched at `76f023a`
+   touches TESTED, money-adjacent tax code and deserves a FRESH context window,
+   not the tail of a long one.
+3. Merge to master only after the full gate; master is untouched at `76f023a`
    and still shippable. **The branch exists only on this disk** —
    `git push -u origin feat/rvos-003-client-delivery`.
+4. **Windows acceptance with Pranav present** clears invariant N3 — install
+   from clean, reboot, sign in over the tailnet, restore a backup, extract one
+   real photo on the OFFICE's claude account. Nothing before that step may be
+   reported as Windows-ready.
+
+## P3/P4/P5 — decisions worth not re-litigating
+- Backups go through SQLite's ONLINE BACKUP API, never a file copy.
+  `verifyBackup` probes the accounting tables and asserts journal lines
+  balance — `integrity_check` alone passes a zero-byte or foreign database.
+- `configureConnection()` checkpoints the WAL on every open and sets
+  `wal_autocheckpoint = 64`. Do not remove either: see EVOLUTION #23.
+- Uninstall deliberately LEAVES `data/`. An uninstaller that deletes
+  accounting records is a disaster with a progress bar.
+- All installer pass/fail DECISIONS live in `src/lib/preflight.ts` and are unit
+  tested. PowerShell orchestrates and reads an exit code — logic in a .ps1 is
+  logic nothing has ever tested.
+- The `claude` CLI check verifies PRESENCE only and says so; proving sign-in
+  costs a real request. It is non-fatal and names what still works without it.
+- Bind defaults to loopback. Tailnet (100.64-100.127.x.x) is an opt-in via
+  `REVENUEOS_BIND`; 0.0.0.0 and public-looking hosts are REFUSED unless
+  `REVENUEOS_ALLOW_ANY=1`.
 
 ## P2 — decisions worth not re-litigating
 - Sessions are a TABLE, not a signed stateless cookie, because a signed cookie
@@ -111,6 +138,27 @@ now closes that gap.
 - ESLint's `react-hooks/rules-of-hooks` fires on ANY function named `use*`,
   including plain server helpers. `useSecureCookie` had to become
   `wantSecureCookie`.
+
+## GOTCHAS (P3/P4/P5)
+- **A `.db` file is not the database.** See EVOLUTION #23 — the live ledger was
+  lost because all data sat in an uncheckpointed `-wal` while `revenueos.db`
+  was a 4 KB stub, and a sha256 of that stub "verified" the loss as unchanged.
+  Never hash/copy/move/delete a `.db` without its `-wal`/`-shm`, and assert
+  CONTENT (row counts, trial balance), never byte-identity of one file.
+- **`next start` binds 0.0.0.0 by default** — every interface, every network
+  the machine joins. `npm run start` now goes through `scripts/start.ts`, which
+  applies `src/lib/bind.ts`. Do not "simplify" it back to a bare `next start`.
+- `npm run dev` was left binding 0.0.0.0 ON PURPOSE — Pranav's phone capture
+  over Tailscale depends on it. Only production `start` is locked down.
+- **PowerShell treats a backtick as an ESCAPE inside double-quoted
+  here-strings**: `` `t `` becomes a TAB. Writing `` `tailscale ip -4` `` in a
+  `@"..."@` block silently corrupts the text. Use plain quotes; the only
+  legitimate backticks in setup.ps1 are `` `n ``, line continuations and
+  escaped quotes.
+- ESLint forbids `require()`. `checkNativeModule` still needs a LAZY load (a
+  static import throws during module evaluation, so an ABI mismatch would
+  crash the preflight instead of printing its fix) — use `createRequire`.
+- `statfsSync` needs Node 18+; it is how disk headroom is checked.
 
 ## P1 — what it actually needs (NOT a boolean flip)
 Detail in `RVOS-003-P1-FINDINGS.md`. Three metadata defects, one per file:
