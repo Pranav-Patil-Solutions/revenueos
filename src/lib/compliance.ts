@@ -90,6 +90,85 @@ export const RULES: ComplianceRule[] = [
   },
 ];
 
+/**
+ * Year-specific authority.
+ *
+ * The DUE DATES above are the same for FY 2025-26 and FY 2026-27, but the law
+ * behind them is not, and neither are the form numbers. FY 2025-26 is a
+ * 1961-Act year: TDS deposits run on Rule 30 of the 1962 Rules, statements are
+ * filed on 26Q/24Q under Rule 31A, advance tax is s.211 and the return is
+ * s.139(1). From FY 2026-27 all of that is the Income-tax Act 2025 and the
+ * Income-tax Rules 2026, with 26Q/24Q renumbered to Form 140/138.
+ *
+ * RULES above holds the CURRENT (FY 2026-27) authority. This table holds the
+ * older one. Rendering the 2026-27 citation on an FY 2025-26 board would cite
+ * an Act that did not govern the year — the numbers would be right and the
+ * authority wrong, which is the harder error to notice.
+ *
+ * Everything here ships `verified: false`: the FY 2025-26 research is recorded
+ * in RVOS-003-P1-FINDINGS.md but has NOT yet cleared its adversarial re-check.
+ * Flags flip only after it does (EVOLUTION #19).
+ */
+interface PriorAuthority {
+  /** Governs this FY and any earlier one. */
+  upto_fy: string;
+  note: string;
+  verified: boolean;
+  source: string;
+  /** Return-form names for that year, where they differ. */
+  forms?: string;
+}
+
+const PRIOR_AUTHORITIES: Record<string, PriorAuthority> = {
+  "tds-deposit": {
+    upto_fy: "2025-26",
+    note: "Deposit the month's deductions by the 7th of the next month; March deductions by 30 April (non-government deductors).",
+    verified: false,
+    source:
+      "Income-tax Rules 1962 r.30(2) (1961-Act year). Researched 2026-07-21, NOT yet adversarially re-checked — see RVOS-003-P1-FINDINGS.md.",
+  },
+  "tds-return": {
+    upto_fy: "2025-26",
+    note: "Quarterly statements on Form 26Q (non-salary) / 24Q (salary): Q1 by 31 Jul, Q2 by 31 Oct, Q3 by 31 Jan, Q4 by 31 May. The Rules-2026 renumbering to Form 140/138 applies from FY 2026-27, NOT to this year.",
+    verified: false,
+    source:
+      "Income-tax Rules 1962 r.31A(2) (1961-Act year); forms 26Q/24Q in force for all four quarters. Researched 2026-07-21, NOT yet adversarially re-checked.",
+    forms: "26Q/24Q",
+  },
+  "advance-tax": {
+    upto_fy: "2025-26",
+    note: "Cumulative 15% / 45% / 75% / 100% of the year's tax by 15 Jun, 15 Sep, 15 Dec and 15 Mar. Presumptive (s.44AD/44ADA) assessees pay the whole amount by 15 Mar.",
+    verified: false,
+    source:
+      "Income-tax Act 1961 s.211(1)(a); presumptive single instalment s.211(1)(b). Researched 2026-07-21, NOT yet adversarially re-checked.",
+  },
+  itr: {
+    upto_fy: "2025-26",
+    note: "For the FY just ended: 31 Oct for companies and audit cases; 31 Jul otherwise. A 31 Aug tier for business/professional non-audit filers is under verification and is NOT yet applied — the board shows the earlier, safer date.",
+    verified: false,
+    source:
+      "Income-tax Act 1961 s.139(1) Explanation 2. Researched 2026-07-21, NOT yet adversarially re-checked.",
+  },
+};
+
+/**
+ * The rule as it stood in a given FY. Falls back to the current authority when
+ * the year has no separate entry (GST rules, which ITA 2025 did not touch).
+ */
+export function ruleForFy(code: string, fy: string): ComplianceRule {
+  const current = complianceRule(code);
+  if (!current) throw new Error(`Unknown compliance rule "${code}"`);
+  const prior = PRIOR_AUTHORITIES[code];
+  if (!prior || fy > prior.upto_fy) return current;
+  return { ...current, note: prior.note, verified: prior.verified, source: prior.source };
+}
+
+/** Return-form names for the FY — 26Q/24Q up to FY 2025-26, Form 140/138 after. */
+export function tdsReturnForms(fy: string): string {
+  const prior = PRIOR_AUTHORITIES["tds-return"];
+  return prior && fy <= prior.upto_fy ? (prior.forms ?? "26Q/24Q") : "Form 140/138";
+}
+
 export function complianceRule(code: string): ComplianceRule | undefined {
   return RULES.find((r) => r.code === code);
 }
@@ -158,11 +237,8 @@ export function dueItems(
 ): Unmarked[] {
   const y = fyStartYear(fy);
   const items: Unmarked[] = [];
-  const rule = (code: string): ComplianceRule => {
-    const r = complianceRule(code);
-    if (!r) throw new Error(`Unknown compliance rule "${code}"`);
-    return r;
-  };
+  // Resolve each rule AS IT STOOD IN THIS FY — same dates, different statute.
+  const rule = (code: string): ComplianceRule => ruleForFy(code, fy);
 
   if (applies.gst) {
     for (const m of monthsOfFy(fy)) {
@@ -188,7 +264,7 @@ export function dueItems(
           rule("tds-return"),
           `${fy}-Q${q}`,
           `Q${q} ${fyLabel(fy)}`,
-          `26Q/24Q statement for ${QUARTER_MONTHS[q - 1]}`,
+          `${tdsReturnForms(fy)} statement for ${QUARTER_MONTHS[q - 1]}`,
           returnDues[q - 1]
         )
       );
@@ -224,8 +300,7 @@ export function itrItem(
   entityType: EntityType = "proprietorship"
 ): Unmarked {
   const y = fyStartYear(fy);
-  const r = complianceRule("itr");
-  if (!r) throw new Error('Unknown compliance rule "itr"');
+  const r = ruleForFy("itr", fy);
   const audit = auditCase || entityType === "company";
   const due = audit
     ? `${y + 1}-10-31`

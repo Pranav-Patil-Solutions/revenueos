@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import { initSchema, seedCoreData } from "../src/lib/db";
 import {
   dueItems,
+  ruleForFy,
+  tdsReturnForms,
   generateItems,
   itrItem,
   RULES,
@@ -269,4 +271,90 @@ test("generateItems rejects a malformed today", () => {
   const db = complianceDb();
   assert.throws(() => generateItems(db, FY, settingsWith(db, {}), "today"));
   assert.throws(() => generateItems(db, FY, settingsWith(db, {}), ""));
+});
+
+// ── year authority (RVOS-003 P1) ─────────────────────────────────────────
+
+test("a rule cites the statute that actually governed the year", () => {
+  // Same dates, different law. Rendering the ITA-2025 citation on an FY
+  // 2025-26 board would cite an Act that did not govern the year — right
+  // number, wrong authority, which is the harder error to spot.
+  const oldYear = ruleForFy("tds-deposit", "2025-26");
+  assert.match(oldYear.source, /1962|1961/, "FY 2025-26 is a 1961-Act year");
+  assert.equal(/Rules 2026|ITA 2025/.test(oldYear.source), false);
+
+  const newYear = ruleForFy("tds-deposit", "2026-27");
+  assert.match(newYear.source, /Rules 2026/);
+});
+
+test("TDS return forms are year-aware — 26Q/24Q did not become 140/138 retroactively", () => {
+  assert.equal(tdsReturnForms("2025-26"), "26Q/24Q");
+  assert.equal(tdsReturnForms("2026-27"), "Form 140/138");
+
+  const old = dueItems("2025-26", { gst: false, tds: true }).filter(
+    (i) => i.rule_code === "tds-return"
+  );
+  assert.equal(old.length, 4);
+  for (const item of old) {
+    assert.match(item.detail, /26Q\/24Q/, "FY 2025-26 files on the old forms");
+    assert.equal(/140|138/.test(item.detail), false);
+  }
+
+  const current = dueItems("2026-27", { gst: false, tds: true }).filter(
+    (i) => i.rule_code === "tds-return"
+  );
+  for (const item of current) assert.match(item.detail, /Form 140\/138/);
+});
+
+test("the rule note and the rendered detail never contradict each other", () => {
+  // The bug this catches actually shipped: the FY 2026-27 note said "Form 140
+  // (old 26Q)" while dueItems rendered "26Q/24Q statement" on EVERY board,
+  // including FY 2025-26. Test the RENUMBERED names specifically — the current
+  // note legitimately mentions "old 26Q" as a familiarity aid, so a bare
+  // substring check on "26Q" gives a false positive.
+  const renumbered = /140|138/;
+
+  const oldNote = ruleForFy("tds-return", "2025-26").note;
+  const oldDetail = dueItems("2025-26", { gst: false, tds: true }).find(
+    (i) => i.rule_code === "tds-return"
+  )!.detail;
+  assert.equal(renumbered.test(oldDetail), false, "FY 2025-26 does not file on 140/138");
+  assert.equal(
+    /files on Form 140|filed on Form 140/.test(oldNote),
+    false,
+    "the FY 2025-26 note must not say the return is filed on the renumbered form"
+  );
+
+  const newNote = ruleForFy("tds-return", "2026-27").note;
+  const newDetail = dueItems("2026-27", { gst: false, tds: true }).find(
+    (i) => i.rule_code === "tds-return"
+  )!.detail;
+  assert.ok(renumbered.test(newDetail), "FY 2026-27 files on 140/138");
+  assert.ok(renumbered.test(newNote), "and its note must say so");
+});
+
+test("NOTHING claims verification for FY 2025-26 until the re-check clears", () => {
+  // EVOLUTION #19: research is not verification. The findings exist; the
+  // adversarial pass has not run, so every FY 2025-26 rule must still warn.
+  for (const code of ["tds-deposit", "tds-return", "advance-tax", "itr"]) {
+    assert.equal(
+      ruleForFy(code, "2025-26").verified,
+      false,
+      `${code} claims FY 2025-26 verification nobody has performed`
+    );
+  }
+});
+
+test("GST rules resolve identically in both years — ITA 2025 did not touch them", () => {
+  for (const code of ["gstr1", "gstr3b"]) {
+    assert.deepEqual(ruleForFy(code, "2025-26"), ruleForFy(code, "2026-27"));
+  }
+});
+
+test("the ITR board still shows the EARLIER date while 31 Aug is unverified", () => {
+  // Directional conservatism: an unproven LATER deadline is the dangerous
+  // direction to be wrong in.
+  const item = itrItem("2025-26", false, "partnership");
+  assert.equal(item.due_date, "2026-07-31");
+  assert.equal(item.verified, false);
 });
