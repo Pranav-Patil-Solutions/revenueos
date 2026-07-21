@@ -295,8 +295,12 @@ export function restoreBackup(
 
   try {
     if (existsSync(targetDbPath)) {
-      previous = `${targetDbPath}.pre-restore-${stampFor(now)}`;
-      renameSync(targetDbPath, previous);
+      const candidate = `${targetDbPath}.pre-restore-${stampFor(now)}`;
+      renameSync(targetDbPath, candidate);
+      // Only claim the book was preserved AFTER the move actually succeeded.
+      // Assigning first would send a panicking operator to a path that does
+      // not exist, in the event the rename itself threw.
+      previous = candidate;
     }
 
     for (const sidecar of ["-wal", "-shm"]) {

@@ -201,9 +201,6 @@ const DDL = `
     UNIQUE (fy, block)
   );
 
-  -- Tally ledger name → this book's account or party. Persistent: a ledger
-  -- mapped once is never asked about again on later imports. ledger_name is
-  -- UNIQUE so a name can only ever point at one target.
   -- One human mark per compliance item: done, or not-applicable. Everything
   -- else on the board (pending/overdue) is derived, never stored, so the
   -- calendar can't hold a stale status. Period strings are the item's own
@@ -218,6 +215,9 @@ const DDL = `
     UNIQUE (rule_code, period)
   );
 
+  -- Tally ledger name → this book's account or party. Persistent: a ledger
+  -- mapped once is never asked about again on later imports. ledger_name is
+  -- UNIQUE so a name can only ever point at one target.
   CREATE TABLE IF NOT EXISTS ledger_mappings (
     id          INTEGER PRIMARY KEY,
     ledger_name TEXT NOT NULL UNIQUE,

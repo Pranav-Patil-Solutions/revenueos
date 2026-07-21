@@ -46,7 +46,42 @@ now closes that gap.
 - **P4 Windows install path** `e43ce97` — WINDOWS-UNVERIFIED.
 - **P5 bind policy** — loopback default, tailnet opt-in, 0.0.0.0 refused.
 
-- **P6 docs** — `docs/DAY-ONE.md` + README corrected.
+- **P6 docs** `6701238` — `docs/DAY-ONE.md` + README corrected.
+- **P1 part 1** `9dd50d6` — year-aware authority in compliance.ts.
+- **P1 part 2** `662a2df` — adversarial re-check cleared FY 2025-26; adopted
+  the 31 Aug ITR tier.
+- **P1 part 3** `69f10f4` — verification is per GROUP, not per year.
+- **P1 review fixes** `ea0c6bf` — both warnings cleared.
+
+**P1 IS SUBSTANTIALLY COMPLETE.** Code review of the tax range: 0 blockers,
+2 warnings (both fixed). It independently confirmed the FY-string boundaries
+and that buildComputation's per-branch group lists are a SUPERSET of what each
+branch reads, so the caveat cannot go silent on a rate that was read.
+
+### What P1 settled
+- **FY 2025-26 is a 1961-Act year** — confirmed twice, independently, from
+  gazette PDFs (FA 2026 s.2(1) charges AY 2026-27 under the 1961 Act; s.3(1)
+  separately charges tax year 2026-27 under ITA 2025).
+- **20 of 21 claims survived** two adversarial passes told to refute.
+- **The 31 Aug ITR tier is adopted.** I had held 31 Jul as "conservative"; that
+  was wrong by a month. FA 2026 s.5 substituted Expln 2 to s.139(1) of the
+  1961 Act w.e.f. 1 Mar 2026. The test is INCOME-based ("assessee having
+  income from profits and gains of business or profession whose accounts are
+  not required to be audited"), so a non-audited FIRM qualifies — closes
+  RVOS-002 open item #2, and the popular "31 Aug = ITR-3/4" gloss is wrong.
+- **Verification is now per FIELD-GROUP per year.** An FY 2025-26 book-profit
+  computation renders CAVEAT-FREE; it previously warned about everything.
+- **FY 2026-27 was over-claiming.** Nobody ever confirmed the s.44AD/44ADA/
+  44AE deemed-profit percentages for EITHER year (EVOLUTION #19 covered
+  presumptive only in the advance-tax context), so presumptive is flagged for
+  both rather than inheriting an unexamined claim.
+
+## THE ONE REMAINING TAX GAP
+**s.44AD / 44ADA / 44AE deemed-profit percentages (8% / 6% / 50%)** are the
+only figures still unconfirmed. The app SAYS SO on any presumptive
+computation. To close: read the sections, add citations to
+`RATE_VERIFICATION` in india-it.ts keyed `{year: {presumptive: "<citation>"}}`.
+Nothing else is needed — the machinery is in place.
 
 ## NEXT (in this order)
 1. **P1 metadata work** — see the P1 section. Researched, no code changed. This
