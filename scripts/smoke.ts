@@ -430,10 +430,11 @@ async function main(): Promise<void> {
   const { buildComputation } = await import("../src/lib/tax/computation");
   const comp = buildComputation(db, depFy);
 
-  // Rates for this year are NOT confirmed — the computation must say so
-  // rather than presenting a provisional figure as final.
-  assert.equal(comp.provisional, true, "unconfirmed year is flagged");
-  assert.match(comp.caveat, /Confirm this year's rates before filing/);
+  // 2026-27 rates were verified against the gazette texts (2026-07-21) —
+  // the computation must now be caveat-free, and would regress loudly if a
+  // rate table lost its verification.
+  assert.equal(comp.provisional, false, "2026-27 has its own verified table");
+  assert.equal(comp.caveat, "", "verified year computes caveat-free");
 
   // Income ₹36,000 (July khata ₹16,000 + CSV sale ₹10,000 + Tally sale
   // ₹10,000, all taxable-of-gross) less ₹32,500 of expenses.
@@ -453,7 +454,7 @@ async function main(): Promise<void> {
     true,
     "nothing owed, nothing scheduled"
   );
-  ok("Computation: turnover ₹36,000 · book profit ₹3,500 · dep bridge nets to nil · tax NIL · rates flagged provisional");
+  ok("Computation: turnover ₹36,000 · book profit ₹3,500 · dep bridge nets to nil · tax NIL · 2026-27 rates verified, no caveat");
 
   step = "tds: deduct on payment → 26Q → challan deposit";
   // Posts in 2026-10 (Q3), AFTER the computation leg has pinned its FY
@@ -586,14 +587,11 @@ async function main(): Promise<void> {
   const packGst = monthsOfFy("2026-27").map((m) => gstr3b(db, m));
   assert.equal(packGst.length, 12, "GST sweep covers the FY incl. the Dec→Jan seam");
   const packComp = buildComputation(db, "2026-27");
-  assert.ok(
-    packComp.provisional && packComp.caveat.length > 0,
-    "computation caveat travels into the pack"
-  );
+  assert.equal(packComp.caveat, "", "verified 2026-27: pack renders no rates caveat");
   const { TDS_SECTIONS } = await import("../src/lib/tax/tds");
   assert.ok(
-    TDS_SECTIONS.every((s) => s.verified === false),
-    "TDS sections still flagged unverified for the pack banner"
+    TDS_SECTIONS.every((s) => s.verified === true),
+    "TDS sections verified — the pack's unconfirmed banner stays hidden"
   );
   const packPosted = postedDepreciation(db, "2026-27");
   const packSchedule = depreciationSchedule(db, "2026-27");

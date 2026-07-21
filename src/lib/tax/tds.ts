@@ -16,12 +16,20 @@ import type { TdsEntryRow } from "../types";
  * Rates are basis points to keep the arithmetic in integers — 1% is 100 bp, so
  * tds = base * bp / 10000 with a single rounding step.
  *
- * SECTION CODES: these are the codes the office knows and that appear on
- * challans and quarterly returns, so they are used as identifiers. But the
- * Income-tax Act, 2025 renumbered the statute from 1 April 2026, and this
- * table has NOT been confirmed against the current return schema — same
- * caveat as india-it.ts, and `verified` says so on every section. Confirm
- * before a return is filed from these.
+ * SECTION CODES: the 1961-Act codes (194C…) are kept as labels because they
+ * are what the office knows. From FY 2026-27, filings themselves are
+ * renumbered: the Income-tax Rules 2026 (CBDT Notification 22/2026 /
+ * G.S.R. 198(E), 20 Mar 2026) replace Form 26Q with FORM 140 and Form 24Q
+ * with FORM 138, and each payment type gets a numeric code under ITA 2025
+ * s.392/s.393 — the per-section `source` fields carry the mapping. The
+ * internal '26Q'/'24Q' identifiers stay as familiar labels; the pages say
+ * what the filing is actually called.
+ *
+ * Rates and thresholds below were VERIFIED 2026-07-21 against the fetched
+ * gazette text of ITA 2025 s.393(1) Table (egazette 265620.pdf), with each
+ * figure independently re-checked by an adversarial pass. Verification
+ * corrected two stale Budget-2025-era thresholds (194J ₹30k→₹50k; 194I
+ * ₹2.4L/yr → ₹50k/month-or-part).
  */
 
 export interface TdsSection {
@@ -32,15 +40,17 @@ export interface TdsSection {
   bp: number;
   /** Some sections carry a second rate for a different payee or use. */
   alt?: { bp: number; label: string };
-  /** Single-payment threshold below which no deduction is required, in paise;
-   * null where the office must apply an aggregate/annual test itself. */
+  /** Threshold below which no deduction is required, in paise; null where
+   * the office must apply an aggregate/annual test itself. Per PAYMENT for
+   * most sections; for rent (194I) the statutory test is per MONTH or part
+   * of a month. */
   threshold_paise: number | null;
   note: string;
   /** False = the rate has not been confirmed against the Act. */
   verified: boolean;
+  /** Where the verified figures come from — statute + new filing identity. */
+  source: string;
 }
-
-const LAKH = 10_000_000;
 
 export const TDS_SECTIONS: TdsSection[] = [
   {
@@ -49,46 +59,58 @@ export const TDS_SECTIONS: TdsSection[] = [
     bp: 100,
     alt: { bp: 200, label: "Non-individual / company payee" },
     threshold_paise: 30_000 * 100,
-    note: "1% for an individual or HUF payee, 2% otherwise. Aggregate annual test applies as well as the single-payment one.",
-    verified: false,
+    note: "1% for an individual or HUF payee, 2% otherwise. The ₹1,00,000 aggregate annual test per payee applies as well as the single-payment one — the aggregate test is the office's to apply.",
+    verified: true,
+    source:
+      "ITA 2025 s.393(1) Table Sl. 6(i) (gazette 265620.pdf); new return codes 1023 (indiv/HUF) / 1024 on Form 140. Verified 2026-07-21.",
   },
   {
     code: "194J",
     label: "Professional / technical fees",
     bp: 1000,
     alt: { bp: 200, label: "Technical services / call-centre" },
-    threshold_paise: 30_000 * 100,
-    note: "10% for professional fees; 2% for technical services.",
-    verified: false,
+    threshold_paise: 50_000 * 100,
+    note: "10% for professional fees or royalty; 2% for technical services or call-centre. Threshold ₹50,000 per tax year (raised from the pre-2025 ₹30,000); NIL threshold for director remuneration.",
+    verified: true,
+    source:
+      "ITA 2025 s.393(1) Table Sl. 6(iii) (gazette 265620.pdf) — threshold ₹50,000, correcting this app's earlier ₹30,000. Files on Form 140. Verified 2026-07-21.",
   },
   {
     code: "194I",
     label: "Rent",
     bp: 1000,
     alt: { bp: 200, label: "Plant & machinery" },
-    threshold_paise: 2.4 * LAKH,
-    note: "10% for land, building or furniture; 2% for plant & machinery.",
-    verified: false,
+    threshold_paise: 50_000 * 100,
+    note: "10% for land, building or furniture; 2% for plant & machinery. Threshold ₹50,000 for a MONTH or part of a month — the old ₹2,40,000/year aggregate test no longer exists.",
+    verified: true,
+    source:
+      "ITA 2025 s.393(1) Table Sl. 2(ii) (gazette 265620.pdf) — per-month ₹50,000 test, correcting this app's earlier ₹2,40,000/yr; new return codes 1008 (machinery) / 1009 on Form 140. Verified 2026-07-21.",
   },
   {
     code: "194H",
     label: "Commission / brokerage",
     bp: 200,
     threshold_paise: 20_000 * 100,
-    note: "2% on commission or brokerage.",
-    verified: false,
+    note: "2% on commission or brokerage (non-insurance). Threshold ₹20,000 per tax year.",
+    verified: true,
+    source:
+      "ITA 2025 s.393(1) Table Sl. 1(ii) (gazette 265620.pdf); new return code 1006 on Form 140. Verified 2026-07-21.",
   },
   {
     code: "192B",
     label: "Salary",
     bp: 0,
     threshold_paise: null,
-    note: "Computed per employee on estimated annual salary — enter the amount manually; this app does not run payroll.",
-    verified: false,
+    note: "Computed per employee at the average rate on estimated annual salary — enter the amount manually; this app does not run payroll.",
+    verified: true,
+    source:
+      "ITA 2025 s.392(1) (gazette 265620.pdf) — slab-computed, no fixed rate; files on Form 138 (old 24Q). Verified 2026-07-21.",
   },
 ];
 
-/** Rate applied when the payee has no PAN, whatever the section says. */
+/** Rate applied when the payee has no PAN, whatever the section says — the
+ * penal floor survives the renumbering as ITA 2025 s.397(2)(b)(i) (deduct at
+ * the higher of the provision's rate or 20%). Verified 2026-07-21. */
 export const NO_PAN_BP = 2000; // 20%
 
 export function tdsSection(code: string): TdsSection | undefined {
@@ -144,8 +166,14 @@ export function computeTds(
   const belowThreshold =
     section.threshold_paise !== null && basePaise < section.threshold_paise;
   if (belowThreshold) {
+    // The follow-up test differs by section: rent's threshold is per MONTH
+    // (a warning telling the office to check an "annual aggregate" would
+    // contradict 194I's own verified semantics), most others aggregate
+    // across the year.
     warnings.push(
-      `Under the single-payment threshold for ${section.code}, but the annual aggregate may still cross it — check before skipping the deduction.`
+      section.code === "194I"
+        ? `Under the ${section.code} threshold for a month — deduct in any month whose rent (or part-month rent) crosses it.`
+        : `Under the single-payment threshold for ${section.code}, but the annual aggregate may still cross it — check before skipping the deduction.`
     );
   }
   if (section.bp === 0 && !useAlt) {

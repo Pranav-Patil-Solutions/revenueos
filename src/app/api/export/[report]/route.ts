@@ -13,7 +13,7 @@ import {
   type PnlPeriod,
 } from "@/lib/reports";
 import { buildComputation } from "@/lib/tax/computation";
-import { q24Summary, q26Summary } from "@/lib/tax/tds";
+import { q24Summary, q26Summary, TDS_SECTIONS } from "@/lib/tax/tds";
 import {
   blockFor,
   depreciationSchedule,
@@ -402,8 +402,13 @@ export async function GET(
       headers = ["Payee", "PAN", "Section", "Deductions", "Base", "TDS"];
       rows = [
         // CSV-shaped return PREP, not the filing format itself — and every
-        // rendering carries the unverified-rates note (EVOLUTION #15).
-        ["NOTE — section rates unconfirmed against the renumbered Act; verify before filing. CA to verify.", "", "", "", "", ""],
+        // rendering carries the qualifying notes (EVOLUTION #15): the
+        // unverified-rates caveat only while a section is actually
+        // unverified, the filing-identity note always.
+        ...(TDS_SECTIONS.some((sec) => !sec.verified)
+          ? [["NOTE — some section rates unconfirmed against the renumbered Act; verify before filing. CA to verify.", "", "", "", "", ""]]
+          : []),
+        [`NOTE — files on Form ${report === "tds-26q" ? "140 (old 26Q)" : "138 (old 24Q)"} from FY 2026-27 (Income-tax Rules 2026).`, "", "", "", "", ""],
         ...s.lines.map((l) => [
           l.party_name,
           l.party_pan || "MISSING",

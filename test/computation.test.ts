@@ -119,14 +119,22 @@ test("taxes paid net off the liability, and an overpayment reads as a refund", (
   assert.equal(after.net_payable_paise, -R(5_000)); // negative = refund
 });
 
-test("the computation carries the rate caveat for an unconfirmed year", () => {
+test("the rate caveat reaches the computation for a year with no table", () => {
   const db = postedDb();
-  const c = buildComputation(db, FY);
-  // These books sit in a year with no confirmed table, so every consumer of
-  // this object has to be told before the numbers are used.
+  // 2030-31 has no rate table — the carried-forward rates must arrive with
+  // the warning attached, so every consumer is told before the numbers are
+  // used.
+  const c = buildComputation(db, "2030-31");
   assert.equal(c.provisional, true);
-  assert.ok(c.caveat.length > 0);
+  assert.match(c.caveat, /No rate table for 2030-31/);
   assert.match(c.caveat, /Confirm this year's rates before filing/);
+});
+
+test("a verified year computes caveat-free", () => {
+  const db = postedDb();
+  const c = buildComputation(db, FY); // 2026-27 — verified 2026-07-21
+  assert.equal(c.provisional, false);
+  assert.equal(c.caveat, "");
 });
 
 test("total income is rounded to the nearest ten rupees before tax is applied", () => {

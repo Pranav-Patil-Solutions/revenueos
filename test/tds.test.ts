@@ -67,14 +67,36 @@ test("thresholds warn but never auto-skip the deduction", () => {
   assert.match(c.warnings.join(" "), /annual aggregate/);
 });
 
-test("every section carries its unverified flag into the warnings", () => {
+test("verified sections cite the gazette and drop the unconfirmed warning", () => {
   for (const s of TDS_SECTIONS) {
-    assert.equal(s.verified, false); // if this fails, someone verified — update the wording checks
-    const c = computeTds(R(50_000), s.code, true);
-    assert.match(c.warnings.join(" "), /unconfirmed — verify against the Act/);
+    // All five were verified 2026-07-21 against ITA 2025 s.392/s.393. A new
+    // section added unverified will (correctly) fail here — verify it or
+    // exclude it deliberately.
+    assert.equal(s.verified, true, s.code);
+    assert.match(s.source, /gazette|Gazette/, `${s.code} verified without a citation`);
+    const c = computeTds(R(60_000), s.code, true);
+    assert.doesNotMatch(c.warnings.join(" "), /unconfirmed/);
   }
   assert.throws(() => computeTds(R(100), "999Z", true), /Unknown TDS section/);
   assert.throws(() => computeTds(-1, "194C", true), /non-negative/);
+});
+
+test("verified thresholds: 194J ₹50,000/yr and 194I ₹50,000/month", () => {
+  // 194J moved ₹30,000 → ₹50,000 (ITA 2025 s.393(1) Table 6(iii)) — a
+  // ₹40,000 fee that used to deduct is now below the threshold.
+  assert.equal(computeTds(R(40_000), "194J", true).below_threshold, true);
+  assert.equal(computeTds(R(50_000), "194J", true).below_threshold, false);
+  // 194I is now a per-month test at ₹50,000 — one month's rent of ₹45,000
+  // warns, ₹60,000 deducts. The old ₹2,40,000/yr aggregate is gone, and the
+  // warning must not tell the office to check an aggregate that no longer
+  // exists.
+  const rent = computeTds(R(45_000), "194I", true);
+  assert.equal(rent.below_threshold, true);
+  assert.match(rent.warnings.join(" "), /month/i);
+  assert.doesNotMatch(rent.warnings.join(" "), /annual aggregate/);
+  assert.equal(computeTds(R(60_000), "194I", true).below_threshold, false);
+  const rentNote = TDS_SECTIONS.find((s) => s.code === "194I")!.note;
+  assert.match(rentNote, /month/i);
 });
 
 test("salary (192B) has no standard rate and says so", () => {

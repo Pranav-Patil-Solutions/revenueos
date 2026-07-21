@@ -74,9 +74,16 @@ export default async function TdsPage({
         </span>
       </div>
 
+      {TDS_SECTIONS.some((s) => !s.verified) && (
+        <p className="mt-4 rounded-lg border border-hairline bg-surface-2/60 px-4 py-2.5 text-[12.5px] text-ink-3">
+          Some section rates in this app are unconfirmed against the
+          renumbered Act — verify before filing. CA to verify.
+        </p>
+      )}
       <p className="mt-4 rounded-lg border border-hairline bg-surface-2/60 px-4 py-2.5 text-[12.5px] text-ink-3">
-        Section rates in this app are unconfirmed against the renumbered Act —
-        verify before filing. CA to verify.
+        From FY 2026-27, quarterly statements file on Form 140 (old 26Q) and
+        Form 138 (old 24Q) under the Income-tax Rules 2026 — the familiar
+        names are kept here as labels.
       </p>
 
       {/* -------- New deduction -------- */}

@@ -224,30 +224,34 @@ the reason suffixed onto particulars so review shows it:
 - an unmapped ledger, or a mapping with a broken target.
 Multiple same-type revenue legs DO import (buildLegs sums them into Sales).
 
-## OPEN — the rates are not confirmed (carry this into every later phase)
-`india-it.ts` ships with EVERY table `verified: false`, so the computation
-page, the CSV and the JSON all currently say "rates not confirmed". That is
-working as designed, not a bug — but it means the office sees a warning on
-every computation until someone checks a year against the Act and flips the
-flag. Two things still need a human with the source material:
+## OPEN — verification state (FY 2026-27 VERIFIED 2026-07-21)
+The 2026-27 rate table, all five TDS sections and all six compliance rules
+are `verified: true` with gazette/portal citations in their `source` fields
+(EVOLUTION #19 records the protocol and what it caught: 194J ₹50k and 194I
+₹50k/month threshold corrections, Form 140/138 renumbering, the 31-Aug ITR
+tier, presumptive single-instalment advance tax, rebate = s.156). Banners
+are driven by the flags, so the verified year renders caveat-free while any
+unverified year still warns everywhere.
 
-1. **Confirm FY 2026-27 rates.** The Budget-2025 new-regime ladder is carried
-   forward on the basis that Budget 2026 announced no change: nil to ₹4L ·
-   5% ₹4–8L · 10% ₹8–12L · 15% ₹12–16L · 20% ₹16–20L · 25% ₹20–24L · 30%
-   above ₹24L; rebate ₹60,000 up to ₹12L; surcharge 10/15/25/37 with the new
-   regime capped at 25%; cess 4%. Also confirm the firm/company rates, the
-   presumptive percentages, and the 40(b) ceiling (₹3,00,000-or-90% on the
-   first ₹6L, 60% on the balance — the SPEC's "90% of first ₹3L, min ₹1.5L"
-   is the pre-2024 version and was not used). Much published material
-   conflates "FY 2026-27" with "AY 2026-27", which is a different year.
-2. **Map the section numbers.** The Income-tax Act, 2025 took effect
-   1 April 2026 — inside the computed range — and renumbered the 1961 Act;
-   sources disagree on where the rebate now sits (156 vs 157). No section
-   number appears in any output today and none should be added until this is
-   settled. Section labels stay display metadata, never load-bearing.
+Still open, deliberately:
+1. **2025-26 stays unverified** — a 1961-Act year assembled from secondary
+   sources; computations for it keep their caveat until someone checks it
+   against THAT Act's schedule. Same flip protocol applies.
+2. **Partnership ITR-5 and the 31-Aug tier** — the verified claim covers
+   ITR-3/4 (business/professional non-audit); whether a firm's ITR-5 gets
+   31 Aug is unpinned, so a partnership's board shows the safe 31 Jul.
+   Pin it from s.263(1)(c)'s exact wording and widen itrItem if it applies.
+3. **Not modelled** (documented gaps, not errors): 15% surcharge cap on
+   dividend/s.196-198 capital-gains income (no special-rate income in the
+   app); salary standard deduction (₹75k new / ₹50k old); GSTR-9/9C annual
+   return rule (due 31 Dec of the next FY — worth adding to compliance);
+   QRMP filing dates; TDS on partner remuneration (old 194T — matters for
+   partnership clients); due-date EXTENSIONS by notification are not
+   tracked.
 
-To confirm a year: add or edit its entry in `TAX_YEARS`, set `verified: true`,
-put the citation in `source`. `ratesFor()` and every caveat follow from there.
+To confirm a year: add/edit its `TAX_YEARS` entry, set `verified: true`,
+put the citation in `source`. `ratesFor()` and every caveat follow. Same
+pattern per TDS section and compliance rule.
 
 ## SHIP GATE: PASSED — merged to master 2026-07-20 (`a0b76ee`)
 1. ✅ npm test (222) + smoke + lint + build green at P10 (`a8dc04b`).

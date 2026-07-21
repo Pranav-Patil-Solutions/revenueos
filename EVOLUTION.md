@@ -484,3 +484,42 @@ every past lesson as attached to the DATA SHAPE, not the page it was
 learned on: any new view over party balances re-inherits the cross-ledger
 lesson, any new importer re-inherits "explicitly consume or refuse every
 leg" (#13), any new allowlist re-inherits #17.
+
+## 19. RVOS-002 rates verification (2026-07-21): the flip protocol, and what it caught
+
+**What happened:** every statutory figure had shipped `verified: false` from
+secondary sources, with banners on every surface — by design. The
+verification pass (5 research agents fetching primary texts — Finance Act
+2026 gazette, Income-tax Act 2025 gazette, Income-tax Rules 2026, Budget
+Memorandum, GST portal — then an independent adversarial re-check of all 31
+claims, each required to state its FY-vs-AY basis) confirmed the income-tax
+table wholesale but caught real drift the tests could never see: two TDS
+thresholds were stale (194J ₹30k → ₹50k/yr; 194I's ₹2.4L/yr aggregate no
+longer exists — it is ₹50k per month-or-part), the filings themselves are
+renumbered from FY 2026-27 (Form 140/138 replace 26Q/24Q, new numeric
+section codes — Rules 2026), a NEW ITR tier exists (31 Aug for
+business/professional non-audit, s.263(1)(c) as amended), presumptive
+assessees owe ONE advance-tax instalment (s.408(2)) not four, and the
+long-disputed rebate section number resolved to s.156 (not 157).
+
+**Resolution:** a verified `2026-27` table with the gazette citations in
+`source`; both thresholds corrected and pinned by tests; TdsSection grew a
+`source` field; compliance rules flipped with per-rule authorities; ITR due
+became entity- and year-aware; presumptive advance tax collapsed on the
+board and in the computation; every "unconfirmed" banner became conditional
+on the flags it reports; 26Q/24Q labels kept as familiar names with the new
+filing identity displayed alongside. Deliberate conservatism, documented:
+2025-26 stays unverified (a 1961-Act year no one checked against that Act);
+a partnership's 31-Aug entitlement is unpinned, so its board shows the
+earlier 31 Jul.
+
+**Delta (rule):** statutory DATA is code that goes stale without failing a
+single test — it needs its own verification protocol, now standing: fetch
+the primary text (gazette, not a chart), state the FY/AY basis explicitly
+for every figure, adversarially re-check each claim independently, put the
+citation IN the data (`source` beside `verified`), and pin the corrected
+values with tests so a silent revert fails loudly. Two corollaries: banners
+must be driven by the flags they report (an unconditional caveat becomes a
+lie the day the flag flips); and where an assessee's class is unpinned, a
+deadline tracker's conservatism must be directional — always the EARLIER
+date, never the later one.

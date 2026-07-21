@@ -11,7 +11,7 @@ import {
   HALF_YEAR_DAYS,
   postedDepreciation,
 } from "@/lib/tax/depreciation";
-import { q24Summary, q26Summary, tdsRegister } from "@/lib/tax/tds";
+import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
 import type {
   FixedAssetRow,
   PartyRow,
@@ -271,13 +271,15 @@ export default async function PackPage({
             not filing advice.
           </p>
         </div>
-        <p className={`${criticalBanner} border-t`}>
-          <strong className="font-semibold">Provisional figures.</strong>{" "}
-          Statutory rates and TDS sections in this pack are unconfirmed against
-          the renumbered Act — each section below carries its own caveat.
-          Verify against the Act for the year being filed before anything is
-          submitted. CA to verify.
-        </p>
+        {(comp.caveat !== "" || TDS_SECTIONS.some((s) => !s.verified)) && (
+          <p className={`${criticalBanner} border-t`}>
+            <strong className="font-semibold">Provisional figures.</strong>{" "}
+            Statutory rates in this pack are unconfirmed for this year — each
+            affected section below carries its own caveat. Verify against the
+            Act for the year being filed before anything is submitted. CA to
+            verify.
+          </p>
+        )}
       </section>
 
       {/* -------- Balance Sheet -------- */}
@@ -556,9 +558,15 @@ export default async function PackPage({
 
       {/* -------- TDS -------- */}
       <PackSection title="TDS summary & challans" sub={fyLabel(fy)}>
+        {TDS_SECTIONS.some((s) => !s.verified) && (
+          <p className={infoBanner}>
+            Some section rates in this app are unconfirmed against the
+            renumbered Act — verify before filing. CA to verify.
+          </p>
+        )}
         <p className={infoBanner}>
-          Section rates in this app are unconfirmed against the renumbered Act
-          — verify before filing. CA to verify.
+          From FY 2026-27 these statements file on Form 140 (old 26Q) and
+          Form 138 (old 24Q) — Income-tax Rules 2026.
         </p>
         {register.length === 0 && challans.length === 0 ? (
           <Empty>No deductions recorded this FY.</Empty>

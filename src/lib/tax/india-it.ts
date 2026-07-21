@@ -90,12 +90,25 @@ export interface TaxYearRates {
 /**
  * Rate tables, oldest first.
  *
- * NOTHING here is confirmed. The Budget-2025 ladder is carried into 2026-27 on
- * the basis that Budget 2026 announced no change to the slabs — but much of the
- * published material conflates "FY 2026-27" with "AY 2026-27" (a different
- * year), and this was assembled from secondary sources. Flip `verified` to true
- * ONLY after checking a year against the bare Act, and put the citation in
- * `source` when you do.
+ * 2026-27 is VERIFIED against fetched official texts (see its `source`).
+ * 2025-26 is deliberately left unverified: it is a 1961-Act year assembled
+ * from secondary sources, and no one has checked it against that Act's own
+ * schedule — computations for it keep their caveat. Flip `verified` ONLY
+ * after checking a year against the bare Act/Finance Act text, and put the
+ * citation in `source` when you do.
+ *
+ * Model notes for the verified year (Income-tax Act 2025 + Finance Act 2026):
+ * - `surcharge` stores the OLD-regime ladder (10/15/25/37). The new regime's
+ *   own ladder has NO 37% tier (FA 2026 s.3(4)(b) Table Sl. 10 tops out at
+ *   25%); `surcharge_cap_new: 25` reproduces it exactly, so both regimes
+ *   compute correctly from the one ladder.
+ * - The 15% surcharge cap on dividend / s.196-198 capital-gains income is
+ *   NOT modelled — the app carries no special-rate income.
+ * - `company_rate` 25% applies where turnover/gross receipts in the tax year
+ *   TWO years prior (for 2026-27: tax year 2024-25) ≤ ₹400 crore; the app
+ *   does not model the turnover test and always uses 25%.
+ * - Salary standard deduction (₹75,000 new regime / ₹50,000 old — ITA 2025
+ *   s.19(1) Sl. 2) is NOT modelled; the app computes business income.
  */
 export const TAX_YEARS: TaxYearRates[] = [
   {
@@ -103,6 +116,68 @@ export const TAX_YEARS: TaxYearRates[] = [
     verified: false,
     source:
       "Budget 2025 new-regime ladder, from secondary sources — UNCONFIRMED, verify against the Act",
+    slabs_new: [
+      { upto_paise: 4 * LAKH, rate: 0 },
+      { upto_paise: 8 * LAKH, rate: 5 },
+      { upto_paise: 12 * LAKH, rate: 10 },
+      { upto_paise: 16 * LAKH, rate: 15 },
+      { upto_paise: 20 * LAKH, rate: 20 },
+      { upto_paise: 24 * LAKH, rate: 25 },
+      { upto_paise: null, rate: 30 },
+    ],
+    slabs_old: [
+      { upto_paise: 2.5 * LAKH, rate: 0 },
+      { upto_paise: 5 * LAKH, rate: 5 },
+      { upto_paise: 10 * LAKH, rate: 20 },
+      { upto_paise: null, rate: 30 },
+    ],
+    rebate_new: { limit_paise: 12 * LAKH, max_paise: 60_000 * 100, marginal_relief: true },
+    rebate_old: { limit_paise: 5 * LAKH, max_paise: 12_500 * 100, marginal_relief: false },
+    surcharge: [
+      { above_paise: 50 * LAKH, rate: 10 },
+      { above_paise: 1 * CRORE, rate: 15 },
+      { above_paise: 2 * CRORE, rate: 25 },
+      { above_paise: 5 * CRORE, rate: 37 },
+    ],
+    surcharge_cap_new: 25,
+    cess_rate: 4,
+    firm_rate: 30,
+    firm_surcharge: { above_paise: 1 * CRORE, rate: 12 },
+    company_rate: 25,
+    company_concessional_rate: 22,
+    company_surcharge: [
+      { above_paise: 1 * CRORE, rate: 7 },
+      { above_paise: 10 * CRORE, rate: 12 },
+    ],
+    company_concessional_surcharge: 10,
+    presumptive_business_rate: 8,
+    presumptive_business_digital_rate: 6,
+    presumptive_profession_rate: 50,
+    partner_remuneration: {
+      first_slab_paise: 6 * LAKH,
+      first_min_paise: 3 * LAKH,
+      first_rate: 90,
+      balance_rate: 60,
+    },
+    advance_tax: [
+      { due: "15 Jun", cumulative_percent: 15 },
+      { due: "15 Sep", cumulative_percent: 45 },
+      { due: "15 Dec", cumulative_percent: 75 },
+      { due: "15 Mar", cumulative_percent: 100 },
+    ],
+  },
+  {
+    tax_year: "2026-27",
+    verified: true,
+    source:
+      "Verified 2026-07-21 against fetched official texts: Finance Act 2026 " +
+      "(gazette CG-DL-E-31032026-271439, egazette.gov.in/WriteReadData/2026/271439.pdf) " +
+      "s.3 + First Schedule Part I-B — charges 'the tax year commencing on the 1st day " +
+      "of April, 2026' under the Income-tax Act, 2025; ITA 2025 (Act 30 of 2025, gazette " +
+      "265620.pdf) ss.156 (rebate — s.156, not 157), 200–204 (rates), 35(e)(iii) (partner " +
+      "remuneration), 58 (presumptive), 408 (advance tax); Budget 2026 Memorandum " +
+      "(indiabudget.gov.in/doc/memo.pdf): 'no change proposed in tax rates'. Each figure " +
+      "independently re-checked by an adversarial pass against the same gazette texts.",
     slabs_new: [
       { upto_paise: 4 * LAKH, rate: 0 },
       { upto_paise: 8 * LAKH, rate: 5 },
@@ -467,10 +542,16 @@ export interface AdvanceTaxInstalment {
 /** Cumulative advance-tax instalments for a net liability. */
 export function advanceTaxSchedule(
   netTaxPaise: number,
-  rates: TaxYearRates
+  rates: TaxYearRates,
+  // Presumptive (s.58, old 44AD/44ADA) assessees pay the WHOLE amount in one
+  // instalment by 15 March — ITA 2025 s.408(2), verified 2026-07-21.
+  presumptive = false
 ): AdvanceTaxInstalment[] {
+  const rows = presumptive
+    ? rates.advance_tax.slice(-1)
+    : rates.advance_tax;
   let paid = 0;
-  return rates.advance_tax.map((a) => {
+  return rows.map((a) => {
     const cumulative = roundToTenRupees(
       (Math.max(0, netTaxPaise) * a.cumulative_percent) / 100
     );

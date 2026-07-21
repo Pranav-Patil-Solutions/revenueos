@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { fyEnd, fyLabel, fyStart, fyStartYear, monthsOfFy } from "./fy";
 import { monthLabel } from "./format";
-import type { ComplianceMarkRow, SettingsRow } from "./types";
+import type { ComplianceMarkRow, EntityType, SettingsRow } from "./types";
 
 /**
  * Compliance calendar — the office's due-date board for GST, TDS and
@@ -33,57 +33,60 @@ export interface ComplianceRule {
   source: string;
 }
 
-const UNCONFIRMED =
-  "Due dates as commonly published; not confirmed against the current statute or notifications.";
-
 export const RULES: ComplianceRule[] = [
   {
     code: "gstr1",
     label: "GSTR-1",
     regime: "gst",
-    note: "Outward supplies for the month, due the 11th of the following month (monthly filers; QRMP differs).",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "Outward supplies for the month, due the 11th of the following month (monthly filers; QRMP files quarterly by the 13th). Since Jul 2025 a return cannot be filed more than 3 years after its due date; corrections flow through GSTR-1A.",
+    verified: true,
+    source:
+      "GST portal (tutorial.gst.gov.in, GSTR-1 FAQ) — monthly filers, 11th of the succeeding month; unchanged by the Apr-2026 GST changes. Verified 2026-07-21.",
   },
   {
     code: "gstr3b",
     label: "GSTR-3B",
     regime: "gst",
-    note: "Summary return and tax payment for the month, due the 20th of the following month (monthly filers).",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "Summary return and tax payment for the month, due the 20th of the following month (monthly filers; QRMP 22nd/24th). Auto-populated outward liability is locked since the Jul-2025 period — fix errors in GSTR-1A before filing.",
+    verified: true,
+    source:
+      "GST portal (tutorial.gst.gov.in, GSTR-3B FAQ) — monthly 20th. Verified 2026-07-21.",
   },
   {
     code: "tds-deposit",
     label: "TDS deposit",
     regime: "tds",
-    note: "Deposit the month's deductions by the 7th of the next month; March deductions by 30 April.",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "Deposit the month's deductions by the 7th of the next month; March deductions by 30 April (non-government deductors).",
+    verified: true,
+    source:
+      "Income-tax Rules 2026 r.218(2) (CBDT Notification 22/2026 / G.S.R. 198(E), 20 Mar 2026, in force 1 Apr 2026). Verified 2026-07-21.",
   },
   {
     code: "tds-return",
     label: "TDS return",
     regime: "tds",
-    note: "Quarterly statements (26Q/24Q): Q1 by 31 Jul, Q2 by 31 Oct, Q3 by 31 Jan, Q4 by 31 May.",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "Quarterly statements — from FY 2026-27 filed on Form 140 (old 26Q) / Form 138 (old 24Q): Q1 by 31 Jul, Q2 by 31 Oct, Q3 by 31 Jan, Q4 by 31 May.",
+    verified: true,
+    source:
+      "Income-tax Rules 2026 r.219(4) (Notification 22/2026) — 31 Jul / 31 Oct / 31 Jan / 31 May; forms renumbered 26Q→140, 24Q→138. Verified 2026-07-21.",
   },
   {
     code: "advance-tax",
     label: "Advance tax",
     regime: "it",
-    note: "Cumulative 15% / 45% / 75% / 100% of the year's tax by 15 Jun, 15 Sep, 15 Dec and 15 Mar.",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "Cumulative 15% / 45% / 75% / 100% of the year's tax by 15 Jun, 15 Sep, 15 Dec and 15 Mar. Presumptive (s.58) assessees pay the whole amount by 15 Mar — the board shows only that instalment when a presumptive scheme is set.",
+    verified: true,
+    source:
+      "ITA 2025 s.408(1) (four instalments) and s.408(2) (presumptive single instalment); liability from ₹10,000 (s.404). Verified 2026-07-21.",
   },
   {
     code: "itr",
     label: "Income-tax return",
     regime: "it",
-    note: "For the FY just ended: 31 Jul of the assessment year, or 31 Oct when the accounts need audit.",
-    verified: false,
-    source: UNCONFIRMED,
+    note: "For the FY just ended: 31 Oct for companies and audit cases; 31 Aug for business/professional non-audit filers (ITR-3/4, from tax year 2026-27); 31 Jul otherwise — the board shows the earlier applicable date where the class is uncertain.",
+    verified: true,
+    source:
+      "ITA 2025 s.263(1) as amended by Finance Act 2026 (s.263(1)(c) added the 31 Aug business/professional non-audit tier). Extensions by notification are not tracked. Verified 2026-07-21.",
   },
 ];
 
@@ -208,17 +211,33 @@ export function dueItems(
   return items;
 }
 
-/** ITR for the FY is due in the NEXT year — the assessment year. */
-export function itrItem(fy: string, auditCase: boolean): Unmarked {
+/**
+ * ITR for the FY is due in the NEXT year. Due-date tiers (s.263(1) as
+ * amended by FA 2026): companies and audit cases 31 Oct; a proprietorship's
+ * business return (ITR-3/4) 31 Aug from tax year 2026-27; everything else —
+ * including a partnership's non-audit ITR-5, whose entitlement to the 31 Aug
+ * tier is NOT pinned by the verification — the earlier, safe 31 Jul.
+ */
+export function itrItem(
+  fy: string,
+  auditCase: boolean,
+  entityType: EntityType = "proprietorship"
+): Unmarked {
   const y = fyStartYear(fy);
   const r = complianceRule("itr");
   if (!r) throw new Error('Unknown compliance rule "itr"');
+  const audit = auditCase || entityType === "company";
+  const due = audit
+    ? `${y + 1}-10-31`
+    : entityType === "proprietorship" && y >= 2026
+      ? `${y + 1}-08-31`
+      : `${y + 1}-07-31`;
   return bare(
     r,
     fy,
     fyLabel(fy),
-    auditCase ? "Return for the FY (audit case)" : "Return for the FY",
-    auditCase ? `${y + 1}-10-31` : `${y + 1}-07-31`
+    audit ? "Return for the FY (company / audit case)" : "Return for the FY",
+    due
   );
 }
 
@@ -252,8 +271,17 @@ export function generateItems(
       gst: settings.gstin.trim() !== "",
       tds: settings.tan.trim() !== "" || hasTds,
     }),
-    itrItem(fy, settings.fy_audit_case === 1),
-  ];
+    itrItem(fy, settings.fy_audit_case === 1, settings.entity_type),
+  ].filter(
+    // Presumptive (s.58) assessees owe ONE advance-tax instalment, 15 Mar —
+    // the Q1–Q3 rows would be false obligations on their board (s.408(2)).
+    (i) =>
+      !(
+        settings.presumptive !== "" &&
+        i.rule_code === "advance-tax" &&
+        !i.period.endsWith("Q4")
+      )
+  );
 
   const marks = new Map<string, ComplianceMarkRow>();
   for (const m of db

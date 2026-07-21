@@ -40,10 +40,28 @@ test("ratesFor: a year before the earliest table throws rather than guessing", (
 test("every shipped rate table carries its provenance", () => {
   for (const t of TAX_YEARS) {
     assert.ok(t.source.length > 0, `${t.tax_year} must say where it came from`);
-    // Nothing is confirmed yet; if this fails someone verified a year — good,
-    // but the caveat wording in ratesFor() should be re-read alongside it.
     assert.equal(typeof t.verified, "boolean");
+    // A verified year's source must cite actual statute text, not vibes.
+    if (t.verified) {
+      assert.match(t.source, /gazette|Gazette/, `${t.tax_year} verified without a gazette citation`);
+    }
   }
+});
+
+test("2026-27 is verified: no caveat; 2025-26 is deliberately not", () => {
+  const y26 = ratesFor("2026-27");
+  assert.equal(y26.provisional, false);
+  assert.equal(y26.rates.verified, true);
+  assert.equal(y26.caveat, "", "a verified exact year computes caveat-free");
+  const y25 = ratesFor("2025-26");
+  assert.equal(y25.provisional, false);
+  assert.equal(y25.rates.verified, false);
+  assert.match(y25.caveat, /unconfirmed/);
+  // A later year carries the VERIFIED table forward — provisional note only.
+  const later = ratesFor("2030-31");
+  assert.equal(later.rates.tax_year, "2026-27");
+  assert.match(later.caveat, /No rate table for 2030-31/);
+  assert.doesNotMatch(later.caveat, /unconfirmed/);
 });
 
 // ---------------------------------------------------------------------------
@@ -258,4 +276,12 @@ test("advance tax: instalments are cumulative and add back to the total", () => 
     advanceTaxSchedule(0, rates).every((i) => i.instalment_paise === 0),
     true
   );
+});
+
+test("advance tax: a presumptive assessee pays everything by 15 Mar (s.408(2))", () => {
+  const s = advanceTaxSchedule(R(100_000), rates, true);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].due, "15 Mar");
+  assert.equal(s[0].cumulative_percent, 100);
+  assert.equal(s[0].instalment_paise, R(100_000));
 });

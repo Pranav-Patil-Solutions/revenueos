@@ -217,6 +217,10 @@ export function buildComputation(
     payments_paise: paid,
     payments,
     net_payable_paise: tax.total_tax_paise - paid,
-    advance_tax: advanceTaxSchedule(tax.total_tax_paise, rates),
+    advance_tax: advanceTaxSchedule(
+      tax.total_tax_paise,
+      rates,
+      settings.presumptive !== ""
+    ),
   };
 }

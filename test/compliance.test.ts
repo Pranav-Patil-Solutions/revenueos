@@ -99,10 +99,37 @@ test("advance tax instalments land 15 Jun/Sep/Dec and 15 Mar", () => {
   );
 });
 
-test("ITR due date moves with the audit case", () => {
-  assert.equal(itrItem(FY, false).due_date, "2027-07-31");
+test("ITR due date: entity + audit tiers per s.263(1) as amended by FA 2026", () => {
+  // A proprietorship's business return (ITR-3/4) gets the NEW 31 Aug tier
+  // from tax year 2026-27 (s.263(1)(c), Finance Act 2026 — verified).
+  assert.equal(itrItem(FY, false).due_date, "2027-08-31");
+  assert.equal(itrItem(FY, false, "proprietorship").due_date, "2027-08-31");
+  // Earlier years (1961-Act era) keep the statutory 31 Jul.
+  assert.equal(itrItem("2025-26", false).due_date, "2026-07-31");
+  // A partnership's ITR-5 entitlement to 31 Aug is unpinned — show the
+  // earlier, safe 31 Jul.
+  assert.equal(itrItem(FY, false, "partnership").due_date, "2027-07-31");
+  // Companies file by 31 Oct regardless of the audit flag; audit cases too.
+  assert.equal(itrItem(FY, false, "company").due_date, "2027-10-31");
   assert.equal(itrItem(FY, true).due_date, "2027-10-31");
   assert.equal(itrItem(FY, false).period, FY);
+});
+
+test("a presumptive scheme collapses advance tax to the single 15 Mar item", () => {
+  const db = complianceDb();
+  const items = generateItems(
+    db,
+    FY,
+    settingsWith(db, { presumptive: "44AD" }),
+    "2026-04-01"
+  );
+  const at = items.filter((i) => i.rule_code === "advance-tax");
+  assert.equal(at.length, 1, "only the 100% instalment remains (s.408(2))");
+  assert.equal(at[0].period, `${FY}-Q4`);
+  assert.equal(at[0].due_date, "2027-03-15");
+  // Non-presumptive books keep all four.
+  const four = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  assert.equal(four.filter((i) => i.rule_code === "advance-tax").length, 4);
 });
 
 // Marks key on (rule_code, period) — a collision anywhere in the shapes
@@ -118,13 +145,20 @@ test("periods are unique per rule within an FY and across FYs", () => {
   assert.equal(keys.size, all.length);
 });
 
-test("every rule ships unverified with a source, and items carry the flag", () => {
+test("every rule carries provenance; verified rules cite their authority", () => {
   for (const r of RULES) {
-    assert.equal(r.verified, false, r.code);
-    assert.ok(r.source.length > 0, r.code);
+    // All six were verified 2026-07-21. A new rule added unverified will
+    // (correctly) fail here — verify it or exclude it deliberately.
+    assert.equal(r.verified, true, r.code);
+    assert.match(
+      r.source,
+      /Rules 2026|ITA 2025|gst\.gov\.in/,
+      `${r.code} verified without citing its authority`
+    );
+    assert.match(r.source, /Verified 2026-07-21/, r.code);
   }
   const items = dueItems(FY, { gst: true, tds: true });
-  assert.ok(items.every((i) => i.verified === false));
+  assert.ok(items.every((i) => i.verified === true));
 });
 
 // ---------------------------------------------------------------------------
