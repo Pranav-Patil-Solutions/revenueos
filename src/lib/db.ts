@@ -370,10 +370,36 @@ export function ensureColumn(
   }
 }
 
+/**
+ * Connection-level durability settings.
+ *
+ * WHY THE CHECKPOINT (learned the hard way, 2026-07-21): SQLite's default
+ * auto-checkpoint fires at 1000 WAL pages (~4 MB). A small book NEVER reaches
+ * it, so every committed row can sit in `revenueos.db-wal` indefinitely while
+ * `revenueos.db` itself stays a 4 KB stub containing no tables at all.
+ *
+ * Anything that treats the .db file as "the database" then silently reads or
+ * destroys an empty book: a file copy, an rsync, a sha256 integrity check, a
+ * restic snapshot that races the sidecars, or a well-meaning cleanup of
+ * -wal/-shm. This repo's live ledger was lost exactly that way and had to be
+ * recovered from a stale copy in another process's scratch directory.
+ *
+ * Checkpointing on open means the .db file becomes a real book within one
+ * restart, and the lowered threshold keeps it that way during a long run.
+ * This does NOT make a plain file copy safe — use scripts/backup.ts, which
+ * goes through SQLite's online backup API — but it removes the failure mode
+ * where the main file is empty for days at a time.
+ */
+export function configureConnection(db: Database.Database): void {
+  db.pragma("journal_mode = WAL");
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  db.pragma("wal_autocheckpoint = 64");
+}
+
 function open(): Database.Database {
   mkdirSync(UPLOADS_DIR, { recursive: true });
   const db = new Database(path.join(DATA_DIR, "revenueos.db"));
-  db.pragma("journal_mode = WAL");
+  configureConnection(db);
   initSchema(db);
   seedCoreData(db);
   if (process.env.DEMO_MODE === "1") seedDemoParties(db);
