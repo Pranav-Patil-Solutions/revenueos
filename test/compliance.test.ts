@@ -101,19 +101,27 @@ test("advance tax instalments land 15 Jun/Sep/Dec and 15 Mar", () => {
   );
 });
 
-test("ITR due date: entity + audit tiers per s.263(1) as amended by FA 2026", () => {
-  // A proprietorship's business return (ITR-3/4) gets the NEW 31 Aug tier
-  // from tax year 2026-27 (s.263(1)(c), Finance Act 2026 — verified).
+test("ITR due date: entity + audit tiers, income-based not form-based", () => {
+  // CHANGED 2026-07-21 (RVOS-003 P1). This test previously encoded two
+  // assumptions that an adversarial re-check overturned against gazette text:
+  //   (a) FY 2025-26 keeps 31 Jul  — WRONG. FA 2026 s.5 substituted Expln 2
+  //       to s.139(1) of the 1961 Act w.e.f. 1 Mar 2026, so the 31 Aug tier
+  //       reaches AY 2026-27 = FY 2025-26.
+  //   (b) a partnership's entitlement is unpinned, so show 31 Jul — WRONG.
+  //       Sl.3 reads "ASSESSEE having income from profits and gains of
+  //       business or profession whose accounts are not required to be
+  //       audited", and Sl.3(ii) separately covers its partners. A
+  //       non-audited firm filing ITR-5 is inside the tier.
+  // Holding 31 Jul was not the conservative choice; it was wrong by a month.
   assert.equal(itrItem(FY, false).due_date, "2027-08-31");
   assert.equal(itrItem(FY, false, "proprietorship").due_date, "2027-08-31");
-  // Earlier years (1961-Act era) keep the statutory 31 Jul.
-  assert.equal(itrItem("2025-26", false).due_date, "2026-07-31");
-  // A partnership's ITR-5 entitlement to 31 Aug is unpinned — show the
-  // earlier, safe 31 Jul.
-  assert.equal(itrItem(FY, false, "partnership").due_date, "2027-07-31");
+  assert.equal(itrItem(FY, false, "partnership").due_date, "2027-08-31");
+  assert.equal(itrItem("2025-26", false).due_date, "2026-08-31");
+  assert.equal(itrItem("2025-26", false, "partnership").due_date, "2026-08-31");
   // Companies file by 31 Oct regardless of the audit flag; audit cases too.
   assert.equal(itrItem(FY, false, "company").due_date, "2027-10-31");
   assert.equal(itrItem(FY, true).due_date, "2027-10-31");
+  assert.equal(itrItem(FY, true, "partnership").due_date, "2027-10-31");
   assert.equal(itrItem(FY, false).period, FY);
 });
 
@@ -333,14 +341,18 @@ test("the rule note and the rendered detail never contradict each other", () => 
   assert.ok(renumbered.test(newNote), "and its note must say so");
 });
 
-test("NOTHING claims verification for FY 2025-26 until the re-check clears", () => {
-  // EVOLUTION #19: research is not verification. The findings exist; the
-  // adversarial pass has not run, so every FY 2025-26 rule must still warn.
+test("FY 2025-26 rules are verified, and cite the 1961-Act instrument", () => {
+  // The adversarial re-check cleared these on 2026-07-21. Each must cite the
+  // instrument that governed THAT year — an ITA-2025 citation here would be
+  // the original defect returning.
   for (const code of ["tds-deposit", "tds-return", "advance-tax", "itr"]) {
+    const rule = ruleForFy(code, "2025-26");
+    assert.equal(rule.verified, true, `${code} should have cleared its re-check`);
+    assert.match(rule.source, /196[12]|Finance Act 2026/, `${code} must cite the right instrument`);
     assert.equal(
-      ruleForFy(code, "2025-26").verified,
+      /Income-tax Act 2025|ITA 2025|Rules 2026/.test(rule.source),
       false,
-      `${code} claims FY 2025-26 verification nobody has performed`
+      `${code} cites an Act that did not govern FY 2025-26`
     );
   }
 });
@@ -351,10 +363,30 @@ test("GST rules resolve identically in both years — ITA 2025 did not touch the
   }
 });
 
-test("the ITR board still shows the EARLIER date while 31 Aug is unverified", () => {
-  // Directional conservatism: an unproven LATER deadline is the dangerous
-  // direction to be wrong in.
-  const item = itrItem("2025-26", false, "partnership");
-  assert.equal(item.due_date, "2026-07-31");
-  assert.equal(item.verified, false);
+test("the 31 Aug tier reaches FY 2025-26 and is INCOME-based, not form-based", () => {
+  // FA 2026 s.5 substituted Expln 2 to s.139(1) of the 1961 Act w.e.f.
+  // 1 Mar 2026, so it bites for AY 2026-27 = FY 2025-26. Sl.3 says "assessee
+  // having income from profits and gains of business or profession", so a
+  // non-audited FIRM is inside it — entity type must not gate this.
+  for (const entity of ["proprietorship", "partnership"] as const) {
+    const item = itrItem("2025-26", false, entity);
+    assert.equal(item.due_date, "2026-08-31", `${entity} non-audit is 31 Aug`);
+    assert.equal(item.verified, true);
+  }
+
+  // Audit cases and companies stay at 31 Oct regardless.
+  assert.equal(itrItem("2025-26", true, "proprietorship").due_date, "2026-10-31");
+  assert.equal(itrItem("2025-26", false, "company").due_date, "2026-10-31");
+
+  // And the later year keeps the same tiers under its own statute.
+  assert.equal(itrItem("2026-27", false, "partnership").due_date, "2027-08-31");
+});
+
+test("a firm and a proprietorship get the SAME ITR date — the form is not the test", () => {
+  // The widely repeated "31 Aug is for ITR-3/ITR-4" gloss is form-based and
+  // wrong; ITR-5 (firm) qualifies on the same income test.
+  assert.equal(
+    itrItem("2025-26", false, "partnership").due_date,
+    itrItem("2025-26", false, "proprietorship").due_date
+  );
 });

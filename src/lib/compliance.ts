@@ -123,31 +123,31 @@ const PRIOR_AUTHORITIES: Record<string, PriorAuthority> = {
   "tds-deposit": {
     upto_fy: "2025-26",
     note: "Deposit the month's deductions by the 7th of the next month; March deductions by 30 April (non-government deductors).",
-    verified: false,
+    verified: true,
     source:
-      "Income-tax Rules 1962 r.30(2) (1961-Act year). Researched 2026-07-21, NOT yet adversarially re-checked — see RVOS-003-P1-FINDINGS.md.",
+      "Income-tax Rules 1962 r.30(2) — non-government deductors: 7 days from month end, March credits 30 April. Verified 2026-07-21 against gazette text and independently re-checked by an adversarial pass.",
   },
   "tds-return": {
     upto_fy: "2025-26",
     note: "Quarterly statements on Form 26Q (non-salary) / 24Q (salary): Q1 by 31 Jul, Q2 by 31 Oct, Q3 by 31 Jan, Q4 by 31 May. The Rules-2026 renumbering to Form 140/138 applies from FY 2026-27, NOT to this year.",
-    verified: false,
+    verified: true,
     source:
-      "Income-tax Rules 1962 r.31A(2) (1961-Act year); forms 26Q/24Q in force for all four quarters. Researched 2026-07-21, NOT yet adversarially re-checked.",
+      "Income-tax Rules 1962 r.31A(2) — one date per quarter for all deductors since the 2016 harmonisation: 31 Jul / 31 Oct / 31 Jan / 31 May. Verified 2026-07-21, adversarially re-checked (the pass caught a search result serving the obsolete pre-2016 table). FORM NAMES rest on the e-filing portal rather than gazette text: the portal scopes the renumbered quarterly forms to tax year 2026-27, leaving 26Q/24Q correct for all four quarters of FY 2025-26.",
     forms: "26Q/24Q",
   },
   "advance-tax": {
     upto_fy: "2025-26",
     note: "Cumulative 15% / 45% / 75% / 100% of the year's tax by 15 Jun, 15 Sep, 15 Dec and 15 Mar. Presumptive (s.44AD/44ADA) assessees pay the whole amount by 15 Mar.",
-    verified: false,
+    verified: true,
     source:
-      "Income-tax Act 1961 s.211(1)(a); presumptive single instalment s.211(1)(b). Researched 2026-07-21, NOT yet adversarially re-checked.",
+      "Income-tax Act 1961 s.211(1)(a); presumptive (s.44AD/44ADA) single instalment by 15 Mar per s.211(1)(b). Verified 2026-07-21 and adversarially re-checked. Note the s.211(1) proviso: anything paid on or before 31 March still counts as advance tax for that year.",
   },
   itr: {
     upto_fy: "2025-26",
-    note: "For the FY just ended: 31 Oct for companies and audit cases; 31 Jul otherwise. A 31 Aug tier for business/professional non-audit filers is under verification and is NOT yet applied — the board shows the earlier, safer date.",
-    verified: false,
+    note: "For the FY just ended: 30 Nov where s.92E (transfer pricing) applies; 31 Oct for companies and audit cases; 31 Aug for business or professional income not requiring audit — which includes a non-audited firm AND its partners; 31 Jul for any other assessee. The test is the INCOME, not the ITR form number.",
+    verified: true,
     source:
-      "Income-tax Act 1961 s.139(1) Explanation 2. Researched 2026-07-21, NOT yet adversarially re-checked.",
+      "Income-tax Act 1961 s.139(1) Explanation 2 as substituted by Finance Act 2026 s.5 (gazette CG-DL-E-31032026-271439), w.e.f. 1 March 2026 and therefore reaching AY 2026-27 = FY 2025-26. Verified 2026-07-21; adversarially re-checked on all four parts, including that Sl.3 says \"assessee\" and so covers a non-audited firm filing ITR-5. Extensions by notification are not tracked.",
   },
 };
 
@@ -288,11 +288,35 @@ export function dueItems(
 }
 
 /**
- * ITR for the FY is due in the NEXT year. Due-date tiers (s.263(1) as
- * amended by FA 2026): companies and audit cases 31 Oct; a proprietorship's
- * business return (ITR-3/4) 31 Aug from tax year 2026-27; everything else —
- * including a partnership's non-audit ITR-5, whose entitlement to the 31 Aug
- * tier is NOT pinned by the verification — the earlier, safe 31 Jul.
+ * ITR for the FY is due in the NEXT year.
+ *
+ * Tiers are the substituted Explanation 2 to s.139(1) of the **1961** Act
+ * (Finance Act 2026 s.5, w.e.f. 1 March 2026, so it reaches AY 2026-27 =
+ * FY 2025-26), and the mirrored provision under ITA 2025 for later years:
+ *
+ *   Sl.1  s.92E (transfer pricing) applies          30 Nov
+ *   Sl.2  company / accounts requiring audit         31 Oct
+ *   Sl.3  business or professional income, NOT
+ *         required to be audited                     31 Aug
+ *   Sl.4  any other assessee                         31 Jul
+ *
+ * THE DISCRIMINATOR IS INCOME-BASED, NOT FORM-BASED. The widely repeated
+ * gloss that "31 Aug applies to ITR-3/ITR-4 filers" is wrong: Sl.3 says
+ * "ASSESSEE having income from profits and gains of business or profession
+ * whose accounts are not required to be audited", and Sl.3(ii) separately
+ * covers that firm's partners. A non-audited partnership firm filing ITR-5 is
+ * therefore inside Sl.3, and so are its partners — which is why entity_type
+ * does not gate this.
+ *
+ * Every business whose books this app keeps has business income, so Sl.4
+ * (31 Jul) does not arise here — it is the tier for salary/capital-gains-only
+ * assessees, who have no books to keep.
+ *
+ * This REPLACED an earlier conservative default of 31 Jul. That default was
+ * not the safe choice, it was simply wrong by a month: the tier is verbatim
+ * in the signed Gazette, confirmed on all four parts (does FA 2026 s.5 amend
+ * the 1961 Act; does 1 Mar 2026 reach AY 2026-27; is the tier real; does it
+ * cover a firm) by an adversarial pass instructed to refute it.
  */
 export function itrItem(
   fy: string,
@@ -302,16 +326,21 @@ export function itrItem(
   const y = fyStartYear(fy);
   const r = ruleForFy("itr", fy);
   const audit = auditCase || entityType === "company";
+  // The 31 Aug tier exists from AY 2026-27 (= FY 2025-26) onward. Earlier
+  // years keep the pre-amendment 31 Jul.
+  const businessNonAudit = fy >= "2025-26";
   const due = audit
     ? `${y + 1}-10-31`
-    : entityType === "proprietorship" && y >= 2026
+    : businessNonAudit
       ? `${y + 1}-08-31`
       : `${y + 1}-07-31`;
   return bare(
     r,
     fy,
     fyLabel(fy),
-    audit ? "Return for the FY (company / audit case)" : "Return for the FY",
+    audit
+      ? "Return for the FY (company / audit case)"
+      : "Return for the FY (business income, no audit)",
     due
   );
 }
