@@ -1,3 +1,125 @@
+# RVOS-003 HANDOFF (client delivery) — ACTIVE
+
+Branch `feat/rvos-003-client-delivery`, off master `76f023a`. Spec:
+`RVOS-003-SPEC.md`. Research: `RVOS-003-P1-FINDINGS.md`. Local only, unpushed.
+
+Delivery target (decided 2026-07-21): office's own **Windows** machine, ONE
+company, **client's own** `claude` CLI subscription, reachable over **their
+Tailscale**.
+
+## DONE
+- **P0** `fc75d40` — spec, 6 phases, 3 new invariants (auth before any
+  non-localhost bind · a backup counts only when a RESTORE is asserted ·
+  Windows claims ship WINDOWS-UNVERIFIED until run on their machine).
+- **P1 research** `14d1783` — 4 agents vs primary gazette text. **No flag
+  flipped.** Findings in `RVOS-003-P1-FINDINGS.md`. Headline: the FY 2025-26
+  numbers were already CORRECT; what is broken is the METADATA.
+- **P2 foundation** `1343866` — schema, auth core, DAL, proxy, login page.
+  227 tests pass, tsc clean.
+
+## IN FLIGHT — P2, roughly half done
+Written and compiling: `src/lib/auth.ts`, `src/lib/session.ts`,
+`src/lib/dal.ts`, `src/lib/auth-actions.ts`, `src/proxy.ts`,
+`src/app/login/page.tsx`, `src/components/login-form.tsx`, auth tables in
+`db.ts`, row types in `types.ts`.
+
+**NOT done — the app is NOT yet protected.** The proxy redirects anonymous
+users to /login, but that is the optimistic layer only. Nothing behind it
+checks a session yet.
+
+## NEXT (in this order)
+1. **Wire the guards — 49 call sites, enumerate from the router, default-deny:**
+   - 20 server actions in `src/lib/actions.ts` → `await requireSession()` as
+     the FIRST line of every export. The rule is absolute so a reviewer can
+     check it by eye; that is why the 3 public auth actions live in the
+     separate `auth-actions.ts`.
+   - 7 route handlers under `src/app/api/**/route.ts` →
+     `const gate = await requireApiSession(); if (gate instanceof Response) return gate;`
+   - 22 pages → `await requireSession()` before any data read.
+2. **`src/app/reports/page.tsx` and `src/app/tax/page.tsx` lack
+   `export const dynamic = "force-dynamic"`** — they render STATICALLY, and the
+   Next docs are explicit that a DAL does not protect a static route (data is
+   fetched at build time). Add force-dynamic to both, or confirm they are pure
+   redirects holding no data.
+3. Logout control in the app chrome (`logout()` already exists in
+   `auth-actions.ts`); show the signed-in username in the topbar.
+4. **Tests.** None exist yet. Minimum: scrypt round-trip · lockout at 5 and its
+   expiry (clock injected, no sleeping) · session expiry + sliding renewal ·
+   token→sha storage (assert the RAW token never appears in the db) · an
+   enumeration test that walks the router and asserts EVERY non-public route
+   401s/redirects anonymously. That last one is the one that catches the route
+   someone adds next year.
+5. `purgeExpiredSessions()` is written but never called — wire it to the P3
+   backup task or app start.
+6. Then P3 backups → P4 Windows installer → P5 Tailscale bind (STRICTLY after
+   P2 merges) → P6 docs.
+
+## GOTCHAS (P2)
+- **Next 16 renamed Middleware → Proxy.** `middleware.ts` does not exist; the
+  file is `src/proxy.ts`. Proxy runs on the **Node** runtime by default here.
+- **Proxy is optimistic ONLY.** It must not read the db — it runs on every
+  request including prefetches. A forged cookie passes proxy and is rejected by
+  the DAL. That is the design, not a hole.
+- **Server Functions are POSTs to the route that uses them.** A proxy matcher
+  that skips a path also skips its actions, and moving an action to another
+  route silently removes coverage. Never rely on proxy for an action.
+- **The docs' `secure: true` cookie is WRONG for this deployment.** The office
+  reaches the app as plain `http://100.x.x.x:3322`; a Secure cookie is silently
+  dropped on a non-HTTPS origin and login loops forever with nothing in the
+  logs. Gated behind `REVENUEOS_HTTPS=1` for when TLS is terminated in front
+  (`tailscale serve`).
+- **Layouts do not protect nested routes** (Partial Rendering — a layout does
+  not re-render on navigation). Check per page, never in the layout.
+- `server-only` is NOT a dependency and must not become one; both imports were
+  removed. better-sqlite3 + `next/headers` already fail loudly in a client
+  bundle.
+- `cookies()` is **async** in Next 16 — await it, like params/searchParams.
+- No default credentials ship. First run turns /login into a create-account
+  form, guarded on `userCount() === 0`.
+- Design tokens: `ink ink-2 ink-3 surface surface-2 hairline accent critical
+  warning`. There is **no** `shadow-whisper` utility — I invented it once and
+  had to remove it. Cards are `rounded-xl border border-hairline bg-surface p-5`.
+- `grep` silently returns NOTHING in this sandbox (even `grep -c`) while exit
+  codes still work — several searches came back falsely clean. Use `sed -nE`
+  or the Read tool. BSD `sed` also rejects `\?`; use `-E`.
+
+## P1 — what it actually needs (NOT a boolean flip)
+Detail in `RVOS-003-P1-FINDINGS.md`. Three metadata defects, one per file:
+- `tds.ts` cites only ITA 2025 s.393 and is `verified: true` unconditionally —
+  on an FY 2025-26 screen that cites an Act which did not govern the year. The
+  VALUES are identical across both years (each primary-verified against a
+  different gazette), so this needs an **authority axis, not a value axis** —
+  much cheaper than SPEC risk R2 assumed.
+- `compliance.ts` same, plus names Forms 140/138 while `:191` renders the
+  contradicting string `"26Q/24Q statement"`. FY 2025-26 files on 26Q/24Q.
+- `india-it.ts` `verified` is ONE boolean over ~15 fields, but the research
+  verified some and REFUSED others (44AD/44ADA/44AE — presumptive rates rest on
+  search snippets). Flipping it would claim verification nobody performed.
+  → verification metadata must live per FIELD-GROUP and per YEAR.
+- Resolved: HANDOFF open item #2. FA 2026 s.5 substituted Expln 2 to s.139(1)
+  of the **1961** Act w.e.f. 1 Mar 2026, so the 31 Aug tier reaches FY 2025-26,
+  and its discriminator ("business/profession income, accounts not audited")
+  covers a non-audited **firm**. `compliance.ts:232` gates on
+  `proprietorship && y >= 2026` — wrong on both axes; fails safe.
+- Known gap with a number on it: `company_rate` is always 25%, but 25% requires
+  turnover ≤ ₹400cr **in PY 2023-24** — above that it is 30%, so large
+  companies are under-taxed. Documented at `india-it.ts:107`.
+- **Adversarial re-check has NOT run.** Nothing flips to `verified: true`
+  before it does (EVOLUTION #19 protocol).
+
+## EVOLUTION candidates from this build (not yet written)
+- A primary source can serve a STALE VERSION at a live URL. The ITD hosts
+  multiple versions of a section at near-identical slugs and the obsolete ones
+  rank HIGHER in search; an agent cited pre-1994 s.234C (1.5%) before catching
+  itself. "Use a primary source" is insufficient — pin the version id and
+  cross-check against a second host.
+- A brief's own premises are not evidence. Two premises I wrote into the spec
+  were wrong (FA 2025 did not raise the 194C thresholds; the s.40(b) revision
+  was Finance (No.2) Act 2024). Both would have been written into `source`
+  fields as fact.
+
+---
+
 # RVOS-002 HANDOFF
 
 ## Done phases
