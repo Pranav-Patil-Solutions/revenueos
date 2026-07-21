@@ -390,3 +390,19 @@ test("a firm and a proprietorship get the SAME ITR date — the form is not the 
     itrItem("2025-26", false, "proprietorship").due_date
   );
 });
+
+test("a year older than this app's coverage claims no authority at all", () => {
+  // The ITR prior-authority wording cites Finance Act 2026 s.5. Applying it to
+  // an open-ended "everything earlier" range would assert a law that did not
+  // exist in, say, FY 2020-21 — the right-date-wrong-authority defect this
+  // whole table was built to remove, reintroduced at the other end.
+  const old = ruleForFy("itr", "2020-21");
+  assert.equal(old.verified, false);
+  assert.equal(/Finance Act 2026|31 Aug/.test(old.source), false);
+  assert.match(old.source, /No authority on file/);
+
+  // The years the app actually covers are unaffected.
+  assert.equal(ruleForFy("itr", "2025-26").verified, true);
+  assert.equal(ruleForFy("itr", "2026-27").verified, true);
+});
+

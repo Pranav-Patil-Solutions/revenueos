@@ -110,8 +110,14 @@ export const RULES: ComplianceRule[] = [
  * Flags flip only after it does (EVOLUTION #19).
  */
 interface PriorAuthority {
-  /** Governs this FY and any earlier one. */
+  /** Governs FYs up to and including this one. */
   upto_fy: string;
+  /** Earliest FY this wording is true for. Omitted = any earlier year.
+   * The ITR entry NEEDS this: its 31 Aug tier and FA 2026 s.5 citation came
+   * into existence for AY 2026-27 (= FY 2025-26) and asserting them for, say,
+   * FY 2020-21 would cite a law that did not yet exist — the same
+   * right-date-wrong-authority defect this table was built to remove. */
+  from_fy?: string;
   note: string;
   verified: boolean;
   source: string;
@@ -144,6 +150,7 @@ const PRIOR_AUTHORITIES: Record<string, PriorAuthority> = {
   },
   itr: {
     upto_fy: "2025-26",
+    from_fy: "2025-26",
     note: "For the FY just ended: 30 Nov where s.92E (transfer pricing) applies; 31 Oct for companies and audit cases; 31 Aug for business or professional income not requiring audit — which includes a non-audited firm AND its partners; 31 Jul for any other assessee. The test is the INCOME, not the ITR form number.",
     verified: true,
     source:
@@ -160,6 +167,16 @@ export function ruleForFy(code: string, fy: string): ComplianceRule {
   if (!current) throw new Error(`Unknown compliance rule "${code}"`);
   const prior = PRIOR_AUTHORITIES[code];
   if (!prior || fy > prior.upto_fy) return current;
+  // An entry with a lower bound does not describe years before it.
+  if (prior.from_fy && fy < prior.from_fy) {
+    return {
+      ...current,
+      verified: false,
+      source:
+        `No authority on file for ${code} in FY ${fy}. This app was built for ` +
+        `FY 2025-26 onward; earlier years need their own statute checked.`,
+    };
+  }
   return { ...current, note: prior.note, verified: prior.verified, source: prior.source };
 }
 

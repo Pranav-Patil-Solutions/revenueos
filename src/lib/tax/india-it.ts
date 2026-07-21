@@ -97,7 +97,10 @@ export interface TaxYearRates {
  * after checking a year against the bare Act/Finance Act text, and put the
  * citation in `source` when you do.
  *
- * Model notes for the verified year (Income-tax Act 2025 + Finance Act 2026):
+ * Model notes for 2026-27 (Income-tax Act 2025 + Finance Act 2026). NOTE:
+ * "verified" is per GROUP — see RATE_VERIFICATION. The year-level `verified`
+ * boolean is retained for compatibility and is NOT the authority; presumptive
+ * rates are unconfirmed for BOTH years.
  * - `surcharge` stores the OLD-regime ladder (10/15/25/37). The new regime's
  *   own ladder has NO 37% tier (FA 2026 s.3(4)(b) Table Sl. 10 tops out at
  *   25%); `surcharge_cap_new: 25` reproduces it exactly, so both regimes
@@ -175,9 +178,14 @@ export const TAX_YEARS: TaxYearRates[] = [
       "s.3 + First Schedule Part I-B — charges 'the tax year commencing on the 1st day " +
       "of April, 2026' under the Income-tax Act, 2025; ITA 2025 (Act 30 of 2025, gazette " +
       "265620.pdf) ss.156 (rebate — s.156, not 157), 200–204 (rates), 35(e)(iii) (partner " +
-      "remuneration), 58 (presumptive), 408 (advance tax); Budget 2026 Memorandum " +
+      "remuneration), 408 (advance tax); Budget 2026 Memorandum " +
       "(indiabudget.gov.in/doc/memo.pdf): 'no change proposed in tax rates'. Each figure " +
-      "independently re-checked by an adversarial pass against the same gazette texts.",
+      "independently re-checked by an adversarial pass against the same gazette texts. " +
+      "EXCEPT the PRESUMPTIVE rates (s.44AD/44ADA/44AE deemed-profit percentages): that " +
+      "pass covered presumptive only in the ADVANCE-TAX context, so the percentages " +
+      "themselves are NOT confirmed for this year either. RATE_VERIFICATION below is the " +
+      "authority on what has actually been checked — this field is a summary, not a claim " +
+      "per figure.",
     slabs_new: [
       { upto_paise: 4 * LAKH, rate: 0 },
       { upto_paise: 8 * LAKH, rate: 5 },
