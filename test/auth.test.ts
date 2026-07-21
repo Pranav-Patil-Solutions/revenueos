@@ -16,6 +16,7 @@ import {
   MAX_FAILED_ATTEMPTS,
   passwordProblem,
   purgeExpiredSessions,
+  safeNextPath,
   SESSION_TTL_MS,
   userCount,
   verifyPassword,
@@ -270,4 +271,38 @@ test("usernames are unique", () => {
   const { db } = withUser();
   assert.throws(() => createUser(db, "pranav", PW, T0));
   assert.throws(() => createUser(db, "PRANAV", PW, T0), /UNIQUE|constraint/i);
+});
+
+// ── post-login redirect target ───────────────────────────────────────────
+
+test("safeNextPath keeps same-origin paths", () => {
+  assert.equal(safeNextPath("/"), "/");
+  assert.equal(safeNextPath("/vouchers"), "/vouchers");
+  assert.equal(safeNextPath("/reports/gst?month=2026-04"), "/reports/gst?month=2026-04");
+});
+
+test("safeNextPath refuses anything that leaves this origin", () => {
+  // The backslash cases are the ones a "//" string check misses: the WHATWG
+  // URL parser normalises a leading backslash to a slash, so these resolve to
+  // http://evil.com/ and would fire AFTER a real login on the real form.
+  for (const hostile of [
+    "/\\evil.com",
+    "/\\/evil.com",
+    "//evil.com",
+    "///evil.com",
+    "http://evil.com",
+    "https://evil.com/path",
+    "javascript:alert(1)",
+    "evil.com",
+    "",
+  ]) {
+    assert.equal(safeNextPath(hostile), "/", `must not follow ${JSON.stringify(hostile)}`);
+  }
+});
+
+test("safeNextPath rejects non-string input and drops the hash", () => {
+  assert.equal(safeNextPath(null), "/");
+  assert.equal(safeNextPath(undefined), "/");
+  assert.equal(safeNextPath(42), "/");
+  assert.equal(safeNextPath("/vouchers#frag"), "/vouchers");
 });

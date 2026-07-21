@@ -8,6 +8,7 @@ import {
   createUser,
   destroySession,
   passwordProblem,
+  safeNextPath,
   userCount,
 } from "./auth";
 import { clearSessionCookie, readSessionToken, setSessionCookie } from "./session";
@@ -31,15 +32,6 @@ import { clearSessionCookie, readSessionToken, setSessionCookie } from "./sessio
  * password" are deliberately indistinguishable — the login form must not
  * double as a staff directory. */
 export type LoginState = { error: string } | null;
-
-function safeNext(next: FormDataEntryValue | null): string {
-  const raw = typeof next === "string" ? next : "";
-  // Only a same-origin, absolute PATH may be followed. Anything starting with
-  // "//" or containing a scheme would let a crafted link turn this form into
-  // an open redirect that still looks like it came from us.
-  if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
-  return raw;
-}
 
 export async function login(
   _prev: LoginState,
@@ -65,7 +57,7 @@ export async function login(
 
   const token = createSession(getDb(), outcome.user_id, now.toISOString());
   await setSessionCookie(token, now);
-  redirect(safeNext(formData.get("next")));
+  redirect(safeNextPath(formData.get("next")));
 }
 
 export async function logout(): Promise<void> {

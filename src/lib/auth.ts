@@ -84,6 +84,38 @@ export function passwordProblem(password: string): string | null {
   return null;
 }
 
+/** Sentinel origin for resolving a redirect target. `.invalid` is reserved by
+ * RFC 2606 and can never be a real host. */
+const SENTINEL_ORIGIN = "http://sentinel.invalid";
+
+/**
+ * Sanitise the post-login `next` target to a same-origin PATH.
+ *
+ * Lives here rather than in auth-actions.ts because a "use server" module may
+ * only export async functions — and this needs to be directly testable.
+ *
+ * String-matching this is a trap. Rejecting only `//` looks sufficient and is
+ * not: the WHATWG URL parser normalises a leading BACKSLASH to a slash, so
+ * "/\evil.com" — which starts with "/" and not with "//" — resolves to
+ * http://evil.com/. Since /login is public, that turns a link to our own real
+ * login page into an open redirect that fires AFTER the victim has signed in
+ * with genuine credentials.
+ *
+ * So: resolve against a sentinel origin and require that the result did not
+ * leave it. Parsing beats pattern-matching for anything a browser will parse.
+ */
+export function safeNextPath(raw: unknown): string {
+  if (typeof raw !== "string" || !raw.startsWith("/")) return "/";
+  try {
+    const url = new URL(raw, SENTINEL_ORIGIN);
+    if (url.origin !== SENTINEL_ORIGIN) return "/";
+    // Hash is dropped: it never reaches the server and cannot be trusted.
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return "/";
+  }
+}
+
 export function createUser(
   db: Database.Database,
   username: string,
