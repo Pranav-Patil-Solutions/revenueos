@@ -636,3 +636,66 @@ whole database, never a byte-identity check on one file. The corollary bit
 hardest here: the instruction was followed correctly and the agent reported
 success, because the check I designed was incapable of failing.
 
+## 24. RVOS-003 P1 (2026-07-21): "conservative" is only conservative when the direction is genuinely unknown
+
+**What happened:** research established that Finance Act 2026 s.5 created a
+31 August ITR due date for a non-audited business assessee, reaching FY
+2025-26. It was single-sourced at that point, so I kept the app showing the
+earlier 31 July and wrote the reasoning down as directional conservatism —
+"an unproven LATER deadline is the dangerous direction to be wrong in", the
+corollary from EVOLUTION #19. That reasoning was sound in #19, where an
+assessee's class was genuinely unpinned.
+
+Here it was not. An adversarial pass, instructed to refute, established all
+four parts from the verbatim substituted statutory table in the signed Gazette:
+that FA 2026 s.5 amends the **1961** Act (s.4 defines "the Income-tax Act", and
+s.5 sits in Chapter III Part A, not the Part B that amends ITA 2025); that its
+express 1 March 2026 date overrides the general commencement and so reaches
+AY 2026-27; that the tier exists; and that Sl.3 says "ASSESSEE having income
+from profits and gains of business or profession", which covers a non-audited
+firm and — via Sl.3(ii) — its partners. The verifier's own words: the earlier
+date "is not the conservative choice; it is simply wrong for a non-audited
+business assessee, and defaulting to it would misstate the deadline by a
+month."
+
+**Resolution:** the tier is adopted, gated on the income test rather than
+entity_type, and two RVOS-002 tests that encoded the old assumption were
+updated with the reasoning in-comment.
+
+**Delta (rule):** conservatism is a tie-breaker for genuine uncertainty, not a
+substitute for finishing the verification. Before defaulting to the "safe"
+value, ask whether the answer is actually unknown or merely unconfirmed by ME
+so far — and if the latter, go and confirm it. A wrong-but-cautious figure is
+still a wrong figure, and it is harder to dislodge because it feels virtuous.
+Corollary for the calendar specifically: a deadline shown a month early erodes
+trust in every other date on the board.
+
+## 25. RVOS-003 P1 (2026-07-21): verification metadata must live at the granularity verification actually happens
+
+**What happened:** `TaxYearRates.verified` was ONE boolean covering ~15 field
+groups — slabs, rebate, surcharge, cess, firm, company, s.40(b), advance tax,
+presumptive. The adversarial pass cleared eight of those for FY 2025-26 from
+gazette text and explicitly REFUSED the ninth (the s.44AD/44ADA/44AE
+deemed-profit percentages, which rest on search snippets).
+
+That left no honest value for the boolean. Setting it true would claim
+verification nobody performed; leaving it false warned on eight groups that
+ARE confirmed, on the year the office is actually filing — and a banner shown
+over correct figures is how banners stop being read. The same shape existed in
+`compliance.ts` (one flag per rule, one citation for every year) and in
+`tds.ts` (ITA 2025 cited on an FY 2025-26 screen).
+
+**Resolution:** verification is recorded per GROUP per YEAR, with the citation
+beside it; `caveatForGroups(year, groups)` warns about only what a caller
+actually read, and `buildComputation` declares the groups its branch used. An
+FY 2025-26 book-profit computation now renders caveat-free. A finding fell out
+of it: FY 2026-27 had been marked fully verified while nobody had ever checked
+its presumptive percentages either, so both years now flag them.
+
+**Delta (rule):** a verification flag must be as granular as the verification
+that produced it. When one boolean spans work done by different people, at
+different times, to different standards, every possible value of it is a lie —
+and the pressure will always be to set it to the convenient one. Corollary: a
+caveat must name what it doubts and be scoped to what the caller relied on,
+or it becomes noise, and noise is indistinguishable from no warning at all.
+
