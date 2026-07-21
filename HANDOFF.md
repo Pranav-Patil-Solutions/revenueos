@@ -22,21 +22,35 @@ Tailscale**.
 - **P2 open-redirect fix** `76c8590` — see gotchas. Found by the zero-context
   review, not by me.
 
-**P2 is functionally COMPLETE.** Gates: 260 tests · smoke GREEN · lint · tsc ·
-build, all clean. Zero-context code-reviewer on the full branch diff: 1 blocker
-(fixed), no others; it independently confirmed route/action/handler coverage by
-walking the tree rather than trusting the diff.
+- **P2 session sweep + EVOLUTION #20-#22** `eef5b82`.
+- **P2 proxy /api 401 fix** `e7f863b` — found by qa-runner.
+
+**P2 IS COMPLETE, ship gate passed.** 267 tests · smoke GREEN · lint · tsc ·
+build. Zero-context code-reviewer on the full branch diff: 1 blocker (open
+redirect, fixed in `76c8590`), nothing else; it re-walked the router itself
+rather than trusting the diff. qa-runner drive of :3322: 1 failure (proxy
+answering /api with 307 instead of 401, fixed in `e7f863b`), nothing else —
+anonymous pages leak no ledger data, cookie is HttpOnly/Lax/no-Secure, all
+three open-redirect payloads land on /, accounting output unchanged behind
+auth, `data/revenueos.db` restored byte-identical (sha256 da63a52b… both ends).
+
+**The P2 lesson worth keeping:** the code reviewer and the unit tests both
+reason about code AS WRITTEN. Only the HTTP drive could show that the API
+handlers were CORRECT but UNREACHABLE — the proxy answered first and rewrote
+every 401 into a 307. `route-guards.test.ts` is static and proves a handler
+WOULD answer 401 if reached, never that a request arrives. `test/proxy.test.ts`
+now closes that gap.
 
 ## NEXT (in this order)
-1. **`purgeExpiredSessions()` is written but never called.** Wire it to the P3
-   backup task or to app start.
-2. **qa-runner has NOT run** — ship-gate step 3. Drive :3322: login enforced,
-   books/reports/pack unchanged by auth, sign-out works, an anonymous curl of
-   `/api/export/...` gets 401 rather than a redirect.
-3. **EVOLUTION.md not yet written** for this build — candidates listed below.
-4. **P1 metadata work** — see the P1 section below. Not started in code.
-5. Then P3 backups → P4 Windows installer → P5 Tailscale bind (STRICTLY after
-   P2 merges) → P6 docs.
+1. **P3 backups** — in progress; see below.
+2. **P1 metadata work** — see the P1 section. Researched, no code changed. This
+   one touches TESTED, money-adjacent tax code and deserves a FRESH context
+   window, not the tail of a long one.
+3. P4 Windows installer → P5 Tailscale bind (STRICTLY after P2 merges) → P6
+   docs.
+4. Merge to master only after the full gate; master is untouched at `76f023a`
+   and still shippable. **The branch exists only on this disk** —
+   `git push -u origin feat/rvos-003-client-delivery`.
 
 ## P2 — decisions worth not re-litigating
 - Sessions are a TABLE, not a signed stateless cookie, because a signed cookie
