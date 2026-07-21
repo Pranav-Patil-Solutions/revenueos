@@ -73,10 +73,21 @@ test("a tailnet address is allowed, with the perimeter stated plainly", () => {
   assert.match(d.warnings[0], /sign in|login/i, "Tailscale is behind the login, not instead of it");
 });
 
-test("a LAN address is allowed but pushed toward the tailnet", () => {
-  const d = decideBind("192.168.1.50");
+test("a LAN address is REFUSED — café and hotel routers hand out this range", () => {
+  // A warning was not enough: the app runs from a Scheduled Task, so nobody
+  // reads the console. Exposure to an untrusted LAN has to be deliberate.
+  for (const h of ["192.168.1.50", "10.0.0.5", "172.16.4.4", "169.254.1.1"]) {
+    const d = decideBind(h);
+    assert.ok(d.refusal, `${h} must not bind on a warning alone`);
+    assert.match(d.refusal!, /tailscale ip -4/, "point at the supported remote path");
+    assert.match(d.refusal!, /REVENUEOS_ALLOW_ANY=1/);
+  }
+});
+
+test("the LAN override works and still states the exposure", () => {
+  const d = decideBind("192.168.1.50", { allowAny: true });
   assert.equal(d.refusal, undefined);
-  assert.match(d.warnings[0], /100\.64/, "point at the safer option");
+  assert.match(d.warnings[0], /do not\s+control/i);
 });
 
 test("an unrecognised or public-looking host is refused", () => {

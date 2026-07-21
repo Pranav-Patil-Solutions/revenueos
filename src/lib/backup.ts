@@ -121,9 +121,20 @@ export async function createBackup(
 
   let uploads = 0;
   if (uploadsDir && existsSync(uploadsDir)) {
-    const dest = path.join(dir, "uploads");
-    cpSync(uploadsDir, dest, { recursive: true });
-    uploads = readdirSync(dest).length;
+    try {
+      const dest = path.join(dir, "uploads");
+      cpSync(uploadsDir, dest, { recursive: true });
+      uploads = readdirSync(dest).length;
+    } catch (err) {
+      // A snapshot with a verified db but half its ledger photos would still
+      // list as good. Discard the whole thing rather than leave a "\u2713" on
+      // something incomplete.
+      rmSync(dir, { recursive: true, force: true });
+      throw new Error(
+        `Backup failed while copying uploads and was discarded: ` +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 
   return {
@@ -261,26 +272,69 @@ export function pruneBackups(
 export function restoreBackup(
   backupDbPath: string,
   targetDbPath: string,
-  now: string
-): { restored_from: string; previous_saved_to: string | null } {
+  now: string,
+  uploadsTargetDir?: string
+): {
+  restored_from: string;
+  previous_saved_to: string | null;
+  uploads_restored: number;
+} {
   const problem = verifyBackup(backupDbPath);
   if (problem) throw new Error(`Refusing to restore an unusable backup: ${problem}`);
 
   let previous: string | null = null;
-  if (existsSync(targetDbPath)) {
-    previous = `${targetDbPath}.pre-restore-${stampFor(now)}`;
-    renameSync(targetDbPath, previous);
+  // Anything thrown from here on MUST name the preserved book. A restore that
+  // fails silently looks identical to total data loss to the person running it.
+  const withPrevious = (msg: string): Error =>
+    new Error(
+      previous
+        ? `${msg}\n  Your previous books are UNHARMED at: ${previous}\n` +
+          `  Rename that back to ${path.basename(targetDbPath)} to undo this.`
+        : msg
+    );
+
+  try {
+    if (existsSync(targetDbPath)) {
+      previous = `${targetDbPath}.pre-restore-${stampFor(now)}`;
+      renameSync(targetDbPath, previous);
+    }
+
+    for (const sidecar of ["-wal", "-shm"]) {
+      const f = `${targetDbPath}${sidecar}`;
+      if (existsSync(f)) rmSync(f, { force: true });
+    }
+
+    // Copy to a temp name in the SAME directory, verify it landed intact, then
+    // rename into place. rename is atomic within a filesystem, so an
+    // interrupted or disk-full copy can never leave a half-written book at the
+    // real path — the worst case is a stray .incoming file.
+    const incoming = `${targetDbPath}.incoming-${stampFor(now)}`;
+    try {
+      cpSync(backupDbPath, incoming);
+      const landed = verifyBackup(incoming);
+      if (landed) throw withPrevious(`Restore copy is unusable: ${landed}`);
+      renameSync(incoming, targetDbPath);
+    } finally {
+      if (existsSync(incoming)) rmSync(incoming, { force: true });
+    }
+
+    const after = verifyBackup(targetDbPath);
+    if (after) throw withPrevious(`Restore landed an unusable database: ${after}`);
+
+    // The ledger PHOTOS are part of the book: documents.image_path points at
+    // them, so a db restored without its uploads leaves every document
+    // referencing a file that is not there.
+    let uploads = 0;
+    const snapshotUploads = path.join(path.dirname(backupDbPath), "uploads");
+    if (uploadsTargetDir && existsSync(snapshotUploads)) {
+      mkdirSync(uploadsTargetDir, { recursive: true });
+      cpSync(snapshotUploads, uploadsTargetDir, { recursive: true, force: true });
+      uploads = readdirSync(snapshotUploads).length;
+    }
+
+    return { restored_from: backupDbPath, previous_saved_to: previous, uploads_restored: uploads };
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("previous books are UNHARMED")) throw err;
+    throw withPrevious(err instanceof Error ? err.message : String(err));
   }
-
-  for (const sidecar of ["-wal", "-shm"]) {
-    const f = `${targetDbPath}${sidecar}`;
-    if (existsSync(f)) rmSync(f, { force: true });
-  }
-
-  cpSync(backupDbPath, targetDbPath);
-
-  const after = verifyBackup(targetDbPath);
-  if (after) throw new Error(`Restore landed an unusable database: ${after}`);
-
-  return { restored_from: backupDbPath, previous_saved_to: previous };
 }

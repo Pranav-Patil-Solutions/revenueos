@@ -84,12 +84,33 @@ export function decideBind(
       return { host, kind, warnings };
 
     case "private":
-      warnings.push(
-        `Bound to the local network address ${host}. Anything on that Wi-Fi or ` +
-          `office LAN can reach the books, including devices you do not control. ` +
-          `A tailnet address (100.64-100.127.x.x) is the safer choice.`
-      );
-      return { host, kind, warnings };
+      // REFUSED, not merely warned. Café, hotel and home routers hand out
+      // exactly these ranges, which is the scenario this module exists to
+      // prevent — and a warning printed to a console nobody watches (the app
+      // runs from a Scheduled Task) is not the deliberate override the design
+      // claims to require. Tailscale addresses are the supported remote path.
+      return opts.allowAny
+        ? {
+            host,
+            kind,
+            warnings: [
+              `Bound to the local network address ${host}. Anything on that Wi-Fi ` +
+                `or office LAN can reach the books, including devices you do not ` +
+                `control. This was explicitly allowed via REVENUEOS_ALLOW_ANY=1.`,
+            ],
+          }
+        : {
+            host,
+            kind,
+            warnings: [],
+            refusal:
+              `Refusing to bind the local network address ${host}.\n` +
+              `  Café, hotel and home routers all hand out addresses in this range,\n` +
+              `  so this can expose the books to devices you do not control.\n` +
+              `  For remote access use this machine's Tailscale address\n` +
+              `  (run: tailscale ip -4). If you really mean the local network,\n` +
+              `  set REVENUEOS_ALLOW_ANY=1 as well.`,
+          };
 
     case "any":
       return opts.allowAny
@@ -122,10 +143,10 @@ export function decideBind(
             kind,
             warnings: [],
             refusal:
-              `Refusing to bind "${host}" — it is not a loopback, Tailscale or\n` +
-              `  private-network address, so it may be reachable from the public\n` +
-              `  internet. Use the machine's Tailscale address (tailscale ip -4),\n` +
-              `  or set REVENUEOS_ALLOW_ANY=1 if you are certain.`,
+              `Refusing to bind "${host}" — it is not a loopback or Tailscale\n` +
+              `  address, so it may be reachable from the public internet. Use\n` +
+              `  this machine's Tailscale address (run: tailscale ip -4), or set\n` +
+              `  REVENUEOS_ALLOW_ANY=1 if you are certain.`,
           };
   }
 }

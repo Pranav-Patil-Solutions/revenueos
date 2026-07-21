@@ -72,8 +72,14 @@ function main(): void {
     return;
   }
 
-  const outcome = restoreBackup(backupDb, DB_PATH, new Date().toISOString());
+  const outcome = restoreBackup(
+    backupDb,
+    DB_PATH,
+    new Date().toISOString(),
+    path.join(DATA_DIR, "uploads")
+  );
   console.log(`✓ Restored from ${outcome.restored_from}`);
+  console.log(`  ${outcome.uploads_restored} ledger photo(s) restored`);
   if (outcome.previous_saved_to) {
     console.log(`  The replaced book is kept at ${outcome.previous_saved_to}`);
     console.log("  Delete it once you have confirmed the restore is correct.");
@@ -84,6 +90,8 @@ function main(): void {
 try {
   main();
 } catch (err) {
-  console.error(`✗ Restore FAILED: ${err instanceof Error ? err.message : err}`);
+  // The message from restoreBackup already names the preserved book when one
+  // exists. Never let a failed restore READ like total data loss.
+  console.error(`\n✗ Restore FAILED: ${err instanceof Error ? err.message : err}\n`);
   process.exit(1);
 }

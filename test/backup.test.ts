@@ -320,3 +320,83 @@ test("a configured connection checkpoints on open and thereafter stays eager", (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── what the review caught ───────────────────────────────────────────────
+
+test("restore brings the ledger PHOTOS back, not just the database", async () => {
+  // documents.image_path points at these files. A db restored without them
+  // leaves every document referencing something that is not there — and the
+  // backup captured them, so failing to restore them was pure omission.
+  const dir = scratch();
+  try {
+    const uploads = path.join(dir, "uploads");
+    mkdirSync(uploads, { recursive: true });
+    writeFileSync(path.join(uploads, "khata-1.jpg"), "ledger photo");
+    const source = path.join(dir, "revenueos.db");
+    const db = bookAt(source);
+    const result = await createBackup(db, path.join(dir, "backups"), T0, uploads);
+    db.close();
+
+    rmSync(uploads, { recursive: true, force: true });
+    const restoreTarget = path.join(dir, "uploads");
+    const outcome = restoreBackup(
+      result.db_path,
+      source,
+      "2026-07-22T10:00:00.000Z",
+      restoreTarget
+    );
+
+    assert.equal(outcome.uploads_restored, 1);
+    assert.ok(existsSync(path.join(restoreTarget, "khata-1.jpg")), "the photo must come back");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed restore NAMES the preserved book instead of reading like total loss", () => {
+  const dir = scratch();
+  try {
+    const target = path.join(dir, "revenueos.db");
+    bookAt(target).close();
+    // A snapshot that passes the pre-check and then cannot land.
+    const bad = path.join(dir, "vanishing.db");
+    bookAt(bad).close();
+    rmSync(bad); // disappears between verification and copy
+
+    let message = "";
+    try {
+      restoreBackup(bad, target, T0);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    assert.ok(message, "it must throw");
+    // Either it refused up front (target untouched), or it failed mid-flight
+    // and must say where the good book went.
+    if (!/Refusing to restore/.test(message)) {
+      assert.match(message, /UNHARMED at/, "a panicking operator needs the path");
+    }
+    assert.equal(verifyBackup(target), null, "the live book survives either way");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a snapshot whose uploads cannot be copied is discarded entirely", async () => {
+  const dir = scratch();
+  try {
+    const db = bookAt(path.join(dir, "revenueos.db"));
+    const backups = path.join(dir, "backups");
+    // Point at an uploads path that exists but cannot be read as a directory.
+    const notADir = path.join(dir, "uploads-file");
+    writeFileSync(notADir, "not a directory");
+    await assert.rejects(() => createBackup(db, backups, T0, notADir));
+    db.close();
+    assert.deepEqual(
+      listBackups(backups),
+      [],
+      "a verified db with missing photos must not survive as a good-looking snapshot"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
