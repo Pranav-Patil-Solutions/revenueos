@@ -76,12 +76,27 @@ branch reads, so the caveat cannot go silent on a rate that was read.
   presumptive only in the advance-tax context), so presumptive is flagged for
   both rather than inheriting an unexamined claim.
 
-## THE ONE REMAINING TAX GAP
-**s.44AD / 44ADA / 44AE deemed-profit percentages (8% / 6% / 50%)** are the
-only figures still unconfirmed. The app SAYS SO on any presumptive
-computation. To close: read the sections, add citations to
-`RATE_VERIFICATION` in india-it.ts keyed `{year: {presumptive: "<citation>"}}`.
-Nothing else is needed — the machinery is in place.
+## TAX VERIFICATION: COMPLETE (2026-07-22)
+The presumptive group — the last gap — cleared. All nine groups now carry a
+citation for BOTH years, and both compute caveat-free. It needed a Gazette
+sweep of every Finance Act 2017-2026, because **the indiacode consolidation of
+the 1961 Act is FROZEN at ~Act 7 of 2019** and still shows the pre-2023
+ceilings: quoting it would have published ₹2 crore / ₹50 lakh as current, with
+nothing to indicate anything was wrong.
+
+Values confirmed and matching the code: 44AD 8% / 6% banked portion, ceiling
+₹2cr → ₹3cr where cash ≤ 5%; 44ADA 50%, ₹50L → ₹75L on the same test (and an
+**LLP is ineligible**, FA 2021 s.14); 44AE ₹1,000/tonne HGV and ₹7,500 other,
+GVW > 12,000 kg, ten-carriage cap. ITA 2025 **s.58** confirmed as the successor
+and every figure carries forward unchanged.
+
+RESIDUAL, disclosed rather than hidden: non-Finance amending statutes (the
+Taxation and Other Laws Relaxation Acts) were not separately swept, and Rule
+6ABBA (the prescribed electronic modes) was not sourced — only the enabling
+words. Both are recorded in the `presumptive` citation itself.
+
+NOT MODELLED: s.44AE per-vehicle presumptive income has no UI — the app
+carries business and professional rates only.
 
 ## NEXT (in this order)
 1. **P1 metadata work** — see the P1 section. Researched, no code changed. This

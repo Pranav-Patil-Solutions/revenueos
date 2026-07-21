@@ -116,9 +116,15 @@ export interface TaxYearRates {
 export const TAX_YEARS: TaxYearRates[] = [
   {
     tax_year: "2025-26",
-    verified: false,
+    // All nine groups now carry a citation — see RATE_VERIFICATION, which is
+    // the authority. This boolean means "every group verified", nothing more.
+    verified: true,
     source:
-      "Budget 2025 new-regime ladder, from secondary sources — UNCONFIRMED, verify against the Act",
+      "FY 2025-26 = AY 2026-27, a 1961-Act year (Finance Act 2026 s.2(1)). Verified 2026-07-21/22 " +
+      "against gazette texts — FA 2025 (CG-DL-E-29032025-262125), FA 2026 (CG-DL-E-31032026-271439), " +
+      "Finance (No. 2) Act 2024 (CG-DL-E-16082024-256436), FA 2023 (CG-DL-E-31032023-244830) — with " +
+      "two independent adversarial passes instructed to refute. See RATE_VERIFICATION for the " +
+      "per-group citations, which are the authority; this field is a summary.",
     slabs_new: [
       { upto_paise: 4 * LAKH, rate: 0 },
       { upto_paise: 8 * LAKH, rate: 5 },
@@ -275,12 +281,12 @@ export interface ResolvedRates {
  * actually used so a book-profit computation is never warned about
  * presumptive rates it did not touch.
  *
- * NOTE ON `presumptive`: absent for BOTH years, deliberately. The FY 2025-26
- * research could not source the s.44AD/44ADA/44AE deemed-profit percentages
- * beyond search snippets, and I could not establish that the RVOS-002 pass
- * separately confirmed them for FY 2026-27 either — the EVOLUTION #19 record
- * mentions presumptive only in the advance-tax context. Rather than inherit
- * an unexamined claim, both years warn until someone reads the section.
+ * `presumptive` was the last group to clear, on 2026-07-22, after two earlier
+ * passes returned only search snippets for it. It took going to the Gazette
+ * and sweeping every Finance Act 2017-2026, because the indiacode
+ * consolidation of the 1961 Act is FROZEN at ~Act 7 of 2019 and still shows
+ * the pre-2023 ceilings — quoting it would have published ₹2 crore / ₹50 lakh
+ * as the current limits, with no sign anything was wrong.
  */
 export type RateGroup =
   | "slabs"
@@ -331,6 +337,7 @@ const RATE_VERIFICATION: Record<string, Partial<Record<RateGroup, string>>> = {
     company: `${FA2026} Sch. I Part I-A Para E.I — 25% only where turnover in PY 2023-24 ≤ ₹400 crore, else 30%. The app does NOT model the turnover test and always applies 25%.`,
     partner_remuneration: `Finance (No. 2) Act 2024 s.14 (gazette CG-DL-E-16082024-256436) — NOT Finance Act 2025. In force from AY 2025-26, so it covers FY 2025-26.`,
     advance_tax: `Income-tax Act 1961 s.211(1) and clause (b) — 15/45/75/100%, presumptive assessees one instalment by 15 Mar. The s.211(1) proviso treats anything paid by 31 March as advance tax for that year.`,
+    presumptive: "Income-tax Act 1961 s.44AD(1) — 8% of turnover, with the proviso substituting 6% for the portion received by account-payee cheque/draft, ECS or other prescribed electronic mode (proviso inserted by Finance Act 2017 s.21, gazette 175141.pdf; widened to \"or through such other electronic mode as may be prescribed\" by Finance (No. 2) Act 2019 s.16 w.e.f. 1-4-2020). Ceiling ₹2 crore, raised to ₹3 crore where cash receipts ≤ 5% (Finance Act 2023 s.16, gazette CG-DL-E-31032023-244830). s.44ADA — 50% of gross receipts, ceiling ₹50 lakh / ₹75 lakh on the same 5% cash test (FA 2023 s.17); an LLP is INELIGIBLE (FA 2021 s.14). A non-account-payee cheque counts as CASH for the 5% test. Verified 2026-07-22 by amendment sweep of every Finance Act 2017-2026 from gazette copies. RESIDUAL GAPS, disclosed: non-Finance amending statutes (e.g. the Taxation and Other Laws Relaxation Acts) were not separately scanned, and Rule 6ABBA (the prescribed electronic modes) was not sourced — only the enabling words.",
   },
   "2026-27": {
     slabs: `Income-tax Act 2025 + ${FA2026} Sch. I Part I-B. Verified 2026-07-21 (EVOLUTION #19).`,
@@ -341,6 +348,7 @@ const RATE_VERIFICATION: Record<string, Partial<Record<RateGroup, string>>> = {
     company: `${FA2026} company rates. The turnover test is not modelled — always 25%. Verified 2026-07-21.`,
     partner_remuneration: `s.40(b) equivalent under the Income-tax Act 2025. Verified 2026-07-21.`,
     advance_tax: `Income-tax Act 2025 s.408(1) and s.408(2) (presumptive single instalment). Verified 2026-07-21.`,
+    presumptive: "Income-tax Act 2025 s.58 (Act 30 of 2025, gazette CG-DL-E-22082025-265620) — the presumptive section, confirmed by reading the enacted Gazette. Every figure carries forward UNCHANGED from the 1961 Act: 8%/6%, ₹2cr/₹3cr, 50%, ₹50L/₹75L, and for s.44AE-equivalents ₹1,000 per tonne / ₹7,500 per month, GVW > 12,000 kg, ten-carriage cap. Finance Act 2026 s.40 touches s.58 only to omit sub-s.(11)(a)(i), WIDENING eligibility — no rate or ceiling changes. DRAFTING NOTE: ITA 2025 states the split as an ARITHMETIC AGGREGATE (6% of the banked portion plus 8% of the remainder) where the 1961 Act used a word-substitution. Same result; re-read any engine written against the older phrasing. Cross-references also move: s.139(1)→s.263(1), s.44AA→s.62, s.44AB→s.63. Verified 2026-07-22.",
   },
 };
 
