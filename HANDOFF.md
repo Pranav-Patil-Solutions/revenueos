@@ -46,12 +46,10 @@ now closes that gap.
 - **P4 Windows install path** `e43ce97` — WINDOWS-UNVERIFIED.
 - **P5 bind policy** — loopback default, tailnet opt-in, 0.0.0.0 refused.
 
+- **P6 docs** — `docs/DAY-ONE.md` + README corrected.
+
 ## NEXT (in this order)
-1. **P6 onboarding docs** — the day-one runbook. Opening balances via account
-   3000 + the `opening` entry type is the most likely day-one stumble and is
-   still undocumented. ALSO: README still claims "Every statutory rate and due
-   date ships verified: false", which became false at `76f023a`.
-2. **P1 metadata work** — see the P1 section. Researched, no code changed. This
+1. **P1 metadata work** — see the P1 section. Researched, no code changed. This
    touches TESTED, money-adjacent tax code and deserves a FRESH context window,
    not the tail of a long one.
 3. Merge to master only after the full gate; master is untouched at `76f023a`
@@ -159,6 +157,11 @@ now closes that gap.
   static import throws during module evaluation, so an ABI mismatch would
   crash the preflight instead of printing its fix) — use `createRequire`.
 - `statfsSync` needs Node 18+; it is how disk headroom is checked.
+- **Accounts Payable is code 2100, not 2000.** Verify seed codes against
+  `SEED_ACCOUNTS` in db.ts before writing them into docs — I nearly shipped
+  2000 into the day-one runbook. Opening balances post fine as a free-form
+  journal with `entry_type: "opening"` (verified: day book shows "opening",
+  TB net 0, BS 1,70,000 = 30,000 + 1,40,000).
 
 ## P1 — what it actually needs (NOT a boolean flip)
 Detail in `RVOS-003-P1-FINDINGS.md`. Three metadata defects, one per file:
