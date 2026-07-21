@@ -228,6 +228,37 @@ const DDL = `
     CHECK ((target_kind = 'account') = (account_id IS NOT NULL)),
     CHECK ((target_kind = 'party')   = (party_id   IS NOT NULL))
   );
+
+  -- Auth (RVOS-003 P2). The office reaches this over Tailscale, so the tailnet
+  -- is no longer the perimeter — a login is. Tailscale becomes defence in
+  -- depth BEHIND this, not instead of it.
+  -- One row per person who may open the books. Password is scrypt; salt and
+  -- hash are hex and compared with timingSafeEqual. The lockout counter is
+  -- STORED, not held in memory, so restarting the server cannot clear a
+  -- brute-force attempt in progress.
+  CREATE TABLE IF NOT EXISTS auth_users (
+    id              INTEGER PRIMARY KEY,
+    username        TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash   TEXT NOT NULL,
+    password_salt   TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    last_login_at   TEXT,
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    locked_until    TEXT
+  );
+
+  -- Sessions live server-side so a logout — or a lost laptop — can actually be
+  -- revoked; a stateless signed cookie cannot be. The cookie carries a random
+  -- 256-bit token and only its SHA-256 is stored, so a copied db file yields
+  -- no usable session cookie.
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_sha256 TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES auth_users(id),
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    CHECK (expires_at > created_at)
+  );
 `;
 
 /** Chart of accounts — seeded once, grouped via src/lib/coa.ts metadata. */

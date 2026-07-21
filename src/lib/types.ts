@@ -245,3 +245,26 @@ export interface JournalLineRow {
   debit_paise: number;
   credit_paise: number;
 }
+
+/** Auth (RVOS-003 P2). `locked_until` and `last_login_at` are ISO strings or
+ * null; `failed_attempts` is persisted so a restart cannot clear a lockout. */
+export interface AuthUserRow {
+  id: number;
+  username: string;
+  password_hash: string;
+  password_salt: string;
+  created_at: string;
+  last_login_at: string | null;
+  failed_attempts: number;
+  locked_until: string | null;
+}
+
+/** The session's PRIMARY KEY is the SHA-256 of the cookie token — the raw
+ * token is never stored, so a copied db yields no usable cookie. */
+export interface AuthSessionRow {
+  token_sha256: string;
+  user_id: number;
+  created_at: string;
+  expires_at: string;
+  last_seen_at: string;
+}
