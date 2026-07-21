@@ -31,6 +31,11 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+/** Route handlers answer with status codes; pages answer with redirects. */
+function isApi(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/");
+}
+
 export default function proxy(req: NextRequest): NextResponse {
   const { pathname, search } = req.nextUrl;
   const hasCookie = Boolean(req.cookies.get(SESSION_COOKIE)?.value);
@@ -44,6 +49,15 @@ export default function proxy(req: NextRequest): NextResponse {
   }
 
   if (!hasCookie) {
+    // An API caller needs a STATUS CODE, not an HTML login page. The proxy
+    // runs ahead of the route handler, so without this branch it would
+    // intercept first and turn every handler's 401 into a 307 that a curl or
+    // fetch() cannot act on — the handler's requireApiSession() would never
+    // even be reached. Found by the qa-runner drive, not by the unit tests:
+    // route-guards.test.ts is static and can only prove the handler WOULD
+    // answer 401, never that the request gets to it.
+    if (isApi(pathname)) return new NextResponse(null, { status: 401 });
+
     const url = new URL("/login", req.nextUrl);
     // Come back to where they were headed once they log in. Only the path is
     // carried, never an absolute URL — an attacker-supplied `next` pointing at
