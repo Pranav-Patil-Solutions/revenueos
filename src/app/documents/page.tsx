@@ -3,10 +3,13 @@ import { getDb } from "@/lib/db";
 import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp } from "@/lib/format";
 import type { DocumentWithParty } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
-export default function DocumentsPage() {
+export default async function DocumentsPage() {
+  await requireSession();
+
   const docs = getDb()
     .prepare(
       `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code

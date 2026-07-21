@@ -7,6 +7,7 @@ import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { buildComputation } from "@/lib/tax/computation";
 import type { ItAdjustmentRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,8 @@ export default async function ComputationPage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const books = fyList(db);

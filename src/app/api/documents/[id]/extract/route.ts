@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractDocument } from "@/lib/extraction";
+import { requireApiSession } from "@/lib/dal";
 
 /** Curl-able extraction trigger (also fired by the capture UI). */
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   const { id } = await params;
   try {
     const { rows } = await extractDocument(Number(id));

@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { KEY_HINTS, type VoucherNavKind } from "@/lib/keymap";
 import type { JournalKind, SettingsRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,8 @@ export default async function VouchersPage({
 }: {
   searchParams: Promise<{ kind?: string; posted?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const kind: VoucherNavKind = KINDS.includes(sp.kind as VoucherNavKind)
     ? (sp.kind as VoucherNavKind)

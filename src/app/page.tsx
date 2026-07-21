@@ -5,10 +5,13 @@ import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp, inr, monthLabel, thisMonth } from "@/lib/format";
 import { dashboardStats } from "@/lib/reports";
 import type { DocumentWithParty } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  await requireSession();
+
   const db = getDb();
   const month = thisMonth();
   const stats = dashboardStats(db, month);

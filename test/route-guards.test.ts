@@ -1,0 +1,148 @@
+import { strict as assert } from "node:assert";
+import { test } from "node:test";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+
+/**
+ * Route-guard enumeration — RVOS-003 P2.
+ *
+ * Every other auth test proves the MECHANISM works. This one proves it is
+ * actually ATTACHED, everywhere, and keeps proving it for routes nobody has
+ * written yet. It walks the router the way Next does — by file convention —
+ * rather than checking a hand-maintained list, because a hand-maintained list
+ * is exactly what goes stale the day someone adds a page in a hurry.
+ *
+ * This is a STATIC check: it reads source text. It cannot prove the guard runs
+ * first at runtime (the unit tests and the qa-runner drive cover that). What it
+ * does prove is that no route exists WITHOUT one — which is the failure mode
+ * that actually happens, because it happens by omission rather than by error.
+ *
+ * Deliberately hardcoded and small: PUBLIC_PAGES is the allowlist, and adding
+ * to it should feel heavier than adding a guard.
+ */
+
+const APP_DIR = path.join(process.cwd(), "src", "app");
+
+/** The only pages permitted to render without a session. */
+const PUBLIC_PAGES = new Set(["login/page.tsx"]);
+
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+const files = walk(APP_DIR);
+const rel = (f: string) => path.relative(APP_DIR, f).split(path.sep).join("/");
+
+const pages = files.filter((f) => f.endsWith("page.tsx"));
+const handlers = files.filter((f) => f.endsWith("route.ts"));
+
+test("the router has the pages and handlers we think it has", () => {
+  // A canary: if these counts move, a route was added or removed, and the
+  // assertions below deserve a fresh look rather than a silent pass.
+  assert.ok(pages.length >= 22, `expected >= 22 pages, found ${pages.length}`);
+  assert.ok(handlers.length >= 7, `expected >= 7 route handlers, found ${handlers.length}`);
+});
+
+test("EVERY page requires a session, except the declared public ones", () => {
+  const unguarded: string[] = [];
+  for (const file of pages) {
+    const name = rel(file);
+    const src = readFileSync(file, "utf8");
+    const guarded = src.includes("requireSession()");
+    if (PUBLIC_PAGES.has(name)) {
+      assert.equal(
+        guarded,
+        false,
+        `${name} is declared public but guards itself — the app would be unreachable`
+      );
+      continue;
+    }
+    if (!guarded) unguarded.push(name);
+  }
+  assert.deepEqual(unguarded, [], `these pages render without an auth check: ${unguarded}`);
+});
+
+test("EVERY route handler returns 401 rather than redirecting", () => {
+  const unguarded: string[] = [];
+  for (const file of handlers) {
+    const src = readFileSync(file, "utf8");
+    if (!src.includes("requireApiSession()")) unguarded.push(rel(file));
+  }
+  assert.deepEqual(
+    unguarded,
+    [],
+    `these API routes are open: ${unguarded}. An API caller needs a status code, ` +
+      `not an HTML redirect — use requireApiSession(), not requireSession().`
+  );
+});
+
+test("no page is statically rendered — a DAL cannot protect build-time data", () => {
+  // The Next docs are explicit that a Data Access Layer does not protect a
+  // static route: its data is fetched at build time, not per request. A page
+  // that loses force-dynamic silently stops being protected by its own guard.
+  const staticPages: string[] = [];
+  for (const file of pages) {
+    const src = readFileSync(file, "utf8");
+    if (!src.includes('export const dynamic = "force-dynamic"')) staticPages.push(rel(file));
+  }
+  assert.deepEqual(staticPages, [], `these pages render statically: ${staticPages}`);
+});
+
+test("pages do not use requireApiSession, and handlers do not use requireSession", () => {
+  // Crossing these over fails quietly in opposite directions: a page returning
+  // a bare 401 Response renders nothing useful, and an API route throwing a
+  // redirect answers a fetch() with an HTML login page and a 200-shaped hop.
+  for (const file of pages) {
+    if (PUBLIC_PAGES.has(rel(file))) continue;
+    const src = readFileSync(file, "utf8");
+    assert.equal(
+      src.includes("requireApiSession"),
+      false,
+      `${rel(file)} is a page and must use requireSession()`
+    );
+  }
+  for (const file of handlers) {
+    const src = readFileSync(file, "utf8");
+    assert.equal(
+      src.includes("requireSession()"),
+      false,
+      `${rel(file)} is a route handler and must use requireApiSession()`
+    );
+  }
+});
+
+test("the proxy's public allowlist stays tiny and is default-deny", () => {
+  const proxy = readFileSync(path.join(process.cwd(), "src", "proxy.ts"), "utf8");
+  assert.ok(
+    proxy.includes('const PUBLIC_PATHS = ["/login"]'),
+    "PUBLIC_PATHS changed — every addition is a route reachable with no cookie at all"
+  );
+  // The matcher must not exclude /api. The Next docs' sample does exclude it,
+  // which would leave route handlers with no proxy layer whatsoever.
+  assert.equal(
+    proxy.includes("?!api"),
+    false,
+    "the proxy matcher excludes /api — handlers would lose their cheap cookie check"
+  );
+});
+
+test("every server action in actions.ts is guarded", () => {
+  const src = readFileSync(path.join(process.cwd(), "src", "lib", "actions.ts"), "utf8");
+  const exported = [...src.matchAll(/export async function (\w+)/g)].map((m) => m[1]);
+  assert.ok(exported.length >= 20, `expected >= 20 actions, found ${exported.length}`);
+
+  // Server Functions are POSTs to whatever route uses them, so the proxy never
+  // dependably covers them: each one is its own boundary.
+  const guards = [...src.matchAll(/await requireSession\(\)/g)].length;
+  assert.equal(
+    guards,
+    exported.length,
+    `${exported.length} exported actions but ${guards} guards — one is unprotected`
+  );
+});

@@ -13,6 +13,7 @@ import {
   postedDepreciation,
 } from "@/lib/tax/depreciation";
 import type { FixedAssetRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,8 @@ export default async function DepreciationPage({
 }: {
   searchParams: Promise<{ fy?: string; posted?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const assets = db

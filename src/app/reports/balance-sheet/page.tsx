@@ -5,6 +5,7 @@ import { formatDate, inr, todayIso } from "@/lib/format";
 import { fyEnd, fyLabel, fyList } from "@/lib/fy";
 import { balanceSheet, type BalanceSheetGroup } from "@/lib/reports";
 import type { SettingsRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,8 @@ export default async function BalanceSheetPage({
 }: {
   searchParams: Promise<{ fy?: string; as_of?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const fys = fyList(db);

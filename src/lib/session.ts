@@ -26,13 +26,13 @@ import { SESSION_COOKIE, SESSION_TTL_MS } from "./auth";
  * TLS terminator in front (`tailscale serve` does exactly this). Default off,
  * because the delivered configuration is plain HTTP on a private tailnet.
  */
-const useSecureCookie = (): boolean => process.env.REVENUEOS_HTTPS === "1";
+const wantSecureCookie = (): boolean => process.env.REVENUEOS_HTTPS === "1";
 
 export async function setSessionCookie(token: string, now: Date): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    secure: useSecureCookie(),
+    secure: wantSecureCookie(),
     sameSite: "lax",
     path: "/",
     expires: new Date(now.getTime() + SESSION_TTL_MS),

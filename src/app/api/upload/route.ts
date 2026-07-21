@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getDb, UPLOADS_DIR } from "@/lib/db";
+import { requireApiSession } from "@/lib/dal";
 
 const ALLOWED_EXT: Record<string, string> = {
   jpg: "image/jpeg",
@@ -13,6 +14,8 @@ const ALLOWED_EXT: Record<string, string> = {
 const MAX_BYTES = 15 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   let form: FormData;
   try {
     form = await req.formData();

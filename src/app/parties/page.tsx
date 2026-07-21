@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { createParty } from "@/lib/actions";
 import { formatDate } from "@/lib/format";
 import type { PartyRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -20,7 +21,9 @@ function KindPill({ kind }: { kind: string }) {
   );
 }
 
-export default function PartiesPage() {
+export default async function PartiesPage() {
+  await requireSession();
+
   const parties = getDb()
     .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
     .all() as PartyRow[];

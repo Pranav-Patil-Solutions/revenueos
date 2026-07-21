@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getDb, UPLOADS_DIR } from "@/lib/db";
 import { parseImportCsv, type ImportParty } from "@/lib/import-csv";
+import { requireApiSession } from "@/lib/dal";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
@@ -11,6 +12,8 @@ const MAX_BYTES = 2 * 1024 * 1024;
  * + staged rows in ONE transaction, landing in the same review flow as a
  * photo extraction. */
 export async function POST(req: NextRequest) {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   let form: FormData;
   try {
     form = await req.formData();

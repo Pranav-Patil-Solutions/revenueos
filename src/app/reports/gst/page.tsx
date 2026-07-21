@@ -3,6 +3,7 @@ import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { inr, monthLabel, thisMonth } from "@/lib/format";
 import { gstr1B2B, gstr3b } from "@/lib/reports";
 import type { SettingsRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,8 @@ export default async function GstReportPage({
 }: {
   searchParams: Promise<{ month?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const month = /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month! : thisMonth();
   const db = getDb();

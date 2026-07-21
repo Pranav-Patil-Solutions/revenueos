@@ -4,6 +4,7 @@ import { FySelect } from "@/components/fy-select";
 import { inr, monthLabel } from "@/lib/format";
 import { fyEnd, fyLabel, fyList, fyStart } from "@/lib/fy";
 import { profitAndLoss, type PnlPeriod } from "@/lib/reports";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,8 @@ export default async function PnlPage({
 }: {
   searchParams: Promise<{ month?: string; fy?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const fys = fyList(db);

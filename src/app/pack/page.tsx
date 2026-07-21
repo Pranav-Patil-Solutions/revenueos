@@ -18,6 +18,7 @@ import type {
   SettingsRow,
   TdsChallanRow,
 } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +81,8 @@ export default async function PackPage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const books = fyList(db);

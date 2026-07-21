@@ -2,10 +2,13 @@ import { getDb } from "@/lib/db";
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { inr } from "@/lib/format";
 import { trialBalance } from "@/lib/reports";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
-export default function TrialBalancePage() {
+export default async function TrialBalancePage() {
+  await requireSession();
+
   const tb = trialBalance(getDb());
 
   return (

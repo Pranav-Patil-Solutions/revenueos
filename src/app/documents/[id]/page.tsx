@@ -8,6 +8,7 @@ import { ReviewTable } from "@/components/review-table";
 import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp } from "@/lib/format";
 import type { DocumentWithParty, StagedRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,8 @@ export default async function DocumentReviewPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requireSession();
+
   const { id } = await params;
   const db = getDb();
   const doc = db

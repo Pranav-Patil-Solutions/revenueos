@@ -20,6 +20,7 @@ import {
   HALF_YEAR_DAYS,
 } from "@/lib/tax/depreciation";
 import type { SettingsRow } from "@/lib/types";
+import { requireApiSession } from "@/lib/dal";
 
 const rupees = paiseToRupeeString;
 
@@ -41,6 +42,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ report: string }> }
 ) {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   const { report } = await params;
   const sp = req.nextUrl.searchParams;
   const format = sp.get("format") ?? "json";

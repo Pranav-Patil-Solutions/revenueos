@@ -3,10 +3,13 @@ import { getDb } from "@/lib/db";
 import { ImportExcel } from "@/components/import-excel";
 import { ImportTally } from "@/components/import-tally";
 import type { PartyRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
-export default function ImportsPage() {
+export default async function ImportsPage() {
+  await requireSession();
+
   const db = getDb();
   const parties = db
     .prepare("SELECT * FROM parties ORDER BY name")

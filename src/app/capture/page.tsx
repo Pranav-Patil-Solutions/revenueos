@@ -2,10 +2,13 @@ import Link from "next/link";
 import { getDb } from "@/lib/db";
 import { UploadCapture } from "@/components/upload-capture";
 import type { PartyRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
-export default function CapturePage() {
+export default async function CapturePage() {
+  await requireSession();
+
   const parties = getDb()
     .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
     .all() as PartyRow[];
