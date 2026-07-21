@@ -8,6 +8,7 @@ import {
   createUser,
   destroySession,
   passwordProblem,
+  purgeExpiredSessions,
   safeNextPath,
   userCount,
 } from "./auth";
@@ -56,6 +57,10 @@ export async function login(
   }
 
   const token = createSession(getDb(), outcome.user_id, now.toISOString());
+  // Housekeeping on a naturally bounded schedule: expired rows can only
+  // accumulate as fast as people sign in, so sweeping here needs no scheduler
+  // and can never run hot. A cron would be a moving part for no gain.
+  purgeExpiredSessions(getDb(), now.toISOString());
   await setSessionCookie(token, now);
   redirect(safeNextPath(formData.get("next")));
 }
