@@ -97,7 +97,10 @@ export interface TaxYearRates {
  * after checking a year against the bare Act/Finance Act text, and put the
  * citation in `source` when you do.
  *
- * Model notes for the verified year (Income-tax Act 2025 + Finance Act 2026):
+ * Model notes for 2026-27 (Income-tax Act 2025 + Finance Act 2026). NOTE:
+ * "verified" is per GROUP — see RATE_VERIFICATION. The year-level `verified`
+ * boolean is retained for compatibility and is NOT the authority; presumptive
+ * rates are unconfirmed for BOTH years.
  * - `surcharge` stores the OLD-regime ladder (10/15/25/37). The new regime's
  *   own ladder has NO 37% tier (FA 2026 s.3(4)(b) Table Sl. 10 tops out at
  *   25%); `surcharge_cap_new: 25` reproduces it exactly, so both regimes
@@ -175,9 +178,14 @@ export const TAX_YEARS: TaxYearRates[] = [
       "s.3 + First Schedule Part I-B — charges 'the tax year commencing on the 1st day " +
       "of April, 2026' under the Income-tax Act, 2025; ITA 2025 (Act 30 of 2025, gazette " +
       "265620.pdf) ss.156 (rebate — s.156, not 157), 200–204 (rates), 35(e)(iii) (partner " +
-      "remuneration), 58 (presumptive), 408 (advance tax); Budget 2026 Memorandum " +
+      "remuneration), 408 (advance tax); Budget 2026 Memorandum " +
       "(indiabudget.gov.in/doc/memo.pdf): 'no change proposed in tax rates'. Each figure " +
-      "independently re-checked by an adversarial pass against the same gazette texts.",
+      "independently re-checked by an adversarial pass against the same gazette texts. " +
+      "EXCEPT the PRESUMPTIVE rates (s.44AD/44ADA/44AE deemed-profit percentages): that " +
+      "pass covered presumptive only in the ADVANCE-TAX context, so the percentages " +
+      "themselves are NOT confirmed for this year either. RATE_VERIFICATION below is the " +
+      "authority on what has actually been checked — this field is a summary, not a claim " +
+      "per figure.",
     slabs_new: [
       { upto_paise: 4 * LAKH, rate: 0 },
       { upto_paise: 8 * LAKH, rate: 5 },
@@ -234,8 +242,15 @@ export interface ResolvedRates {
   rates: TaxYearRates;
   /** True when the year has no table of its own and an earlier one was used. */
   provisional: boolean;
-  /** Why the caller should show a warning, or "" when the year is confirmed. */
+  /** Why the caller should show a warning, or "" when the year is confirmed.
+   * Covers ALL groups — callers that used only some should build their own
+   * with caveatForGroups() so they do not warn about rates they never read. */
   caveat: string;
+  /** Groups of this year's table that nobody has verified. */
+  unverified: RateGroup[];
+  /** The "no table for this year" note on its own, "" when the year is exact.
+   * Callers that scope their own group caveat still need to carry this. */
+  provisional_note: string;
 }
 
 /**
@@ -244,6 +259,125 @@ export interface ResolvedRates {
  * letting stale slabs pass as current. Throws for a year before the earliest
  * table, since guessing backwards has no defensible basis.
  */
+/**
+ * Verification granularity — RVOS-003 P1.
+ *
+ * `TaxYearRates.verified` is ONE boolean over ~15 fields, and that is not how
+ * verification actually happens. The 2026-07-21 adversarial pass cleared the
+ * slabs, rebate, surcharge, cess, firm and company rates, s.40(b) and advance
+ * tax for FY 2025-26 from gazette text — and explicitly REFUSED the
+ * presumptive rates, which rest on search snippets. Flipping the year would
+ * claim verification nobody performed; leaving it false warns on figures that
+ * ARE confirmed. Both are lies, in opposite directions.
+ *
+ * So verification is recorded per GROUP, per YEAR. A group ABSENT from a
+ * year's map is unverified for that year, and callers name the groups they
+ * actually used so a book-profit computation is never warned about
+ * presumptive rates it did not touch.
+ *
+ * NOTE ON `presumptive`: absent for BOTH years, deliberately. The FY 2025-26
+ * research could not source the s.44AD/44ADA/44AE deemed-profit percentages
+ * beyond search snippets, and I could not establish that the RVOS-002 pass
+ * separately confirmed them for FY 2026-27 either — the EVOLUTION #19 record
+ * mentions presumptive only in the advance-tax context. Rather than inherit
+ * an unexamined claim, both years warn until someone reads the section.
+ */
+export type RateGroup =
+  | "slabs"
+  | "rebate"
+  | "surcharge"
+  | "cess"
+  | "firm"
+  | "company"
+  | "partner_remuneration"
+  | "advance_tax"
+  | "presumptive";
+
+export const ALL_RATE_GROUPS: RateGroup[] = [
+  "slabs",
+  "rebate",
+  "surcharge",
+  "cess",
+  "firm",
+  "company",
+  "partner_remuneration",
+  "advance_tax",
+  "presumptive",
+];
+
+const GROUP_LABELS: Record<RateGroup, string> = {
+  slabs: "the slab rates",
+  rebate: "the s.87A rebate",
+  surcharge: "the surcharge ladder",
+  cess: "the cess rate",
+  firm: "the firm/LLP rate",
+  company: "the company rates",
+  partner_remuneration: "the s.40(b) partner-remuneration ceiling",
+  advance_tax: "the advance-tax schedule",
+  presumptive: "the presumptive rates (s.44AD/44ADA/44AE)",
+};
+
+const FA2026 = "Finance Act 2026 (gazette CG-DL-E-31032026-271439)";
+const FA2025 = "Finance Act 2025 (gazette CG-DL-E-29032025-262125)";
+
+/** group → citation. Absent group = NOT verified for that year. */
+const RATE_VERIFICATION: Record<string, Partial<Record<RateGroup, string>>> = {
+  "2025-26": {
+    slabs: `${FA2025} s.25 inserting s.115BAC(1A)(iii) (new regime); ${FA2026} Sch. I Part I-A Para A(I) (old regime). AY 2026-27 = FY 2025-26.`,
+    rebate: `${FA2025} s.20 amending the s.87A proviso — ₹12,00,000 / ₹60,000 with marginal relief (new regime); ₹5,00,000 / ₹12,500 without (old).`,
+    surcharge: `${FA2026} Sch. I Part I-A Para F Table 1 (old regime 10/15/25/37); s.2(4)(b) Table Sl.10 caps the new regime at 25% — there is NO 37% tier under s.115BAC(1A).`,
+    cess: `${FA2026} s.2(6) — 4% on income-tax plus surcharge.`,
+    firm: `${FA2026} Sch. I Part I-A Para C (30%) and Para F Table 1 Sl.4 (12% above ₹1 crore).`,
+    company: `${FA2026} Sch. I Part I-A Para E.I — 25% only where turnover in PY 2023-24 ≤ ₹400 crore, else 30%. The app does NOT model the turnover test and always applies 25%.`,
+    partner_remuneration: `Finance (No. 2) Act 2024 s.14 (gazette CG-DL-E-16082024-256436) — NOT Finance Act 2025. In force from AY 2025-26, so it covers FY 2025-26.`,
+    advance_tax: `Income-tax Act 1961 s.211(1) and clause (b) — 15/45/75/100%, presumptive assessees one instalment by 15 Mar. The s.211(1) proviso treats anything paid by 31 March as advance tax for that year.`,
+  },
+  "2026-27": {
+    slabs: `Income-tax Act 2025 + ${FA2026} Sch. I Part I-B. Verified 2026-07-21 (EVOLUTION #19).`,
+    rebate: `Income-tax Act 2025 s.156 rebate. Verified 2026-07-21 (EVOLUTION #19).`,
+    surcharge: `${FA2026} surcharge tables. Verified 2026-07-21 (EVOLUTION #19).`,
+    cess: `${FA2026} — 4% health and education cess. Verified 2026-07-21.`,
+    firm: `${FA2026} firm/LLP rate and surcharge. Verified 2026-07-21.`,
+    company: `${FA2026} company rates. The turnover test is not modelled — always 25%. Verified 2026-07-21.`,
+    partner_remuneration: `s.40(b) equivalent under the Income-tax Act 2025. Verified 2026-07-21.`,
+    advance_tax: `Income-tax Act 2025 s.408(1) and s.408(2) (presumptive single instalment). Verified 2026-07-21.`,
+  },
+};
+
+/** The citation for a group in a year, or null when nobody has verified it. */
+export function groupSource(taxYear: string, group: RateGroup): string | null {
+  return RATE_VERIFICATION[taxYear]?.[group] ?? null;
+}
+
+/** Which of the named groups are unverified for this year. */
+export function unverifiedGroups(
+  taxYear: string,
+  groups: RateGroup[] = ALL_RATE_GROUPS
+): RateGroup[] {
+  return groups.filter((g) => groupSource(taxYear, g) === null);
+}
+
+/**
+ * A caveat naming ONLY the unverified groups among those the caller used.
+ * "" when everything it relied on is confirmed — so a verified computation
+ * renders clean rather than carrying a warning about rates it never touched.
+ */
+export function caveatForGroups(taxYear: string, groups: RateGroup[]): string {
+  const missing = unverifiedGroups(taxYear, groups);
+  if (missing.length === 0) return "";
+  const names = missing.map((g) => GROUP_LABELS[g]);
+  const list =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  // Phrased without a verb so it cannot disagree with a plural group label
+  // ("the presumptive rates ... has not been" was the first draft).
+  return (
+    `For ${taxYear}, ${list} — NOT confirmed against the Act. ` +
+    `Verify before filing from these figures.`
+  );
+}
+
 export function ratesFor(taxYear: string): ResolvedRates {
   const exact = TAX_YEARS.find((t) => t.tax_year === taxYear);
   const chosen =
@@ -262,12 +396,15 @@ export function ratesFor(taxYear: string): ResolvedRates {
       `No rate table for ${taxYear}: computed using ${chosen.tax_year} rates. Confirm this year's rates before filing.`
     );
   }
-  if (!chosen.verified) {
-    notes.push(
-      `The ${chosen.tax_year} rates are unconfirmed (${chosen.source}). Verify against the Act.`
-    );
-  }
-  return { rates: chosen, provisional, caveat: notes.join(" ") };
+  const groupCaveat = caveatForGroups(chosen.tax_year, ALL_RATE_GROUPS);
+  if (groupCaveat) notes.push(groupCaveat);
+  return {
+    rates: chosen,
+    provisional,
+    caveat: notes.join(" "),
+    unverified: unverifiedGroups(chosen.tax_year),
+    provisional_note: provisional ? notes[0] : "",
+  };
 }
 
 /** Statutory rounding: to the nearest ₹10. */

@@ -1,3 +1,240 @@
+# RVOS-003 HANDOFF (client delivery) — ACTIVE
+
+Branch `feat/rvos-003-client-delivery`, off master `76f023a`. Spec:
+`RVOS-003-SPEC.md`. Research: `RVOS-003-P1-FINDINGS.md`. Local only, unpushed.
+
+Delivery target (decided 2026-07-21): office's own **Windows** machine, ONE
+company, **client's own** `claude` CLI subscription, reachable over **their
+Tailscale**.
+
+## DONE
+- **P0** `fc75d40` — spec, 6 phases, 3 new invariants (auth before any
+  non-localhost bind · a backup counts only when a RESTORE is asserted ·
+  Windows claims ship WINDOWS-UNVERIFIED until run on their machine).
+- **P1 research** `14d1783` — 4 agents vs primary gazette text. **No flag
+  flipped.** Findings in `RVOS-003-P1-FINDINGS.md`. Headline: the FY 2025-26
+  numbers were already CORRECT; what is broken is the METADATA.
+- **P2 foundation** `1343866` — schema, auth core, DAL, proxy, login page.
+  227 tests pass, tsc clean.
+
+- **P2 guards wired** `719e362` — 20 actions + 7 handlers + 22 pages, logout,
+  session-gated chrome, +30 tests.
+- **P2 open-redirect fix** `76c8590` — see gotchas. Found by the zero-context
+  review, not by me.
+
+- **P2 session sweep + EVOLUTION #20-#22** `eef5b82`.
+- **P2 proxy /api 401 fix** `e7f863b` — found by qa-runner.
+
+**P2 IS COMPLETE, ship gate passed.** 267 tests · smoke GREEN · lint · tsc ·
+build. Zero-context code-reviewer on the full branch diff: 1 blocker (open
+redirect, fixed in `76c8590`), nothing else; it re-walked the router itself
+rather than trusting the diff. qa-runner drive of :3322: 1 failure (proxy
+answering /api with 307 instead of 401, fixed in `e7f863b`), nothing else —
+anonymous pages leak no ledger data, cookie is HttpOnly/Lax/no-Secure, all
+three open-redirect payloads land on /, accounting output unchanged behind
+auth, `data/revenueos.db` restored byte-identical (sha256 da63a52b… both ends).
+
+**The P2 lesson worth keeping:** the code reviewer and the unit tests both
+reason about code AS WRITTEN. Only the HTTP drive could show that the API
+handlers were CORRECT but UNREACHABLE — the proxy answered first and rewrote
+every 401 into a 307. `route-guards.test.ts` is static and proves a handler
+WOULD answer 401 if reached, never that a request arrives. `test/proxy.test.ts`
+now closes that gap.
+
+- **P3 backups + WAL checkpoint** `962d157` — see EVOLUTION #23; this one
+  found and recovered a real ledger loss.
+- **P4 Windows install path** `e43ce97` — WINDOWS-UNVERIFIED.
+- **P5 bind policy** — loopback default, tailnet opt-in, 0.0.0.0 refused.
+
+- **P6 docs** `6701238` — `docs/DAY-ONE.md` + README corrected.
+- **P1 part 1** `9dd50d6` — year-aware authority in compliance.ts.
+- **P1 part 2** `662a2df` — adversarial re-check cleared FY 2025-26; adopted
+  the 31 Aug ITR tier.
+- **P1 part 3** `69f10f4` — verification is per GROUP, not per year.
+- **P1 review fixes** `ea0c6bf` — both warnings cleared.
+
+**P1 IS SUBSTANTIALLY COMPLETE.** Code review of the tax range: 0 blockers,
+2 warnings (both fixed). It independently confirmed the FY-string boundaries
+and that buildComputation's per-branch group lists are a SUPERSET of what each
+branch reads, so the caveat cannot go silent on a rate that was read.
+
+### What P1 settled
+- **FY 2025-26 is a 1961-Act year** — confirmed twice, independently, from
+  gazette PDFs (FA 2026 s.2(1) charges AY 2026-27 under the 1961 Act; s.3(1)
+  separately charges tax year 2026-27 under ITA 2025).
+- **20 of 21 claims survived** two adversarial passes told to refute.
+- **The 31 Aug ITR tier is adopted.** I had held 31 Jul as "conservative"; that
+  was wrong by a month. FA 2026 s.5 substituted Expln 2 to s.139(1) of the
+  1961 Act w.e.f. 1 Mar 2026. The test is INCOME-based ("assessee having
+  income from profits and gains of business or profession whose accounts are
+  not required to be audited"), so a non-audited FIRM qualifies — closes
+  RVOS-002 open item #2, and the popular "31 Aug = ITR-3/4" gloss is wrong.
+- **Verification is now per FIELD-GROUP per year.** An FY 2025-26 book-profit
+  computation renders CAVEAT-FREE; it previously warned about everything.
+- **FY 2026-27 was over-claiming.** Nobody ever confirmed the s.44AD/44ADA/
+  44AE deemed-profit percentages for EITHER year (EVOLUTION #19 covered
+  presumptive only in the advance-tax context), so presumptive is flagged for
+  both rather than inheriting an unexamined claim.
+
+## THE ONE REMAINING TAX GAP
+**s.44AD / 44ADA / 44AE deemed-profit percentages (8% / 6% / 50%)** are the
+only figures still unconfirmed. The app SAYS SO on any presumptive
+computation. To close: read the sections, add citations to
+`RATE_VERIFICATION` in india-it.ts keyed `{year: {presumptive: "<citation>"}}`.
+Nothing else is needed — the machinery is in place.
+
+## NEXT (in this order)
+1. **P1 metadata work** — see the P1 section. Researched, no code changed. This
+   touches TESTED, money-adjacent tax code and deserves a FRESH context window,
+   not the tail of a long one.
+3. Merge to master only after the full gate; master is untouched at `76f023a`
+   and still shippable. **The branch exists only on this disk** —
+   `git push -u origin feat/rvos-003-client-delivery`.
+4. **Windows acceptance with Pranav present** clears invariant N3 — install
+   from clean, reboot, sign in over the tailnet, restore a backup, extract one
+   real photo on the OFFICE's claude account. Nothing before that step may be
+   reported as Windows-ready.
+
+## P3/P4/P5 — decisions worth not re-litigating
+- Backups go through SQLite's ONLINE BACKUP API, never a file copy.
+  `verifyBackup` probes the accounting tables and asserts journal lines
+  balance — `integrity_check` alone passes a zero-byte or foreign database.
+- `configureConnection()` checkpoints the WAL on every open and sets
+  `wal_autocheckpoint = 64`. Do not remove either: see EVOLUTION #23.
+- Uninstall deliberately LEAVES `data/`. An uninstaller that deletes
+  accounting records is a disaster with a progress bar.
+- All installer pass/fail DECISIONS live in `src/lib/preflight.ts` and are unit
+  tested. PowerShell orchestrates and reads an exit code — logic in a .ps1 is
+  logic nothing has ever tested.
+- The `claude` CLI check verifies PRESENCE only and says so; proving sign-in
+  costs a real request. It is non-fatal and names what still works without it.
+- Bind defaults to loopback. Tailnet (100.64-100.127.x.x) is an opt-in via
+  `REVENUEOS_BIND`; 0.0.0.0 and public-looking hosts are REFUSED unless
+  `REVENUEOS_ALLOW_ANY=1`.
+
+## P2 — decisions worth not re-litigating
+- Sessions are a TABLE, not a signed stateless cookie, because a signed cookie
+  cannot be revoked and "revoke access" is a real requirement for an office.
+- Only SHA-256 of the token is stored, so a copied db (backup, Syncthing,
+  stolen laptop) yields no usable cookie. Pinned by a test that greps the row
+  dump for the raw token.
+- The lockout counter is PERSISTED. In-memory would be cleared by the restart
+  that autostart-at-logon performs.
+- NO default credentials. First run turns /login into a create-account form,
+  guarded on `userCount() === 0`.
+- Chrome is session-gated in the root layout as PRESENTATION only (the topbar
+  prints company name + GSTIN). Pages still guard themselves — a layout does
+  not re-render on navigation.
+
+## GOTCHAS (P2)
+- **Next 16 renamed Middleware → Proxy.** `middleware.ts` does not exist; the
+  file is `src/proxy.ts`. Proxy runs on the **Node** runtime by default here.
+- **Proxy is optimistic ONLY.** It must not read the db — it runs on every
+  request including prefetches. A forged cookie passes proxy and is rejected by
+  the DAL. That is the design, not a hole.
+- **Server Functions are POSTs to the route that uses them.** A proxy matcher
+  that skips a path also skips its actions, and moving an action to another
+  route silently removes coverage. Never rely on proxy for an action.
+- **The docs' `secure: true` cookie is WRONG for this deployment.** The office
+  reaches the app as plain `http://100.x.x.x:3322`; a Secure cookie is silently
+  dropped on a non-HTTPS origin and login loops forever with nothing in the
+  logs. Gated behind `REVENUEOS_HTTPS=1` for when TLS is terminated in front
+  (`tailscale serve`).
+- **Layouts do not protect nested routes** (Partial Rendering — a layout does
+  not re-render on navigation). Check per page, never in the layout.
+- `server-only` is NOT a dependency and must not become one; both imports were
+  removed. better-sqlite3 + `next/headers` already fail loudly in a client
+  bundle.
+- `cookies()` is **async** in Next 16 — await it, like params/searchParams.
+- No default credentials ship. First run turns /login into a create-account
+  form, guarded on `userCount() === 0`.
+- Design tokens: `ink ink-2 ink-3 surface surface-2 hairline accent critical
+  warning`. There is **no** `shadow-whisper` utility — I invented it once and
+  had to remove it. Cards are `rounded-xl border border-hairline bg-surface p-5`.
+- `grep` silently returns NOTHING in this sandbox (even `grep -c`) while exit
+  codes still work — several searches came back falsely clean. Use `sed -nE`
+  or the Read tool. BSD `sed` also rejects `\?`; use `-E`.
+- **Never pattern-match a string a browser will later PARSE.** `safeNext()`
+  rejected a leading `//` but not a leading BACKSLASH, and the WHATWG URL
+  parser normalises `/\evil.com` → `//evil.com` → `http://evil.com/`. Because
+  /login is public, the payload arrived on a link to our OWN login page and
+  fired AFTER the victim authenticated. Now resolved against a reserved
+  sentinel origin with an origin equality check (`safeNextPath` in auth.ts).
+  The parser's normalisation rules ARE the attack surface.
+- A `"use server"` module may only export ASYNC functions — that is why
+  `safeNextPath` lives in `auth.ts` and not beside its caller. Anything in an
+  actions file that needs a unit test has to move out of it.
+- `requireSession()` works by THROWING a redirect. Any `try`/`catch` around a
+  guarded call site can swallow it and let the request continue
+  unauthenticated — `runExtraction` opens with `try {`, so its guard sits
+  ABOVE the try. Check this on every new action that catches broadly.
+- ESLint's `react-hooks/rules-of-hooks` fires on ANY function named `use*`,
+  including plain server helpers. `useSecureCookie` had to become
+  `wantSecureCookie`.
+
+## GOTCHAS (P3/P4/P5)
+- **A `.db` file is not the database.** See EVOLUTION #23 — the live ledger was
+  lost because all data sat in an uncheckpointed `-wal` while `revenueos.db`
+  was a 4 KB stub, and a sha256 of that stub "verified" the loss as unchanged.
+  Never hash/copy/move/delete a `.db` without its `-wal`/`-shm`, and assert
+  CONTENT (row counts, trial balance), never byte-identity of one file.
+- **`next start` binds 0.0.0.0 by default** — every interface, every network
+  the machine joins. `npm run start` now goes through `scripts/start.ts`, which
+  applies `src/lib/bind.ts`. Do not "simplify" it back to a bare `next start`.
+- `npm run dev` was left binding 0.0.0.0 ON PURPOSE — Pranav's phone capture
+  over Tailscale depends on it. Only production `start` is locked down.
+- **PowerShell treats a backtick as an ESCAPE inside double-quoted
+  here-strings**: `` `t `` becomes a TAB. Writing `` `tailscale ip -4` `` in a
+  `@"..."@` block silently corrupts the text. Use plain quotes; the only
+  legitimate backticks in setup.ps1 are `` `n ``, line continuations and
+  escaped quotes.
+- ESLint forbids `require()`. `checkNativeModule` still needs a LAZY load (a
+  static import throws during module evaluation, so an ABI mismatch would
+  crash the preflight instead of printing its fix) — use `createRequire`.
+- `statfsSync` needs Node 18+; it is how disk headroom is checked.
+- **Accounts Payable is code 2100, not 2000.** Verify seed codes against
+  `SEED_ACCOUNTS` in db.ts before writing them into docs — I nearly shipped
+  2000 into the day-one runbook. Opening balances post fine as a free-form
+  journal with `entry_type: "opening"` (verified: day book shows "opening",
+  TB net 0, BS 1,70,000 = 30,000 + 1,40,000).
+
+## P1 — what it actually needs (NOT a boolean flip)
+Detail in `RVOS-003-P1-FINDINGS.md`. Three metadata defects, one per file:
+- `tds.ts` cites only ITA 2025 s.393 and is `verified: true` unconditionally —
+  on an FY 2025-26 screen that cites an Act which did not govern the year. The
+  VALUES are identical across both years (each primary-verified against a
+  different gazette), so this needs an **authority axis, not a value axis** —
+  much cheaper than SPEC risk R2 assumed.
+- `compliance.ts` same, plus names Forms 140/138 while `:191` renders the
+  contradicting string `"26Q/24Q statement"`. FY 2025-26 files on 26Q/24Q.
+- `india-it.ts` `verified` is ONE boolean over ~15 fields, but the research
+  verified some and REFUSED others (44AD/44ADA/44AE — presumptive rates rest on
+  search snippets). Flipping it would claim verification nobody performed.
+  → verification metadata must live per FIELD-GROUP and per YEAR.
+- Resolved: HANDOFF open item #2. FA 2026 s.5 substituted Expln 2 to s.139(1)
+  of the **1961** Act w.e.f. 1 Mar 2026, so the 31 Aug tier reaches FY 2025-26,
+  and its discriminator ("business/profession income, accounts not audited")
+  covers a non-audited **firm**. `compliance.ts:232` gates on
+  `proprietorship && y >= 2026` — wrong on both axes; fails safe.
+- Known gap with a number on it: `company_rate` is always 25%, but 25% requires
+  turnover ≤ ₹400cr **in PY 2023-24** — above that it is 30%, so large
+  companies are under-taxed. Documented at `india-it.ts:107`.
+- **Adversarial re-check has NOT run.** Nothing flips to `verified: true`
+  before it does (EVOLUTION #19 protocol).
+
+## EVOLUTION candidates from this build (not yet written)
+- A primary source can serve a STALE VERSION at a live URL. The ITD hosts
+  multiple versions of a section at near-identical slugs and the obsolete ones
+  rank HIGHER in search; an agent cited pre-1994 s.234C (1.5%) before catching
+  itself. "Use a primary source" is insufficient — pin the version id and
+  cross-check against a second host.
+- A brief's own premises are not evidence. Two premises I wrote into the spec
+  were wrong (FA 2025 did not raise the 194C thresholds; the s.40(b) revision
+  was Finance (No.2) Act 2024). Both would have been written into `source`
+  fields as fact.
+
+---
+
 # RVOS-002 HANDOFF
 
 ## Done phases

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { ExportLinks } from "@/components/report-tabs";
 import { formatDate, inr } from "@/lib/format";
 import { partyStatement } from "@/lib/reports";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,8 @@ export default async function PartyPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requireSession();
+
   const { id } = await params;
   const statement = partyStatement(getDb(), Number(id));
   if (!statement) notFound();

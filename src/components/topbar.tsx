@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db";
+import { logout } from "@/lib/auth-actions";
 import { formatDate, todayIso } from "@/lib/format";
 import { currentFy, fyLabel } from "@/lib/fy";
 import type { SettingsRow } from "@/lib/types";
@@ -9,8 +10,9 @@ const ENTITY_LABELS: Record<string, string> = {
   company: "Private limited",
 };
 
-/** Frosted sticky context bar: who the books belong to and where they stand. */
-export function Topbar() {
+/** Frosted sticky context bar: who the books belong to and where they stand,
+ * plus who is signed in and the way out. */
+export function Topbar({ username }: { username: string }) {
   const s = getDb()
     .prepare("SELECT * FROM settings WHERE id = 1")
     .get() as SettingsRow;
@@ -36,6 +38,23 @@ export function Topbar() {
       <span className="text-[12px] text-ink-3">
         {s.gstin ? `GSTIN ${s.gstin}` : "No GSTIN"}
       </span>
+
+      <span className="h-4 w-px bg-hairline" />
+
+      <span className="text-[12px] text-ink-3" title="Signed in">
+        {username}
+      </span>
+      {/* A plain form, so signing out works with JavaScript disabled and is a
+          POST rather than a link — a GET logout can be triggered by any image
+          tag on any page the browser happens to load. */}
+      <form action={logout}>
+        <button
+          type="submit"
+          className="rounded-md px-2 py-1 text-[12px] text-ink-3 transition hover:bg-surface-2 hover:text-ink"
+        >
+          Sign out
+        </button>
+      </form>
     </header>
   );
 }

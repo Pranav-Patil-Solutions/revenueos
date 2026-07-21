@@ -523,3 +523,116 @@ must be driven by the flags they report (an unconditional caveat becomes a
 lie the day the flag flips); and where an assessee's class is unpinned, a
 deadline tracker's conservatism must be directional — always the EARLIER
 date, never the later one.
+
+## 20. RVOS-003 P2 (2026-07-21): never pattern-match a string a browser will PARSE
+
+**What happened:** the post-login `next` target was sanitised with a string
+test — reject anything not starting with `/`, and anything starting with `//`.
+It reads as airtight and is not. The WHATWG URL parser normalises a leading
+BACKSLASH to a slash, so `/\evil.com` starts with `/`, does not start with
+`//`, passes both checks, and resolves to `http://evil.com/`. Confirmed live:
+`new URL("/\\evil.com", "http://localhost:3322").href === "http://evil.com/"`.
+
+Worse than a generic open redirect because `/login` is public: the payload
+arrives on a link to our OWN real login page and fires AFTER the victim
+authenticates with genuine credentials, so the browser is signed in when it
+lands on the attacker's origin. Caught by the zero-context review of the branch
+diff, not by the author, and not by any of the 30 tests written alongside it.
+
+**Resolution:** parse instead of match — resolve the candidate against a
+reserved sentinel origin (`http://sentinel.invalid`, RFC 2606) and require the
+result not to have left it, returning only `pathname + search`. Pinned by tests
+covering both backslash forms, protocol-relative, absolute, `javascript:`,
+non-string input and hash stripping. `safeNextPath` had to move from
+`auth-actions.ts` into `auth.ts` because a `"use server"` module may only
+export async functions — anything in an actions file that needs a unit test has
+to move out of it.
+
+**Delta (rule):** when a value will later be handed to a PARSER, validate it
+with that parser, not with string predicates. The parser's normalisation rules
+(backslash→slash, percent-decoding, unicode case folding, whitespace
+stripping) ARE the attack surface, and every one of them is invisible to
+`startsWith`. Corollary for review: a hand-rolled sanitiser for a URL, path,
+host or filename is a standing blocker candidate — check what parses it
+downstream and use that.
+
+## 21. RVOS-003 P1 (2026-07-21): a primary source can serve a STALE VERSION at a live URL
+
+**What happened:** EVOLUTION #19 established "fetch the primary text, not a
+chart." That rule proved necessary but not sufficient. `incometaxindia.gov.in`
+hosts multiple VERSIONS of the same section at near-identical slugs, and the
+obsolete ones rank HIGHER in generic search: a research agent cited
+`/w/section-211-33` (the pre-1988 three-instalment scheme) and
+`/w/section-234c-26` (pre-1994: 20%/50% thresholds, 1.5% rate) before catching
+itself on a second pass. The bogus "1.5% s.234C" figure came from a genuine
+government URL. Current slugs are `/w/section-211-64` and `/w/section-234c-34`.
+
+**Resolution:** every retrieved section was re-fetched at a pinned version slug
+and cross-checked against a second host (India Code). Both slugs recorded in
+`RVOS-003-P1-FINDINGS.md` so the next pass does not re-discover the trap.
+
+**Delta (rule):** "primary source" is a claim about the DOCUMENT, not about the
+URL. Pin the version identifier, cross-check every statutory figure against a
+second independent host, and treat a search-engine-ranked government URL as
+untrusted until its version is confirmed. Where a source cannot be version-
+pinned, the figure stays `verified: false` — a stale primary source is more
+dangerous than a secondary one, because it survives every check aimed at
+secondary sources.
+
+## 22. RVOS-003 (2026-07-21): a brief's own premises are not evidence
+
+**What happened:** the RVOS-003 spec asserted two things as background fact
+while framing the research: that Finance Act 2025 raised the s.194C TDS
+thresholds, and that FA 2025 revised the s.40(b) partner-remuneration ceiling.
+Both are wrong — 194C's ₹30,000/₹1,00,000 were unchanged (from 2010 and 2016),
+and the 40(b) revision was Finance (No. 2) Act 2024. Because the premises sat
+in the task framing rather than in a result, they were on track to be written
+into `source` fields AS citations. The agents contradicted their own brief only
+because each was instructed to cite primary text for every figure
+independently.
+
+**Resolution:** both corrected in `RVOS-003-P1-FINDINGS.md` and called out
+explicitly as brief-originated errors so they are not reintroduced.
+
+**Delta (rule):** context supplied to an agent is an assumption under test, not
+a given — state it as "verify X" rather than "given X", and never let framing
+prose reach an authority field. Corollary: an agent that contradicts its own
+brief is doing the job. Prompts for verification work must say so out loud, or
+the agreeable answer is the likely one.
+
+## 23. RVOS-003 P3 (2026-07-21): a `.db` file is not the database — live ledger lost and recovered
+
+**What happened:** the qa-runner was briefed to protect the live book by
+recording `shasum -a 256 data/revenueos.db` before its run and restoring the
+file to that hash afterwards. It did exactly that, reported a matching hash,
+and deleted `revenueos.db-wal` / `-shm` believing they held only its own test
+writes. They held the entire ledger.
+
+`data/revenueos.db` had been a 4096-byte stub containing NO TABLES since
+2026-07-16. SQLite's default auto-checkpoint fires at 1000 WAL pages (~4 MB);
+a small book never reaches it, so every committed row — 6 documents, 9
+journals, 27 journal lines, 2 parties — sat in the sidecar indefinitely. The
+sha256 matched because the file it hashed was empty, and had been for five
+days. The verification could not fail and could not detect the loss.
+
+It surfaced only because P3's `verifyBackup` refused the first real backup with
+"no such table: journals" — the check written to make backups trustworthy is
+what found the missing ledger. Recovered in full from an 881 KB WAL left in a
+previous session's job scratch directory, then checkpointed into the main file
+and asserted back to its exact baseline (TB net zero).
+
+**Resolution:** `configureConnection()` now runs `wal_checkpoint(TRUNCATE)` on
+every connection open and sets `wal_autocheckpoint = 64` pages, so the main
+file is a real book within one restart. Pinned by a test that deletes the
+sidecars and requires the book to still read. `scripts/backup.ts` uses
+SQLite's ONLINE BACKUP API, never a file copy.
+
+**Delta (rule):** for any database with sidecar files, the unit of integrity is
+the DATABASE, not the file that shares its name. Never hash, copy, move, rsync
+or delete a `.db` without its `-wal`/`-shm`. And a verification whose passing
+state is indistinguishable from the failure state is not a verification: assert
+CONTENT — a row count, a trial balance — through a connection that reads the
+whole database, never a byte-identity check on one file. The corollary bit
+hardest here: the instruction was followed correctly and the agent reported
+success, because the check I designed was incapable of failing.
+

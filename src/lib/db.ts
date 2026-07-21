@@ -201,9 +201,6 @@ const DDL = `
     UNIQUE (fy, block)
   );
 
-  -- Tally ledger name → this book's account or party. Persistent: a ledger
-  -- mapped once is never asked about again on later imports. ledger_name is
-  -- UNIQUE so a name can only ever point at one target.
   -- One human mark per compliance item: done, or not-applicable. Everything
   -- else on the board (pending/overdue) is derived, never stored, so the
   -- calendar can't hold a stale status. Period strings are the item's own
@@ -218,6 +215,9 @@ const DDL = `
     UNIQUE (rule_code, period)
   );
 
+  -- Tally ledger name → this book's account or party. Persistent: a ledger
+  -- mapped once is never asked about again on later imports. ledger_name is
+  -- UNIQUE so a name can only ever point at one target.
   CREATE TABLE IF NOT EXISTS ledger_mappings (
     id          INTEGER PRIMARY KEY,
     ledger_name TEXT NOT NULL UNIQUE,
@@ -227,6 +227,37 @@ const DDL = `
     created_at  TEXT NOT NULL,
     CHECK ((target_kind = 'account') = (account_id IS NOT NULL)),
     CHECK ((target_kind = 'party')   = (party_id   IS NOT NULL))
+  );
+
+  -- Auth (RVOS-003 P2). The office reaches this over Tailscale, so the tailnet
+  -- is no longer the perimeter — a login is. Tailscale becomes defence in
+  -- depth BEHIND this, not instead of it.
+  -- One row per person who may open the books. Password is scrypt; salt and
+  -- hash are hex and compared with timingSafeEqual. The lockout counter is
+  -- STORED, not held in memory, so restarting the server cannot clear a
+  -- brute-force attempt in progress.
+  CREATE TABLE IF NOT EXISTS auth_users (
+    id              INTEGER PRIMARY KEY,
+    username        TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash   TEXT NOT NULL,
+    password_salt   TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    last_login_at   TEXT,
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    locked_until    TEXT
+  );
+
+  -- Sessions live server-side so a logout — or a lost laptop — can actually be
+  -- revoked; a stateless signed cookie cannot be. The cookie carries a random
+  -- 256-bit token and only its SHA-256 is stored, so a copied db file yields
+  -- no usable session cookie.
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_sha256 TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES auth_users(id),
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    CHECK (expires_at > created_at)
   );
 `;
 
@@ -339,10 +370,36 @@ export function ensureColumn(
   }
 }
 
+/**
+ * Connection-level durability settings.
+ *
+ * WHY THE CHECKPOINT (learned the hard way, 2026-07-21): SQLite's default
+ * auto-checkpoint fires at 1000 WAL pages (~4 MB). A small book NEVER reaches
+ * it, so every committed row can sit in `revenueos.db-wal` indefinitely while
+ * `revenueos.db` itself stays a 4 KB stub containing no tables at all.
+ *
+ * Anything that treats the .db file as "the database" then silently reads or
+ * destroys an empty book: a file copy, an rsync, a sha256 integrity check, a
+ * restic snapshot that races the sidecars, or a well-meaning cleanup of
+ * -wal/-shm. This repo's live ledger was lost exactly that way and had to be
+ * recovered from a stale copy in another process's scratch directory.
+ *
+ * Checkpointing on open means the .db file becomes a real book within one
+ * restart, and the lowered threshold keeps it that way during a long run.
+ * This does NOT make a plain file copy safe — use scripts/backup.ts, which
+ * goes through SQLite's online backup API — but it removes the failure mode
+ * where the main file is empty for days at a time.
+ */
+export function configureConnection(db: Database.Database): void {
+  db.pragma("journal_mode = WAL");
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  db.pragma("wal_autocheckpoint = 64");
+}
+
 function open(): Database.Database {
   mkdirSync(UPLOADS_DIR, { recursive: true });
   const db = new Database(path.join(DATA_DIR, "revenueos.db"));
-  db.pragma("journal_mode = WAL");
+  configureConnection(db);
   initSchema(db);
   seedCoreData(db);
   if (process.env.DEMO_MODE === "1") seedDemoParties(db);

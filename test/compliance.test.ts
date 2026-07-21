@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import { initSchema, seedCoreData } from "../src/lib/db";
 import {
   dueItems,
+  ruleForFy,
+  tdsReturnForms,
   generateItems,
   itrItem,
   RULES,
@@ -99,19 +101,27 @@ test("advance tax instalments land 15 Jun/Sep/Dec and 15 Mar", () => {
   );
 });
 
-test("ITR due date: entity + audit tiers per s.263(1) as amended by FA 2026", () => {
-  // A proprietorship's business return (ITR-3/4) gets the NEW 31 Aug tier
-  // from tax year 2026-27 (s.263(1)(c), Finance Act 2026 — verified).
+test("ITR due date: entity + audit tiers, income-based not form-based", () => {
+  // CHANGED 2026-07-21 (RVOS-003 P1). This test previously encoded two
+  // assumptions that an adversarial re-check overturned against gazette text:
+  //   (a) FY 2025-26 keeps 31 Jul  — WRONG. FA 2026 s.5 substituted Expln 2
+  //       to s.139(1) of the 1961 Act w.e.f. 1 Mar 2026, so the 31 Aug tier
+  //       reaches AY 2026-27 = FY 2025-26.
+  //   (b) a partnership's entitlement is unpinned, so show 31 Jul — WRONG.
+  //       Sl.3 reads "ASSESSEE having income from profits and gains of
+  //       business or profession whose accounts are not required to be
+  //       audited", and Sl.3(ii) separately covers its partners. A
+  //       non-audited firm filing ITR-5 is inside the tier.
+  // Holding 31 Jul was not the conservative choice; it was wrong by a month.
   assert.equal(itrItem(FY, false).due_date, "2027-08-31");
   assert.equal(itrItem(FY, false, "proprietorship").due_date, "2027-08-31");
-  // Earlier years (1961-Act era) keep the statutory 31 Jul.
-  assert.equal(itrItem("2025-26", false).due_date, "2026-07-31");
-  // A partnership's ITR-5 entitlement to 31 Aug is unpinned — show the
-  // earlier, safe 31 Jul.
-  assert.equal(itrItem(FY, false, "partnership").due_date, "2027-07-31");
+  assert.equal(itrItem(FY, false, "partnership").due_date, "2027-08-31");
+  assert.equal(itrItem("2025-26", false).due_date, "2026-08-31");
+  assert.equal(itrItem("2025-26", false, "partnership").due_date, "2026-08-31");
   // Companies file by 31 Oct regardless of the audit flag; audit cases too.
   assert.equal(itrItem(FY, false, "company").due_date, "2027-10-31");
   assert.equal(itrItem(FY, true).due_date, "2027-10-31");
+  assert.equal(itrItem(FY, true, "partnership").due_date, "2027-10-31");
   assert.equal(itrItem(FY, false).period, FY);
 });
 
@@ -270,3 +280,129 @@ test("generateItems rejects a malformed today", () => {
   assert.throws(() => generateItems(db, FY, settingsWith(db, {}), "today"));
   assert.throws(() => generateItems(db, FY, settingsWith(db, {}), ""));
 });
+
+// ── year authority (RVOS-003 P1) ─────────────────────────────────────────
+
+test("a rule cites the statute that actually governed the year", () => {
+  // Same dates, different law. Rendering the ITA-2025 citation on an FY
+  // 2025-26 board would cite an Act that did not govern the year — right
+  // number, wrong authority, which is the harder error to spot.
+  const oldYear = ruleForFy("tds-deposit", "2025-26");
+  assert.match(oldYear.source, /1962|1961/, "FY 2025-26 is a 1961-Act year");
+  assert.equal(/Rules 2026|ITA 2025/.test(oldYear.source), false);
+
+  const newYear = ruleForFy("tds-deposit", "2026-27");
+  assert.match(newYear.source, /Rules 2026/);
+});
+
+test("TDS return forms are year-aware — 26Q/24Q did not become 140/138 retroactively", () => {
+  assert.equal(tdsReturnForms("2025-26"), "26Q/24Q");
+  assert.equal(tdsReturnForms("2026-27"), "Form 140/138");
+
+  const old = dueItems("2025-26", { gst: false, tds: true }).filter(
+    (i) => i.rule_code === "tds-return"
+  );
+  assert.equal(old.length, 4);
+  for (const item of old) {
+    assert.match(item.detail, /26Q\/24Q/, "FY 2025-26 files on the old forms");
+    assert.equal(/140|138/.test(item.detail), false);
+  }
+
+  const current = dueItems("2026-27", { gst: false, tds: true }).filter(
+    (i) => i.rule_code === "tds-return"
+  );
+  for (const item of current) assert.match(item.detail, /Form 140\/138/);
+});
+
+test("the rule note and the rendered detail never contradict each other", () => {
+  // The bug this catches actually shipped: the FY 2026-27 note said "Form 140
+  // (old 26Q)" while dueItems rendered "26Q/24Q statement" on EVERY board,
+  // including FY 2025-26. Test the RENUMBERED names specifically — the current
+  // note legitimately mentions "old 26Q" as a familiarity aid, so a bare
+  // substring check on "26Q" gives a false positive.
+  const renumbered = /140|138/;
+
+  const oldNote = ruleForFy("tds-return", "2025-26").note;
+  const oldDetail = dueItems("2025-26", { gst: false, tds: true }).find(
+    (i) => i.rule_code === "tds-return"
+  )!.detail;
+  assert.equal(renumbered.test(oldDetail), false, "FY 2025-26 does not file on 140/138");
+  assert.equal(
+    /files on Form 140|filed on Form 140/.test(oldNote),
+    false,
+    "the FY 2025-26 note must not say the return is filed on the renumbered form"
+  );
+
+  const newNote = ruleForFy("tds-return", "2026-27").note;
+  const newDetail = dueItems("2026-27", { gst: false, tds: true }).find(
+    (i) => i.rule_code === "tds-return"
+  )!.detail;
+  assert.ok(renumbered.test(newDetail), "FY 2026-27 files on 140/138");
+  assert.ok(renumbered.test(newNote), "and its note must say so");
+});
+
+test("FY 2025-26 rules are verified, and cite the 1961-Act instrument", () => {
+  // The adversarial re-check cleared these on 2026-07-21. Each must cite the
+  // instrument that governed THAT year — an ITA-2025 citation here would be
+  // the original defect returning.
+  for (const code of ["tds-deposit", "tds-return", "advance-tax", "itr"]) {
+    const rule = ruleForFy(code, "2025-26");
+    assert.equal(rule.verified, true, `${code} should have cleared its re-check`);
+    assert.match(rule.source, /196[12]|Finance Act 2026/, `${code} must cite the right instrument`);
+    assert.equal(
+      /Income-tax Act 2025|ITA 2025|Rules 2026/.test(rule.source),
+      false,
+      `${code} cites an Act that did not govern FY 2025-26`
+    );
+  }
+});
+
+test("GST rules resolve identically in both years — ITA 2025 did not touch them", () => {
+  for (const code of ["gstr1", "gstr3b"]) {
+    assert.deepEqual(ruleForFy(code, "2025-26"), ruleForFy(code, "2026-27"));
+  }
+});
+
+test("the 31 Aug tier reaches FY 2025-26 and is INCOME-based, not form-based", () => {
+  // FA 2026 s.5 substituted Expln 2 to s.139(1) of the 1961 Act w.e.f.
+  // 1 Mar 2026, so it bites for AY 2026-27 = FY 2025-26. Sl.3 says "assessee
+  // having income from profits and gains of business or profession", so a
+  // non-audited FIRM is inside it — entity type must not gate this.
+  for (const entity of ["proprietorship", "partnership"] as const) {
+    const item = itrItem("2025-26", false, entity);
+    assert.equal(item.due_date, "2026-08-31", `${entity} non-audit is 31 Aug`);
+    assert.equal(item.verified, true);
+  }
+
+  // Audit cases and companies stay at 31 Oct regardless.
+  assert.equal(itrItem("2025-26", true, "proprietorship").due_date, "2026-10-31");
+  assert.equal(itrItem("2025-26", false, "company").due_date, "2026-10-31");
+
+  // And the later year keeps the same tiers under its own statute.
+  assert.equal(itrItem("2026-27", false, "partnership").due_date, "2027-08-31");
+});
+
+test("a firm and a proprietorship get the SAME ITR date — the form is not the test", () => {
+  // The widely repeated "31 Aug is for ITR-3/ITR-4" gloss is form-based and
+  // wrong; ITR-5 (firm) qualifies on the same income test.
+  assert.equal(
+    itrItem("2025-26", false, "partnership").due_date,
+    itrItem("2025-26", false, "proprietorship").due_date
+  );
+});
+
+test("a year older than this app's coverage claims no authority at all", () => {
+  // The ITR prior-authority wording cites Finance Act 2026 s.5. Applying it to
+  // an open-ended "everything earlier" range would assert a law that did not
+  // exist in, say, FY 2020-21 — the right-date-wrong-authority defect this
+  // whole table was built to remove, reintroduced at the other end.
+  const old = ruleForFy("itr", "2020-21");
+  assert.equal(old.verified, false);
+  assert.equal(/Finance Act 2026|31 Aug/.test(old.source), false);
+  assert.match(old.source, /No authority on file/);
+
+  // The years the app actually covers are unaffected.
+  assert.equal(ruleForFy("itr", "2025-26").verified, true);
+  assert.equal(ruleForFy("itr", "2026-27").verified, true);
+});
+

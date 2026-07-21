@@ -9,6 +9,7 @@ import {
   type ComplianceStatus,
 } from "@/lib/compliance";
 import type { SettingsRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ export default async function CompliancePage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const books = fyList(db);

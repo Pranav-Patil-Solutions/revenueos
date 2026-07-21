@@ -102,10 +102,23 @@ posting engine:
   computation → GST 12-month summary → TDS + challans → depreciation →
   debtors/creditors annexure. Print to PDF from the browser.
 
-**Every statutory rate and due date in the app ships `verified: false`** and
-says so on screen and in every export — confirm a year against the Act (see
-`src/lib/tax/india-it.ts`, `tds.ts`, `compliance.ts`) and flip the flag with
-a source before the office files from these numbers.
+**Every statutory rate and due date carries a `verified` flag and a `source`,
+and the on-screen and exported caveats are driven BY those flags** — so a
+verified year renders clean while an unverified one warns everywhere,
+including in the printed CA pack.
+
+- **FY 2026-27 is VERIFIED** (2026-07-21) against fetched gazette text —
+  Finance Act 2026, Income-tax Act 2025, Income-tax Rules 2026. See
+  `EVOLUTION.md` #19 for the protocol and what it caught.
+- **FY 2025-26 is deliberately NOT verified.** It is a 1961-Act year; the
+  research is done and recorded in `RVOS-003-P1-FINDINGS.md`, but no flag is
+  flipped until each claim survives an independent adversarial re-check.
+
+A figure becomes verified only by checking it against the primary text and
+putting the citation in its `source` field (`src/lib/tax/india-it.ts`,
+`tds.ts`, `compliance.ts`). Never flip a flag to quieten a banner. And note
+EVOLUTION #21: a primary source can serve a STALE VERSION at a live URL —
+pin the version and cross-check a second host.
 
 ## Tests & smoke
 
@@ -132,3 +145,36 @@ DEMO_MODE=1 npx tsx scripts/smoke.ts  # end-to-end against a fresh temp db
 - Automated backups
 - Recovery UI for a document stuck in `extracting` after a server crash
   (workaround: it still accepts a re-extract once the server is back)
+
+## Running it for real (RVOS-003)
+
+Delivered to an accounting office on their own machine. See
+**[docs/DAY-ONE.md](docs/DAY-ONE.md)** for the runbook written for the office
+itself — opening balances, imports, the backup drill, and what the caveat
+banners mean.
+
+```bash
+npm run preflight     # can this machine run it? Node, native module, disk, port, claude CLI
+npm run start         # binds 127.0.0.1 by default
+npm run backup        # SQLite online backup + integrity check + retention
+npm run restore -- --list
+```
+
+- **Auth.** There is a login (RVOS-003 P2) and no default credentials — the
+  first person to open the app creates the account. Sessions live in the
+  database so they can be revoked; only the SHA-256 of the cookie token is
+  stored, so a copied `.db` yields no usable session.
+- **Bind.** `npm run start` answers on loopback only. Remote access is an
+  explicit opt-in: `REVENUEOS_BIND=<tailscale ip -4>`. Binding every interface
+  is refused unless `REVENUEOS_ALLOW_ANY=1`. Tailscale is defence in depth
+  BEHIND the login, never the perimeter. Set `REVENUEOS_HTTPS=1` only if TLS
+  is terminated in front, or the session cookie will be dropped over plain
+  HTTP and login will loop.
+- **Backups.** `REVENUEOS_BACKUP_DIR` should point OFF this disk. A snapshot is
+  verified by re-opening it, probing the accounting tables and asserting
+  journal lines balance — and the test suite performs a real restore. See
+  EVOLUTION #23 for why that is not paranoia.
+- **Windows install.** `install/windows/setup.ps1`, `uninstall.ps1`. Both are
+  **WINDOWS-UNVERIFIED** — authored on macOS, never executed on Windows. They
+  stay labelled that way until run end-to-end on the office machine.
+

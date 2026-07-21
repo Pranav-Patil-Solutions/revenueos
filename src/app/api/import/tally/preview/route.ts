@@ -9,6 +9,7 @@ import {
   unmappedLedgers,
   type LedgerMapping,
 } from "@/lib/import-tally";
+import { requireApiSession } from "@/lib/dal";
 
 // Day books run larger than the CSV template — a full year of vouchers.
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -20,6 +21,8 @@ const MAX_BYTES = 8 * 1024 * 1024;
  * mapped the ledgers.
  */
 export async function POST(req: NextRequest) {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   let form: FormData;
   try {
     form = await req.formData();

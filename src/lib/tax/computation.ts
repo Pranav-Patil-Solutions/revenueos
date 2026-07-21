@@ -5,12 +5,14 @@ import { depreciationSchedule } from "./depreciation";
 import {
   advanceTaxSchedule,
   partnerRemunerationCeiling,
+  caveatForGroups,
   presumptiveIncome,
   ratesFor,
   roundToTenRupees,
   taxFor,
   type AdvanceTaxInstalment,
   type TaxResult,
+  type RateGroup,
 } from "./india-it";
 import type {
   ItAdjustmentRow,
@@ -102,7 +104,7 @@ export function buildComputation(
   const settings = db
     .prepare("SELECT * FROM settings WHERE id = 1")
     .get() as SettingsRow;
-  const { rates, provisional, caveat } = ratesFor(fy);
+  const { rates, provisional, provisional_note } = ratesFor(fy);
 
   const pnl = profitAndLoss(db, { from: fyStart(fy), to: fyEnd(fy) });
   const adjustments = db
@@ -194,7 +196,21 @@ export function buildComputation(
     regime: settings.it_regime,
     presumptive: settings.presumptive,
     provisional,
-    caveat,
+    caveat: (() => {
+      // Warn about the rates this computation READ, not every rate on file.
+      // A book-profit computation that never touches s.44AD must not carry a
+      // presumptive caveat into a workpaper — that is noise, and noise is how
+      // real caveats stop being read.
+      const used: RateGroup[] = ["slabs", "rebate", "surcharge", "cess", "advance_tax"];
+      if (settings.entity_type === "partnership") used.push("firm", "partner_remuneration");
+      if (settings.entity_type === "company") used.push("company");
+      if (settings.presumptive === "44AD" || settings.presumptive === "44ADA") {
+        used.push("presumptive");
+      }
+      return [provisional_note, caveatForGroups(rates.tax_year, used)]
+        .filter(Boolean)
+        .join(" ");
+    })(),
     rates_tax_year: rates.tax_year,
     book_profit_paise: pnl.net_profit_paise,
     book_depreciation_paise: bookDep,

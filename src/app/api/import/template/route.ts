@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { toCsv } from "@/lib/format";
 import { TEMPLATE_HEADERS } from "@/lib/import-csv";
+import { requireApiSession } from "@/lib/dal";
 
 /** The fill-in CSV template, with example rows demonstrating the khata
  * convention: sales/receivables in debit, purchases/receipts in credit,
  * amounts in rupees, party by exact name. */
-export function GET() {
+export async function GET() {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
   const csv = toCsv(
     [...TEMPLATE_HEADERS],
     [

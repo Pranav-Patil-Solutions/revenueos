@@ -2,6 +2,8 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   advanceTaxSchedule,
+  caveatForGroups,
+  groupSource,
   partnerRemunerationCeiling,
   presumptiveIncome,
   ratesFor,
@@ -48,20 +50,43 @@ test("every shipped rate table carries its provenance", () => {
   }
 });
 
-test("2026-27 is verified: no caveat; 2025-26 is deliberately not", () => {
+test("verification is per GROUP, and callers are warned only about what they read", () => {
+  // CHANGED 2026-07-21 (RVOS-003 P1). This previously asserted that the whole
+  // 2026-27 year computed caveat-free. It does not any more, and that is a
+  // FINDING rather than a regression: the year-level `verified: true` was
+  // over-claiming. The s.44AD/44ADA/44AE deemed-profit percentages were never
+  // separately confirmed for EITHER year — EVOLUTION #19 mentions presumptive
+  // only in the advance-tax context — so they are now flagged for both until
+  // someone reads the section.
   const y26 = ratesFor("2026-27");
   assert.equal(y26.provisional, false);
-  assert.equal(y26.rates.verified, true);
-  assert.equal(y26.caveat, "", "a verified exact year computes caveat-free");
+  assert.deepEqual(y26.unverified, ["presumptive"]);
+  assert.match(y26.caveat, /presumptive/);
+
   const y25 = ratesFor("2025-26");
   assert.equal(y25.provisional, false);
-  assert.equal(y25.rates.verified, false);
-  assert.match(y25.caveat, /unconfirmed/);
-  // A later year carries the VERIFIED table forward — provisional note only.
+  assert.deepEqual(y25.unverified, ["presumptive"], "the rest cleared its re-check");
+
+  // The point of the split: a computation that never touches s.44AD is clean
+  // in BOTH years, where before, 2025-26 warned about everything.
+  const bookProfit = ["slabs", "rebate", "surcharge", "cess", "advance_tax"] as const;
+  for (const fy of ["2025-26", "2026-27"]) {
+    assert.equal(caveatForGroups(fy, [...bookProfit]), "", `${fy} book profit is confirmed`);
+    assert.match(caveatForGroups(fy, [...bookProfit, "presumptive"]), /presumptive/);
+  }
+
+  // Every group except presumptive now carries a citation for FY 2025-26.
+  for (const g of ["slabs", "rebate", "surcharge", "cess", "firm", "company",
+                   "partner_remuneration", "advance_tax"] as const) {
+    assert.ok(groupSource("2025-26", g), `${g} should cite its authority`);
+  }
+  assert.equal(groupSource("2025-26", "presumptive"), null);
+
+  // A later year still carries the table forward with a provisional note only.
   const later = ratesFor("2030-31");
   assert.equal(later.rates.tax_year, "2026-27");
   assert.match(later.caveat, /No rate table for 2030-31/);
-  assert.doesNotMatch(later.caveat, /unconfirmed/);
+  assert.equal(later.provisional_note.startsWith("No rate table"), true);
 });
 
 // ---------------------------------------------------------------------------

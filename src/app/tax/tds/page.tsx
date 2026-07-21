@@ -7,6 +7,7 @@ import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
 import type { PartyRow, TdsChallanRow } from "@/lib/types";
+import { requireSession } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export default async function TdsPage({
 }: {
   searchParams: Promise<{ fy?: string; q?: string }>;
 }) {
+  await requireSession();
+
   const sp = await searchParams;
   const db = getDb();
   const books = fyList(db);

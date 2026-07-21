@@ -7,6 +7,7 @@ import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { groupFor } from "./coa";
 import { generateItems } from "./compliance";
+import { requireSession } from "./dal";
 import { getDb, UPLOADS_DIR } from "./db";
 import { extractDocument } from "./extraction";
 import { rupeeStringToPaise, todayIso } from "./format";
@@ -118,6 +119,7 @@ function saveDraft(docId: number, rows: DraftRowInput[]): void {
 }
 
 export async function createParty(formData: FormData): Promise<void> {
+  await requireSession();
   const name = String(formData.get("name") ?? "").trim();
   const kind = String(formData.get("kind") ?? "");
   const gstin = String(formData.get("gstin") ?? "").trim().toUpperCase();
@@ -146,6 +148,7 @@ const IT_REGIMES: ItRegime[] = ["old", "new"];
 const PRESUMPTIVE: Presumptive[] = ["", "44AD", "44ADA"];
 
 export async function updateSettings(formData: FormData): Promise<void> {
+  await requireSession();
   const rate = Number(formData.get("default_gst_rate") ?? 18);
   const entityType = String(formData.get("entity_type") ?? "proprietorship");
   if (!ENTITY_TYPES.includes(entityType as EntityType)) {
@@ -203,6 +206,7 @@ const ACCOUNT_TYPES: AccountType[] = [
 /** COA is add-only/rename-only — accounts are never deleted or retyped, the
  * books may already reference them. */
 export async function createAccount(formData: FormData): Promise<void> {
+  await requireSession();
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
   const type = String(formData.get("type") ?? "");
@@ -228,6 +232,7 @@ export async function createAccount(formData: FormData): Promise<void> {
 }
 
 export async function renameAccount(formData: FormData): Promise<void> {
+  await requireSession();
   const id = Number(formData.get("id"));
   const name = String(formData.get("name") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad account id.");
@@ -273,6 +278,7 @@ function parseVoucherLegs(legsJson: string): JournalLegInput[] {
 
 /** Manual voucher entry — parses the form by kind, posts one journal. */
 export async function createVoucher(formData: FormData): Promise<void> {
+  await requireSession();
   const kind = String(formData.get("kind") ?? "");
   const entry_date = String(formData.get("entry_date") ?? "").trim();
   const memo = String(formData.get("memo") ?? "").trim();
@@ -343,6 +349,7 @@ export async function createVoucherParty(
   name: string,
   kind: PartyKind
 ): Promise<{ id: number; name: string }> {
+  await requireSession();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Party name is required.");
   if (kind !== "customer" && kind !== "supplier") {
@@ -363,6 +370,7 @@ export async function createVoucherParty(
  * mappings, document and rows in ONE transaction, so a failure anywhere
  * leaves neither half-saved mappings nor an orphan document. */
 export async function createTallyImport(formData: FormData): Promise<void> {
+  await requireSession();
   const token = String(formData.get("token") ?? "");
   // The token names a file we wrote; anything but the UUID we minted (and so
   // any traversal attempt) is refused before it reaches the filesystem.
@@ -504,6 +512,7 @@ function formPaise(formData: FormData, field: string, label: string): number {
 }
 
 export async function createAsset(formData: FormData): Promise<void> {
+  await requireSession();
   const name = String(formData.get("name") ?? "").trim();
   const block = String(formData.get("block") ?? "");
   const purchaseDate = String(formData.get("purchase_date") ?? "").trim();
@@ -536,6 +545,7 @@ export async function createAsset(formData: FormData): Promise<void> {
 }
 
 export async function disposeAsset(formData: FormData): Promise<void> {
+  await requireSession();
   const id = Number(formData.get("id"));
   const disposedDate = String(formData.get("disposed_date") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad asset id.");
@@ -581,6 +591,7 @@ export async function disposeAsset(formData: FormData): Promise<void> {
  * click here would need a manual reversing entry to undo.
  */
 export async function postDepreciationEntry(formData: FormData): Promise<void> {
+  await requireSession();
   const fy = String(formData.get("fy") ?? "").trim();
   const db = getDb();
   const to = fyEnd(fy); // the entry is dated the last day of the year
@@ -635,6 +646,7 @@ export async function postDepreciationEntry(formData: FormData): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function addItAdjustment(formData: FormData): Promise<void> {
+  await requireSession();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy); // throws on a malformed FY key
   const kind = String(formData.get("kind") ?? "");
@@ -664,6 +676,7 @@ export async function addItAdjustment(formData: FormData): Promise<void> {
 }
 
 export async function deleteItAdjustment(formData: FormData): Promise<void> {
+  await requireSession();
   const id = Number(formData.get("id"));
   const fy = String(formData.get("fy") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad adjustment id.");
@@ -675,6 +688,7 @@ export async function deleteItAdjustment(formData: FormData): Promise<void> {
 }
 
 export async function addTaxPayment(formData: FormData): Promise<void> {
+  await requireSession();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy);
   const kind = String(formData.get("kind") ?? "");
@@ -711,6 +725,7 @@ export async function addTaxPayment(formData: FormData): Promise<void> {
 
 /** Pay a bill net of TDS — one journal + one register row, atomically. */
 export async function createTdsVoucher(formData: FormData): Promise<void> {
+  await requireSession();
   const entry_date = String(formData.get("entry_date") ?? "").trim();
   if (!ISO_DATE.test(entry_date)) {
     throw new Error("Payment date is required (YYYY-MM-DD).");
@@ -756,6 +771,7 @@ export async function createTdsVoucher(formData: FormData): Promise<void> {
  * neither over- nor under-clear account 2300.
  */
 export async function createTdsChallan(formData: FormData): Promise<void> {
+  await requireSession();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy);
   const quarter = Number(formData.get("quarter"));
@@ -843,6 +859,7 @@ const QUARTER_RANGES: Record<1 | 2 | 3 | 4, (fy: string) => { from: string; to: 
  * day the regime returns.
  */
 export async function markCompliance(formData: FormData): Promise<void> {
+  await requireSession();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy); // throws on a malformed FY key
   const rule_code = String(formData.get("rule_code") ?? "");
@@ -889,6 +906,7 @@ export async function markCompliance(formData: FormData): Promise<void> {
 }
 
 export async function runExtraction(docId: number): Promise<void> {
+  await requireSession();
   try {
     await extractDocument(docId);
   } catch {
@@ -902,6 +920,7 @@ export async function saveDraftRows(
   docId: number,
   rowsJson: string
 ): Promise<void> {
+  await requireSession();
   saveDraft(docId, parseDraftRows(rowsJson));
   revalidatePath(`/documents/${docId}`);
 }
@@ -910,6 +929,7 @@ export async function saveAndPost(
   docId: number,
   rowsJson: string
 ): Promise<void> {
+  await requireSession();
   postDocument(getDb(), docId, parseDraftRows(rowsJson));
   revalidatePath(`/documents/${docId}`);
   revalidatePath("/documents");
@@ -917,6 +937,7 @@ export async function saveAndPost(
 }
 
 export async function deleteDocument(docId: number): Promise<void> {
+  await requireSession();
   const db = getDb();
   const doc = db
     .prepare("SELECT * FROM documents WHERE id = ?")
