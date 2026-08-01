@@ -1,16 +1,76 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import Database from "better-sqlite3";
+import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import {
   dashboardStats,
   dayBook,
+  documentStatusBreakdown,
   gstr1B2B,
   gstr3b,
   partyStatement,
   profitAndLoss,
+  receivablesTrend,
   trialBalance,
 } from "../src/lib/reports";
 import { book } from "../src/lib/book";
 import { postedDb } from "./helpers";
+
+/** Fresh, empty (unposted) books — schema + chart of accounts only. Lets
+ * gap tests post exactly the AR-control legs they need without the demo
+ * fixture's other entries in the way. */
+function emptyDb(): Database.Database {
+  const db = new Database(":memory:");
+  initSchema(db);
+  seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
+  return db;
+}
+
+function arAccountId(db: Database.Database): number {
+  return (
+    db.prepare("SELECT id FROM accounts WHERE code = '1200'").get() as {
+      id: number;
+    }
+  ).id;
+}
+
+/** Post a single balanced journal moving `paise` between AR (1200) and cash
+ * (1000), on the AR side per `dir` — 'debit' grows AR, 'credit' shrinks it
+ * (or, if it overshoots, flips it to a net credit / customer-advance
+ * balance). */
+function postAr(
+  db: Database.Database,
+  date: string,
+  dir: "debit" | "credit",
+  paise: number
+): void {
+  const ar = arAccountId(db);
+  const cash = (
+    db.prepare("SELECT id FROM accounts WHERE code = '1000'").get() as {
+      id: number;
+    }
+  ).id;
+  const journalId = db
+    .prepare(
+      `INSERT INTO journals (entry_date, entry_type, memo, ref_no, created_at)
+       VALUES (?, 'journal', '', '', ?)`
+    )
+    .run(date, `${date}T00:00:00Z`).lastInsertRowid as number;
+  const insertLine = db.prepare(
+    `INSERT INTO journal_lines (journal_id, line_no, account_id, debit_paise, credit_paise)
+     VALUES (?, ?, ?, ?, ?)`
+  );
+  if (dir === "debit") {
+    insertLine.run(journalId, 1, ar, paise, 0);
+    insertLine.run(journalId, 2, cash, 0, paise);
+  } else {
+    insertLine.run(journalId, 1, cash, paise, 0);
+    insertLine.run(journalId, 2, ar, 0, paise);
+  }
+}
 
 const MONTH = "2026-07";
 
@@ -144,4 +204,135 @@ test("dashboard stats", () => {
   assert.equal(s.gst_payable_paise, 168_000);
   assert.equal(s.pending_review, 0); // the demo doc is posted
   assert.equal(s.journals_this_month, 9);
+});
+
+test("receivables trend: the final point IS the AR control total", () => {
+  const db = book(postedDb(), 1);
+  const trend = receivablesTrend(db, MONTH, 4);
+  assert.equal(trend.length, 4);
+  assert.equal(trend[trend.length - 1].month, MONTH);
+  // The property that matters: the series is the SAME balance the dashboard
+  // tile reports, sampled at month ends — not a parallel computation that can
+  // drift from it. All demo entries fall in 2026-07, so the window's last
+  // point must equal the all-time control total exactly.
+  assert.equal(
+    trend[trend.length - 1].closing_paise,
+    dashboardStats(db, MONTH).receivables_paise
+  );
+  assert.equal(trend[trend.length - 1].closing_paise, 1_258_000);
+});
+
+test("receivables trend: months before any entry read zero, and it is a BALANCE", () => {
+  const db = book(postedDb(), 1);
+  const trend = receivablesTrend(db, MONTH, 4);
+  assert.deepEqual(
+    trend.map((p) => p.month),
+    ["2026-04", "2026-05", "2026-06", "2026-07"]
+  );
+  // Nothing posted before July, so every earlier close is flat zero.
+  for (const p of trend.slice(0, 3)) assert.equal(p.closing_paise, 0);
+  // A balance carries forward: asking for a window that STARTS after the
+  // entries must still report them, via the opening balance.
+  const later = receivablesTrend(db, "2026-10", 2);
+  assert.deepEqual(
+    later.map((p) => p.closing_paise),
+    [1_258_000, 1_258_000]
+  );
+});
+
+test("receivables trend: the window steps across a year boundary", () => {
+  const db = book(postedDb(), 1);
+  const trend = receivablesTrend(db, "2027-01", 4);
+  assert.deepEqual(
+    trend.map((p) => p.month),
+    ["2026-10", "2026-11", "2026-12", "2027-01"]
+  );
+});
+
+test("document status: counted, pipeline-ordered, zeroes omitted", () => {
+  const rawDb = postedDb();
+  const db = book(rawDb, 1);
+  const slices = documentStatusBreakdown(db);
+  // One document, posted by postedDb — so exactly one slice, no empty ones.
+  assert.deepEqual(slices, [{ status: "posted", count: 1 }]);
+
+  rawDb
+    .prepare(
+      `INSERT INTO documents (company_id, party_id, image_path, image_sha256, status, created_at)
+       VALUES (1, 1, 'a.jpg', 'sha-a', 'uploaded', '2026-07-20T00:00:00Z'),
+              (1, 1, 'b.jpg', 'sha-b', 'extracted', '2026-07-21T00:00:00Z'),
+              (1, 1, 'c.jpg', 'sha-c', 'extracted', '2026-07-22T00:00:00Z')`
+    )
+    .run();
+  const after = documentStatusBreakdown(db);
+  // Ordered by pipeline stage (posted → extracted → uploaded), NOT by count.
+  assert.deepEqual(after, [
+    { status: "posted", count: 1 },
+    { status: "extracted", count: 2 },
+    { status: "uploaded", count: 1 },
+  ]);
+  const census = rawDb
+    .prepare("SELECT COUNT(*) AS n FROM documents WHERE company_id = 1")
+    .get() as { n: number };
+  assert.equal(
+    after.reduce((n, s) => n + s.count, 0),
+    census.n
+  );
+});
+
+test("receivables trend: a net CREDIT balance (customer advance) still reports correctly", () => {
+  const rawDb = emptyDb();
+  const db = book(rawDb, 1);
+  // 10,000 received in advance of any sale — AR goes net credit (negative).
+  postAr(rawDb, "2026-07-10", "credit", 1_000_000);
+  const trend = receivablesTrend(db, "2026-07", 3);
+  assert.deepEqual(
+    trend.map((p) => p.month),
+    ["2026-05", "2026-06", "2026-07"]
+  );
+  assert.equal(trend[0].closing_paise, 0); // nothing posted yet
+  assert.equal(trend[1].closing_paise, 0);
+  assert.equal(trend[2].closing_paise, -1_000_000); // customer advance: net credit
+  // Ties to the AR control account itself — not a parallel computation.
+  const control = rawDb
+    .prepare(
+      `SELECT COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+       FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+       WHERE a.code = '1200'`
+    )
+    .get() as { net: number };
+  assert.equal(trend[2].closing_paise, control.net);
+
+  // A partial repayment (sale) the next month pulls it back toward zero but
+  // it should stay a net credit, not clamp at zero.
+  postAr(rawDb, "2026-08-05", "debit", 400_000);
+  const trend2 = receivablesTrend(db, "2026-08", 1);
+  assert.deepEqual(trend2, [{ month: "2026-08", closing_paise: -600_000 }]);
+});
+
+test("receivablesTrend with count=1 returns exactly the one closing point", () => {
+  const db = book(postedDb(), 1);
+  const trend = receivablesTrend(db, MONTH, 1);
+  assert.equal(trend.length, 1);
+  assert.deepEqual(trend[0], { month: MONTH, closing_paise: 1_258_000 });
+
+  // count=1 for a month with nothing posted yet is a flat zero, not an error.
+  const before = receivablesTrend(db, "2026-01", 1);
+  assert.deepEqual(before, [{ month: "2026-01", closing_paise: 0 }]);
+});
+
+test("receivablesTrend rejects count < 1", () => {
+  const db = book(postedDb(), 1);
+  assert.throws(() => receivablesTrend(db, MONTH, 0), /count >= 1/);
+  assert.throws(() => receivablesTrend(db, MONTH, -1), /count >= 1/);
+});
+
+test("document status: an empty documents table returns an empty breakdown", () => {
+  const rawDb = emptyDb();
+  const db = book(rawDb, 1);
+  const census = rawDb
+    .prepare("SELECT COUNT(*) AS n FROM documents")
+    .get() as { n: number };
+  assert.equal(census.n, 0);
+  assert.deepEqual(documentStatusBreakdown(db), []);
 });

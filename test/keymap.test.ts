@@ -1,6 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { actionFor, type KeyContext, type KeyStroke } from "../src/lib/keymap";
+import {
+  actionFor,
+  actionSurvivesModal,
+  type KeyContext,
+  type KeyStroke,
+} from "../src/lib/keymap";
 
 function stroke(key: string, mods: Partial<KeyStroke> = {}): KeyStroke {
   return {
@@ -106,5 +111,95 @@ test("keymap: Esc maps to back; plain typing is never hijacked", () => {
   assert.deepEqual(actionFor(stroke("Escape"), typing), { type: "back" });
   for (const key of ["a", "c", "b", "1", " "]) {
     assert.equal(actionFor(stroke(key), onVoucher), null, `plain "${key}"`);
+  }
+});
+
+test("keymap: Ctrl+K opens the palette from anywhere, including mid-edit", () => {
+  assert.deepEqual(actionFor(stroke("k", { ctrlKey: true }), elsewhere), {
+    type: "toggle-palette",
+  });
+  assert.deepEqual(actionFor(stroke("K", { ctrlKey: true }), onVoucher), {
+    type: "toggle-palette",
+  });
+  // The palette is the way OUT of a screen you are stuck typing in, so unlike
+  // ^A it must not be gated on context.
+  assert.deepEqual(actionFor(stroke("k", { ctrlKey: true }), typing), {
+    type: "toggle-palette",
+  });
+});
+
+test("keymap: bare k and Cmd+K are left alone", () => {
+  assert.equal(actionFor(stroke("k"), elsewhere), null);
+  assert.equal(actionFor(stroke("k"), typing), null);
+  // metaKey belongs to the browser — the palette is ^K, never ⌘K.
+  assert.equal(actionFor(stroke("k", { metaKey: true }), elsewhere), null);
+  assert.equal(actionFor(stroke("k", { ctrlKey: true, altKey: true }), elsewhere), null);
+});
+
+test("keymap: a modal makes the Tally layer inert — ^A cannot post beneath it", () => {
+  // The regression this guards: the palette opens OVER /vouchers without
+  // changing the route, so onVoucherScreen stays true and ^A still mapped to
+  // submit-voucher. requestSubmit() ignores the disabled post button, so
+  // selecting text in the palette's search box would post the voucher.
+  const accept = actionFor(stroke("a", { ctrlKey: true }), onVoucher);
+  assert.deepEqual(accept, { type: "submit-voucher" });
+  assert.equal(actionSurvivesModal(accept, "palette"), false);
+  assert.equal(actionSurvivesModal(accept, "overlay"), false);
+  assert.equal(actionSurvivesModal(accept, null), true);
+});
+
+test("keymap: while a modal is up, only its own toggle still carries", () => {
+  const palette = { type: "toggle-palette" } as const;
+  const overlay = { type: "toggle-overlay" } as const;
+  assert.equal(actionSurvivesModal(palette, "palette"), true);
+  assert.equal(actionSurvivesModal(overlay, "palette"), false);
+  assert.equal(actionSurvivesModal(overlay, "overlay"), true);
+  assert.equal(actionSurvivesModal(palette, "overlay"), false);
+
+  // Nothing else survives either layer — F-keys, date, inline-create.
+  for (const key of ["F5", "F8", "F2"]) {
+    const a = actionFor(stroke(key), onVoucher);
+    assert.ok(a, `${key} should map to an action`);
+    assert.equal(actionSurvivesModal(a, "palette"), false);
+    assert.equal(actionSurvivesModal(a, "overlay"), false);
+  }
+  const create = actionFor(stroke("c", { altKey: true }), onVoucher);
+  assert.deepEqual(create, { type: "inline-create" });
+  assert.equal(actionSurvivesModal(create, "palette"), false);
+});
+
+test("keymap: with no modal, every action passes through unchanged", () => {
+  for (const s of [stroke("F5"), stroke("a", { ctrlKey: true }), stroke("k", { ctrlKey: true })]) {
+    const a = actionFor(s, onVoucher);
+    assert.ok(a);
+    assert.equal(actionSurvivesModal(a, null), true);
+  }
+});
+
+test("keymap: actionSurvivesModal for every KeyAction type, against every modal layer", () => {
+  const actions: { name: string; action: Parameters<typeof actionSurvivesModal>[0] }[] = [
+    { name: "voucher", action: { type: "voucher", kind: "sale" } },
+    { name: "focus-date", action: { type: "focus-date" } },
+    { name: "submit-voucher", action: { type: "submit-voucher" } },
+    { name: "back", action: { type: "back" } },
+    { name: "inline-create", action: { type: "inline-create" } },
+    { name: "toggle-palette", action: { type: "toggle-palette" } },
+    { name: "toggle-overlay", action: { type: "toggle-overlay" } },
+  ];
+  for (const { name, action } of actions) {
+    // No modal: every action carries, unconditionally.
+    assert.equal(actionSurvivesModal(action, null), true, `${name} vs null`);
+    // Under the palette, only toggle-palette itself survives.
+    assert.equal(
+      actionSurvivesModal(action, "palette"),
+      action.type === "toggle-palette",
+      `${name} vs palette`
+    );
+    // Under the overlay, only toggle-overlay itself survives.
+    assert.equal(
+      actionSurvivesModal(action, "overlay"),
+      action.type === "toggle-overlay",
+      `${name} vs overlay`
+    );
   }
 });

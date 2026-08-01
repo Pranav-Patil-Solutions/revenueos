@@ -2,7 +2,8 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { actionFor } from "@/lib/keymap";
+import { actionFor, actionSurvivesModal } from "@/lib/keymap";
+import { CommandPalette } from "./command-palette";
 import { ShortcutOverlay } from "./shortcut-overlay";
 
 /** Custom events the voucher form listens for — keeps the global key layer
@@ -26,6 +27,7 @@ export function Shortcuts() {
   const router = useRouter();
   const pathname = usePathname();
   const [overlay, setOverlay] = useState(false);
+  const [palette, setPalette] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -34,16 +36,31 @@ export function Shortcuts() {
         inEditable: inEditable(e.target),
       });
       if (!action) return;
-      // Esc first backs out of the overlay, then the screen.
+      // Esc backs out of whatever is layered on top, innermost first, before
+      // it means anything to the screen underneath.
       if (action.type === "back") {
-        if (overlay) {
+        if (palette) {
+          e.preventDefault();
+          setPalette(false);
+        } else if (overlay) {
           e.preventDefault();
           setOverlay(false);
         }
         return; // otherwise leave Esc native (blur, close pickers)
       }
+      // Anything layered over the screen owns the keyboard until it closes —
+      // otherwise ^A in the palette's search box posts the voucher beneath it.
+      if (!actionSurvivesModal(action, palette ? "palette" : overlay ? "overlay" : null)) {
+        return;
+      }
       e.preventDefault();
+      // The gate above is what keeps the two layers mutually exclusive: while
+      // either is up, only its OWN toggle reaches here. So neither case has to
+      // close the other — reaching one proves the other is already closed.
       switch (action.type) {
+        case "toggle-palette":
+          setPalette((v) => !v);
+          break;
         case "voucher":
           router.push(`/vouchers?kind=${action.kind}`);
           break;
@@ -63,7 +80,12 @@ export function Shortcuts() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [router, pathname, overlay]);
+  }, [router, pathname, overlay, palette]);
 
-  return overlay ? <ShortcutOverlay onClose={() => setOverlay(false)} /> : null;
+  return (
+    <>
+      {palette && <CommandPalette onClose={() => setPalette(false)} />}
+      {overlay && <ShortcutOverlay onClose={() => setOverlay(false)} />}
+    </>
+  );
 }

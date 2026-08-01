@@ -3,6 +3,7 @@ import { ACCOUNT_GROUPS, DEFAULT_GROUP_BY_TYPE, groupFor, labelForEntity } from 
 import { fyOf, fyStart } from "./fy";
 import type {
   AccountType,
+  DocumentStatus,
   EntryType,
   PartyKind,
   PartyRow,
@@ -556,6 +557,103 @@ export interface DashboardStats {
   gst_payable_paise: number;
   pending_review: number;
   journals_this_month: number;
+}
+
+/** "YYYY-MM" ± n months, as pure string math (fy.ts convention — no Date). */
+function stepMonth(month: string, delta: number): string {
+  const m = month.match(/^(\d{4})-(\d{2})$/);
+  if (!m) throw new Error(`Bad month "${month}" — expected "YYYY-MM"`);
+  const mm = Number(m[2]);
+  if (mm < 1 || mm > 12) throw new Error(`Bad month "${month}"`);
+  const total = Number(m[1]) * 12 + (mm - 1) + delta;
+  const year = Math.floor(total / 12);
+  const idx = ((total % 12) + 12) % 12;
+  return `${year}-${String(idx + 1).padStart(2, "0")}`;
+}
+
+export interface TrendPoint {
+  month: string;
+  closing_paise: number;
+}
+
+/** Receivables CLOSING BALANCE at the end of each of the last `count` months
+ * ending at `month`. A balance, not a flow: each point carries every entry
+ * ever posted up to that month end, so the series ties to the AR control
+ * account at every step and its final point is the control total as at
+ * `month` end. (The Receivables tile is all-time, so a book carrying
+ * future-dated entries will show a tile above the last point — a real
+ * difference, deliberately not smoothed away.)
+ *
+ * Ported onto the Book handle at the RVOS-004/005 merge (RVOS-004 P6's
+ * ratchet doesn't see this file — it landed after the ratchet's last scan —
+ * so this was scoped by hand, the same way P4/P5 scoped their own new code
+ * as they went, rather than left for a ratchet run that would never catch it. */
+export function receivablesTrend(
+  book: Book,
+  month: string,
+  count = 4
+): TrendPoint[] {
+  if (count < 1) throw new Error("receivablesTrend needs count >= 1");
+  const months: string[] = [];
+  for (let i = count - 1; i >= 0; i--) months.push(stepMonth(month, -i));
+  const first = months[0];
+  const last = months[months.length - 1];
+
+  const opening = book.get(
+    `SELECT COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE jl.company_id = @company_id AND a.code = '1200'
+       AND substr(j.entry_date, 1, 7) < @first`,
+    { first }
+  ) as { net: number };
+
+  const rows = book.all(
+    `SELECT substr(j.entry_date, 1, 7) AS m,
+            COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE jl.company_id = @company_id AND a.code = '1200'
+       AND substr(j.entry_date, 1, 7) >= @first
+       AND substr(j.entry_date, 1, 7) <= @last
+     GROUP BY m`,
+    { first, last }
+  ) as { m: string; net: number }[];
+
+  const delta = new Map(rows.map((r) => [r.m, r.net]));
+  let running = opening.net;
+  return months.map((m) => {
+    running += delta.get(m) ?? 0;
+    return { month: m, closing_paise: running };
+  });
+}
+
+export interface DocumentStatusSlice {
+  status: DocumentStatus;
+  count: number;
+}
+
+/** Document pipeline census, ordered by pipeline stage rather than count, so
+ * the legend reads as the workflow does. Statuses with no documents are
+ * omitted — an empty slice is noise, not information. Ported onto the Book
+ * handle at the RVOS-004/005 merge — see receivablesTrend's comment above. */
+export function documentStatusBreakdown(book: Book): DocumentStatusSlice[] {
+  const rows = book.all(
+    "SELECT status, COUNT(*) AS n FROM documents WHERE company_id = @company_id GROUP BY status"
+  ) as { status: DocumentStatus; n: number }[];
+  const order: DocumentStatus[] = [
+    "posted",
+    "extracted",
+    "uploaded",
+    "extracting",
+    "failed",
+  ];
+  const byStatus = new Map(rows.map((r) => [r.status, r.n]));
+  return order
+    .filter((s) => (byStatus.get(s) ?? 0) > 0)
+    .map((s) => ({ status: s, count: byStatus.get(s) as number }));
 }
 
 export function dashboardStats(book: Book, month: string): DashboardStats {

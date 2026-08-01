@@ -389,6 +389,97 @@ test/backup.test.ts · EVOLUTION.md · HANDOFF.md
 
 ---
 
+# RVOS-005 HANDOFF (Overview dashboard) — rebased onto 004's final tip 2026-08-08
+
+Branch `feat/rvos-005-dashboard-ux`, originally cut from `0bfd9ad` (RVOS-004
+P2a), **rebased onto `feat/rvos-004-multi-client`'s final tip (`bc66a61`,
+post-ship-gate) on 2026-08-08** — see EVOLUTION #35. Spec: `RVOS-005-SPEC.md`.
+Local only, unpushed.
+
+## DONE
+Overview page gains three things, all additive to the approved
+"Accountant Edition Light" tokens — no page outside `/` changes appearance:
+- **Receivables trend** — AR closing balance at each of the last 4 month ends,
+  hover readout. `receivablesTrend(db, month, count)` in reports.ts.
+- **Document status** — capture pipeline census, donut + legend, hover
+  cross-highlight. `documentStatusBreakdown(db)`.
+- **⌃K command palette** — subsequence search over every route ("tb" → Trial
+  balance). Wired through the EXISTING Tally key layer, not a second listener.
+
+Cut before shipping, deliberately: count-up figures, entrance animation,
+quick-actions card, insights rail. All were built, none earned its place —
+see EVOLUTION #26. `StatTile` was re-implemented inline during that work; it
+is now reused, and its long-dead `Sparkline`/`delta`/`trend` deleted.
+
+## THE ONE THAT MATTERED
+The ⌃K palette opens OVER /vouchers without changing the route. The Tally layer
+decides from the PATHNAME, so `onVoucherScreen` stayed true, ⌃A still mapped to
+`submit-voucher`, and the voucher form answers that with `requestSubmit()` —
+which ignores the React `disabled={!balanced}` guard. **Pressing ⌃A to select
+text in the palette's search box could post a voucher to the books.**
+
+Fixed with `actionSurvivesModal(action, modal)` in keymap.ts — a pure rule, in
+the module that already owns every key decision, so it is unit-testable.
+Verified in a browser against a genuinely VALID voucher: journals 4 → 4 with
+the palette up, F8 inert, Esc closes, and ⌃A posts again once closed.
+
+Neither the unit tests nor the build could see it: every module was correct
+alone, and the defect lived only in the composition. The zero-context reviewer
+found it. EVOLUTION #34 (renumbered from this branch's own local #26 at the
+2026-08-08 rebase — 004's line already had entries up to #33 by then; see
+EVOLUTION #35 for the rebase itself).
+
+## NEXT (in this order)
+1. ~~Port the two new read models to the Book handle~~ **DONE at the
+   2026-08-08 rebase** — `receivablesTrend`/`documentStatusBreakdown` now
+   take a `Book` and scope every JOIN by `company_id`, same as the rest of
+   `reports.ts`. See EVOLUTION #35.
+2. Run RVOS-005's own ship gate FRESH on this rebased tree — tsc/lint/test/
+   build/smoke, zero-context code-reviewer full diff, qa-runner over the
+   changed modules, and re-drive the ⌃K/⌃A voucher-posting regression above
+   in a browser on THIS diff specifically (don't skip as "already fixed" —
+   the composition changed underneath it during the rebase).
+3. Merge only after that gate is green: rebase is done, this is the
+   remaining step. `git fetch origin && git merge origin/master` (the
+   LICENSE commit, trivial) → push master.
+
+## GOTCHAS
+- `receivablesTrend` is a BALANCE, not a flow: each point carries every entry
+  ever posted up to that month end, via an opening-balance query before the
+  window plus per-month deltas. It ties to account 1200 — the same account
+  `dashboardStats` reads — at every point. It can legitimately sit BELOW the
+  Receivables tile when the books carry future-dated entries (the tile is
+  all-time), which is why the chart caption names its cut-off. Do not "fix"
+  that divergence by bounding the tile without deciding that deliberately.
+- `stepMonth` is pure string math per the fy.ts convention. Keep it that way.
+- The trend chart scales across zero (`min(0,…)`…`max(0,…)`). A net CREDIT on
+  AR — a customer advance — is a real position; the earlier zero-floor scale
+  pushed those points outside the viewBox, where SVG clips silently and the
+  line vanished while the tooltip still read correctly.
+- ⌃K, not ⌘K: `actionFor` returns null for `metaKey` on purpose (Cmd belongs to
+  the browser), and ⌃ is this app's modifier — ⌃A post, ⌃B sidebar.
+- Adding any NEW overlay means revisiting `actionSurvivesModal`. An overlay
+  inherits the global key layer whether or not you think about it.
+- The app-wide ~425px horizontal overflow below 1180px is PRE-EXISTING on every
+  page, not from this build. RevenueOS has no mobile layout; the target is an
+  office Windows machine. Out of scope by decision, not oversight.
+- Browser verification runs against an isolated worktree with its own
+  `data/` dir, never `data/revenueos.db` and never port 3322 (the office
+  instance may be up) — `~/revenueos-preview` on port 3323 is this
+  repo's established convention as of the 2026-08-08 rebase (needs a real
+  `npm install`, not a symlinked `node_modules` — Turbopack rejects that).
+- Files touched by the rebase itself (2026-08-08, beyond RVOS-005's own
+  list below): `src/lib/reports.ts` (`receivablesTrend`/
+  `documentStatusBreakdown` ported onto `Book`), `src/app/page.tsx`
+  (sources both from the page's existing `requireBook()` call instead of a
+  second raw `getDb()`), `EVOLUTION.md` (#35).
+
+## Files touched (RVOS-005)
+src/components/{trend-chart,donut-chart,command-palette}.tsx (new) ·
+src/lib/{reports,keymap}.ts · src/components/{shortcuts,stat-tile}.tsx ·
+src/app/{page.tsx,globals.css} · test/{reports,keymap}.test.ts ·
+RVOS-005-SPEC.md · EVOLUTION.md · HANDOFF.md
+
 # RVOS-003 HANDOFF (client delivery) — ACTIVE
 
 Branch `feat/rvos-003-client-delivery`, off master `76f023a`. Spec:
