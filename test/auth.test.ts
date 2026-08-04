@@ -2,6 +2,8 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import type { AuthOutcome } from "../src/lib/auth";
 import {
   authenticate,
@@ -18,6 +20,7 @@ import {
   purgeExpiredSessions,
   safeNextPath,
   SESSION_TTL_MS,
+  setSessionCompany,
   userCount,
   verifyPassword,
 } from "../src/lib/auth";
@@ -41,6 +44,7 @@ function authDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: T0 });
   return db;
 }
 
@@ -177,7 +181,7 @@ test("a successful login clears the failure counter", () => {
 test("a session resolves to its user", () => {
   const { db, id } = withUser();
   const token = createSession(db, id, T0);
-  assert.deepEqual(lookupSession(db, token, T0), { user_id: id, username: "pranav" });
+  assert.deepEqual(lookupSession(db, token, T0), { user_id: id, username: "pranav", companyId: null });
 });
 
 test("the RAW token is never stored — a copied db yields no usable cookie", () => {
@@ -214,7 +218,7 @@ test("activity slides the expiry forward", () => {
   assert.ok(lookupSession(db, token, mid));
   // Without sliding renewal this would be expired; with it, it is still live.
   const late = at(SESSION_TTL_MS + SESSION_TTL_MS / 4);
-  assert.deepEqual(lookupSession(db, token, late), { user_id: id, username: "pranav" });
+  assert.deepEqual(lookupSession(db, token, late), { user_id: id, username: "pranav", companyId: null });
 });
 
 test("logout destroys exactly one session, not the others", () => {
@@ -305,4 +309,40 @@ test("safeNextPath rejects non-string input and drops the hash", () => {
   assert.equal(safeNextPath(undefined), "/");
   assert.equal(safeNextPath(42), "/");
   assert.equal(safeNextPath("/vouchers#frag"), "/vouchers");
+});
+
+// ── setSessionCompany — RVOS-004 P3 ─────────────────────────────────────
+
+test("switching company points the session at a real, active company", () => {
+  const { db, id } = withUser();
+  db.prepare("INSERT INTO companies (id, name) VALUES (2, 'Second Client')").run();
+  const token = createSession(db, id, T0);
+
+  assert.equal(lookupSession(db, token, T0)!.companyId, null, "starts unset");
+  setSessionCompany(db, token, 2);
+  assert.equal(lookupSession(db, token, T0)!.companyId, 2);
+
+  setSessionCompany(db, token, 1);
+  assert.equal(lookupSession(db, token, T0)!.companyId, 1, "can switch again, to a different one");
+});
+
+test("switching to a missing or archived company is refused, and the session is untouched", () => {
+  const { db, id } = withUser();
+  db.prepare("INSERT INTO companies (id, name, archived_at) VALUES (2, 'Gone', '2026-07-01')").run();
+  const token = createSession(db, id, T0);
+  setSessionCompany(db, token, 1);
+
+  assert.throws(() => setSessionCompany(db, token, 999), /No such company/);
+  assert.throws(() => setSessionCompany(db, token, 2), /archived/);
+  assert.equal(
+    lookupSession(db, token, T0)!.companyId,
+    1,
+    "a refused switch must not partially apply"
+  );
+});
+
+test("switching requires a real session — an absent or unknown token is refused", () => {
+  const { db } = withUser();
+  assert.throws(() => setSessionCompany(db, undefined, 1), /No session/);
+  assert.throws(() => setSessionCompany(db, "not-a-real-token", 1), /No such company|No such session/);
 });

@@ -37,6 +37,11 @@ const EXEMPT = new Set([
   // and verifyBackup asserts the whole file's journals balance. Scoping these
   // to one company would make the backup wrong, not safer.
   "src/lib/backup.ts",
+  // Manages the `companies` table itself — not scoped (see book.ts's
+  // GLOBAL_TABLES), so its raw .prepare() calls are correct by design. It
+  // trips the word-match below only because a docstring says "chart of
+  // accounts" in English prose, not because it queries the accounts table.
+  "src/lib/companies.ts",
 ]);
 
 /**

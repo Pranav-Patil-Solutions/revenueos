@@ -5,10 +5,13 @@ import { redirect } from "next/navigation";
 import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { setSessionCompany } from "./auth";
 import { groupFor } from "./coa";
+import { archiveCompany, createCompany, renameCompany } from "./companies";
 import { generateItems } from "./compliance";
 import { requireSession } from "./dal";
 import { getDb, UPLOADS_DIR } from "./db";
+import { readSessionToken } from "./session";
 import { extractDocument } from "./extraction";
 import { rupeeStringToPaise, todayIso } from "./format";
 import { fyEnd, fyLabel, fyList, fyStart } from "./fy";
@@ -193,6 +196,70 @@ export async function updateSettings(formData: FormData): Promise<void> {
     );
   revalidatePath("/settings");
   redirect("/settings");
+}
+
+const COMPANY_ENTITY_TYPES: EntityType[] = ["proprietorship", "partnership", "company"];
+
+/**
+ * Point THIS session at a company. See the long comment on
+ * `setSessionCompany` (auth.ts) for why a company id in a form field here
+ * does not violate invariant T2 — this is the one deliberate exception, and
+ * every other action in this file must keep reading its company from the
+ * session, never from an input.
+ */
+export async function switchCompany(formData: FormData): Promise<void> {
+  await requireSession();
+  const companyId = Number(formData.get("company_id"));
+  if (!Number.isInteger(companyId) || companyId < 1) {
+    throw new Error("Choose a company.");
+  }
+  setSessionCompany(getDb(), await readSessionToken(), companyId);
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
+export async function createCompanyAction(formData: FormData): Promise<void> {
+  await requireSession();
+  const entityType = String(formData.get("entity_type") ?? "proprietorship");
+  if (!COMPANY_ENTITY_TYPES.includes(entityType as EntityType)) {
+    throw new Error("Unknown entity type.");
+  }
+  createCompany(
+    getDb(),
+    {
+      name: String(formData.get("name") ?? ""),
+      entityType: entityType as EntityType,
+      pan: String(formData.get("pan") ?? ""),
+      tan: String(formData.get("tan") ?? ""),
+      gstin: String(formData.get("gstin") ?? ""),
+      stateCode: String(formData.get("state_code") ?? ""),
+    },
+    new Date().toISOString()
+  );
+  revalidatePath("/companies");
+  redirect("/companies");
+}
+
+export async function renameCompanyAction(formData: FormData): Promise<void> {
+  await requireSession();
+  const id = Number(formData.get("company_id"));
+  if (!Number.isInteger(id) || id < 1) throw new Error("Choose a company.");
+  renameCompany(getDb(), id, String(formData.get("name") ?? ""));
+  revalidatePath("/companies");
+  revalidatePath("/", "layout");
+  redirect("/companies");
+}
+
+/** Archive-only — see companies.ts. A client's books are never deleted from
+ * here, one click or otherwise. */
+export async function archiveCompanyAction(formData: FormData): Promise<void> {
+  await requireSession();
+  const id = Number(formData.get("company_id"));
+  if (!Number.isInteger(id) || id < 1) throw new Error("Choose a company.");
+  archiveCompany(getDb(), id, new Date().toISOString());
+  revalidatePath("/companies");
+  revalidatePath("/", "layout");
+  redirect("/companies");
 }
 
 const ACCOUNT_TYPES: AccountType[] = [

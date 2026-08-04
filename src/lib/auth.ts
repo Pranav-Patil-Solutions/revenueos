@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { assertUsableCompany } from "./book";
 import type { AuthSessionRow, AuthUserRow } from "./types";
 
 /**
@@ -216,6 +217,9 @@ export function sha256(value: string): string {
 export interface SessionUser {
   user_id: number;
   username: string;
+  /** The book this login is currently looking at. NULL = none chosen yet —
+   * a real, expected state for a fresh login, not an error (RVOS-004 P3). */
+  companyId: number | null;
 }
 
 /**
@@ -252,7 +256,39 @@ export function lookupSession(
       WHERE token_sha256 = @sha`
   ).run({ now, expires, sha });
 
-  return { user_id: row.user_id, username: row.username };
+  return { user_id: row.user_id, username: row.username, companyId: row.company_id };
+}
+
+/**
+ * Point a session at a company. This is the ONE place a company id is
+ * accepted as an argument outside a query already scoped by the session
+ * (RVOS-004 T2) — and it is a deliberate, narrow exception, not a hole in
+ * that rule: T2 forbids trusting a caller-supplied id to scope a READ or
+ * WRITE of book data; it says nothing about identifying WHICH book to make
+ * active, which has to come from somewhere. What keeps this exception safe:
+ *
+ *   1. it requires an authenticated session (the caller can only ever move
+ *      ITS OWN session, never anyone else's — token is unguessable and
+ *      server-held);
+ *   2. `assertUsableCompany` proves the target exists and is not archived
+ *      BEFORE anything is written; and
+ *   3. it never serves data back — it only ever mutates this one session
+ *      row. No report, export, or voucher accepts a company id this way.
+ *
+ * Throws (does not silently no-op) on an unknown token, so a caller cannot
+ * mistake a stale cookie for a successful switch.
+ */
+export function setSessionCompany(
+  db: Database.Database,
+  token: string | undefined,
+  companyId: number
+): void {
+  if (!token) throw new Error("No session.");
+  assertUsableCompany(db, companyId);
+  const info = db
+    .prepare(`UPDATE auth_sessions SET company_id = @companyId WHERE token_sha256 = @sha`)
+    .run({ companyId, sha: sha256(token) });
+  if (info.changes === 0) throw new Error("No such session.");
 }
 
 export function destroySession(db: Database.Database, token: string | undefined): void {

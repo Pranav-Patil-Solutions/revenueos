@@ -1,6 +1,7 @@
 // See the note in session.ts: `server-only` is not a dependency of this repo.
 import { cache } from "react";
 import { redirect } from "next/navigation";
+import { assertUsableCompany, book, type Book } from "./book";
 import { getDb } from "./db";
 import { lookupSession, type SessionUser } from "./auth";
 import { readSessionToken } from "./session";
@@ -57,4 +58,33 @@ export async function requireApiSession(): Promise<SessionUser | Response> {
   const user = await getSessionUser();
   if (!user) return new Response(null, { status: 401 });
   return user;
+}
+
+/**
+ * Assert a session AND an active, usable company — for pages and actions
+ * that read or write book data (RVOS-004 P3). Redirects to /companies when
+ * none is selected, or when the one on the session was archived or deleted
+ * out from under it since it was chosen — `assertUsableCompany` re-checks
+ * every call rather than trusting a value cached on the session row, so an
+ * archive mid-session self-heals to the picker instead of quietly reading a
+ * dead company's empty book.
+ *
+ * Returns a Book bound to `getDb()` fresh on every call (not memoised): the
+ * Next docs' `cache()` dedupe is per-REQUEST, and a company switch happens
+ * on its own request, so there is no stale-handle window to guard against —
+ * but a handle is cheap to construct and holding one across requests would
+ * be the mistake, so this deliberately does not use `cache()` itself.
+ */
+export async function requireBook(): Promise<{ user: SessionUser; book: Book }> {
+  const user = await requireSession();
+  if (user.companyId == null) redirect("/companies");
+  const db = getDb();
+  let usable = true;
+  try {
+    assertUsableCompany(db, user.companyId);
+  } catch {
+    usable = false;
+  }
+  if (!usable) redirect("/companies");
+  return { user, book: book(db, user.companyId) };
 }

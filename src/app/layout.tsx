@@ -64,7 +64,7 @@ export default async function RootLayout({
         />
         <Sidebar />
         <div className="content-shell min-h-screen">
-          <Topbar username={user.username} />
+          <Topbar username={user.username} companyId={user.companyId} />
           <main className="mx-auto max-w-6xl px-8 pt-8 pb-16">{children}</main>
         </div>
         <Statusbar />
