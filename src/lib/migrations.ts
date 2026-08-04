@@ -180,9 +180,30 @@ const companies: Migration = {
 
     // `settings` is kept, not dropped. Every reader still points at it until
     // P2 ports them onto the Book handle; dropping it here would break the app
-    // between two commits on the same branch. Migration 002 removes it once
-    // nothing reads it.
+    // between two commits on the same branch. A later migration removes it
+    // once nothing reads it.
   },
 };
 
-export const MIGRATIONS: Migration[] = [companies];
+/**
+ * 002 — a session may carry the chosen company.
+ *
+ * Nullable and no default: a session minted before this migration, or a fresh
+ * login, has chosen nothing yet — that IS "no company selected", not an error
+ * state. `auth_sessions` is a GLOBAL table (firm staff, not client data), so
+ * this column means something different from company_id everywhere else in
+ * the schema: it names which book a login is currently looking at, not who
+ * owns the row.
+ */
+const sessionCompany: Migration = {
+  version: 2,
+  name: "auth_sessions: a session may carry the chosen company",
+  up: (db: Database.Database) => {
+    db.exec(`ALTER TABLE auth_sessions ADD COLUMN company_id INTEGER REFERENCES companies(id)`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_auth_sessions_company ON auth_sessions(company_id)`
+    );
+  },
+};
+
+export const MIGRATIONS: Migration[] = [companies, sessionCompany];

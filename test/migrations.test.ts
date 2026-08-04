@@ -77,7 +77,7 @@ test("migration 001 moves the existing book to company 1, intact", () => {
   };
 
   const r = migrate(db, MIGRATIONS, { now: NOW });
-  assert.equal(r.nowAtVersion, 1);
+  assert.equal(r.nowAtVersion, MIGRATIONS.length);
 
   // Nothing lost, nothing duplicated.
   assert.equal(count(db, "accounts"), before.accounts);
@@ -210,7 +210,7 @@ test("migrating twice changes nothing", () => {
   };
   const again = migrate(db, MIGRATIONS, { now: NOW });
   assert.deepEqual(again.applied, []);
-  assert.equal(currentVersion(db), 1);
+  assert.equal(currentVersion(db), MIGRATIONS.length);
   assert.equal(count(db, "companies"), snapshot.companies);
   assert.equal(count(db, "accounts"), snapshot.accounts);
   assert.equal(count(db, "journal_lines"), snapshot.lines);
@@ -224,7 +224,7 @@ test("an empty database migrates cleanly too", () => {
   db.prepare("DELETE FROM settings").run();
   assert.doesNotThrow(() => migrate(db, MIGRATIONS, { now: NOW }));
   assert.equal(count(db, "companies"), 0);
-  assert.equal(currentVersion(db), 1);
+  assert.equal(currentVersion(db), MIGRATIONS.length);
 });
 
 test("foreign-key enforcement survives the migration", () => {
@@ -239,6 +239,41 @@ test("foreign-key enforcement survives the migration", () => {
         .prepare(
           "INSERT INTO journal_lines (journal_id, line_no, account_id, debit_paise, credit_paise) VALUES (99999,1,1,100,0)"
         )
+        .run(),
+    /FOREIGN KEY/
+  );
+});
+
+test("migration 002 — a session's company starts NULL, and can be set to a real company", () => {
+  const db = officeDb();
+  db.prepare(
+    `INSERT INTO auth_users (username, password_hash, password_salt, created_at)
+     VALUES ('dad', 'h', 's', @now)`
+  ).run({ now: NOW });
+  db.prepare(
+    `INSERT INTO auth_sessions (token_sha256, user_id, created_at, expires_at, last_seen_at)
+     VALUES ('sha', 1, @now, @exp, @now)`
+  ).run({ now: NOW, exp: "2026-07-23T09:00:00.000Z" });
+
+  migrate(db, MIGRATIONS, { now: NOW });
+
+  const before = db
+    .prepare("SELECT company_id FROM auth_sessions WHERE token_sha256 = 'sha'")
+    .get() as { company_id: number | null };
+  assert.equal(before.company_id, null, "a session minted before this migration chose nothing");
+
+  db.prepare("UPDATE auth_sessions SET company_id = 1 WHERE token_sha256 = 'sha'").run();
+  const after = db
+    .prepare("SELECT company_id FROM auth_sessions WHERE token_sha256 = 'sha'")
+    .get() as { company_id: number | null };
+  assert.equal(after.company_id, 1);
+
+  // The REFERENCES clause is real, not decorative.
+  db.pragma("foreign_keys = ON");
+  assert.throws(
+    () =>
+      db
+        .prepare("UPDATE auth_sessions SET company_id = 999 WHERE token_sha256 = 'sha'")
         .run(),
     /FOREIGN KEY/
   );

@@ -260,11 +260,23 @@ export interface AuthUserRow {
 }
 
 /** The session's PRIMARY KEY is the SHA-256 of the cookie token — the raw
- * token is never stored, so a copied db yields no usable cookie. */
+ * token is never stored, so a copied db yields no usable cookie.
+ * `company_id` is NULL until `switchCompany` picks one (RVOS-004 P3) — a
+ * fresh login has no active book yet. */
 export interface AuthSessionRow {
   token_sha256: string;
   user_id: number;
   created_at: string;
   expires_at: string;
   last_seen_at: string;
+  company_id: number | null;
+}
+
+/** One client's books (RVOS-004 P1). Carries every field the old `settings`
+ * singleton held, now per company — `id` is the company id, not a fixed 1. */
+export interface CompanyRow extends SettingsRow {
+  name: string;
+  created_at: string;
+  /** Archived, never deleted — see book.ts. */
+  archived_at: string | null;
 }

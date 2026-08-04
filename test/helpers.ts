@@ -1,16 +1,21 @@
 import Database from "better-sqlite3";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import { validateExtraction } from "../src/lib/extraction-schema";
 import { DEMO_FIXTURE } from "../src/lib/extraction";
 import { postDocument } from "../src/lib/posting";
 import type { DraftRowInput, StagedRow } from "../src/lib/types";
 
 /** Fresh in-memory books with the demo fixture staged on document 1
- * (Sharma Traders, customer, intra-state). */
+ * (Sharma Traders, customer, intra-state). Migrated to schema-current, so
+ * every scoped table already carries company_id and the existing book is
+ * company 1 — the shape every other test helper and call site assumes. */
 export function stagedDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
   db.prepare(
     `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
      VALUES ('Sharma Traders', 'customer', '27AAACS1234F1Z5', '27', '', '2026-07-01T00:00:00Z')`

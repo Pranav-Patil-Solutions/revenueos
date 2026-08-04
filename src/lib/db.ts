@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { migrate } from "./migrate";
+import { MIGRATIONS } from "./migrations";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
@@ -396,12 +398,37 @@ export function configureConnection(db: Database.Database): void {
   db.pragma("wal_autocheckpoint = 64");
 }
 
+/**
+ * Run pending migrations with NO pre-migration snapshot.
+ *
+ * This is what every ordinary app boot does — dev, test, and a normal
+ * `npm start`. It is still transactionally safe: `migrate()` runs each step
+ * in its own transaction, re-proves the books balance after every step, and
+ * rolls back on any failure (see migrate.ts). What it does NOT do is take an
+ * external, independently-verified backup first.
+ *
+ * `createBackup` (backup.ts) is genuinely async — it drives SQLite's online
+ * backup API — and `getDb()` is a synchronous singleton called from many
+ * places that cannot await it. Restructuring that is out of scope here.
+ *
+ * The real, once-ever cutover of an office's live database is NOT this path:
+ * it is `npm run migrate` (scripts/migrate.ts), which takes and verifies a
+ * real backup first and only then calls this same `migrate()` with that
+ * backup's path already in hand. Because migrations are idempotent, running
+ * that script before the app's first post-upgrade boot makes this call here
+ * a no-op — which is the intended order of operations, not a race.
+ */
+function migrateInProcess(db: Database.Database): void {
+  migrate(db, MIGRATIONS, { now: new Date().toISOString() });
+}
+
 function open(): Database.Database {
   mkdirSync(UPLOADS_DIR, { recursive: true });
   const db = new Database(path.join(DATA_DIR, "revenueos.db"));
   configureConnection(db);
   initSchema(db);
   seedCoreData(db);
+  migrateInProcess(db);
   if (process.env.DEMO_MODE === "1") seedDemoParties(db);
   return db;
 }
