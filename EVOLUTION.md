@@ -699,3 +699,56 @@ and the pressure will always be to set it to the convenient one. Corollary: a
 caveat must name what it doubts and be scoped to what the caller relied on,
 or it becomes noise, and noise is indistinguishable from no warning at all.
 
+## 26. RVOS-004 P3 (2026-08-04): a migration engine that nobody ever calls
+
+**What happened:** P1 built `migrate()` and migration 001 — versioned,
+backup-first, transaction-per-step, rollback-proven, thoroughly unit tested.
+P2 built the Book handle on the assumption that `company_id` columns exist.
+Nothing in `getDb()`/`open()` ever called `migrate()`. On a real running
+instance — dev, the office machine, anywhere — the `companies` table would
+never be created, because nothing had ever run the migration outside a test's
+own hand-built `:memory:` database. The entire multi-tenancy feature would
+have been dead on arrival the first time anyone actually started the app,
+and none of P1 or P2's (excellent) test coverage could have caught it, because
+none of it goes through `getDb()`.
+
+**Resolution:** `open()` now calls `migrate()` on every boot
+(`migrateInProcess` in db.ts). This is safe without a pre-migration backup
+because `migrate()` is already transactionally self-protecting — each step
+commits or rolls back on its own, re-proving the books balance after every
+step. It is NOT the backed-up path the spec calls for on a real office
+database: `createBackup` is genuinely async (SQLite's online backup API), and
+`getDb()` is a synchronous singleton called from many places that cannot
+await it — restructuring that was out of scope here. So the deliberate,
+once-per-upgrade cutover is a new script, `npm run migrate`
+(scripts/migrate.ts): it awaits a real verified backup FIRST, then calls the
+same `migrate()` with a closure that simply reports that backup's already-known
+path. Because migrations are idempotent, running that script before the app's
+first post-upgrade boot makes the in-process call a no-op, not a race — order
+of operations matters here, not exclusivity.
+
+**Delta (rule):** a migration engine's own test suite proves the mechanism
+works; it does not prove the mechanism is REACHABLE from the code path a real
+user's server process actually takes. When a piece of infrastructure is
+introduced in one phase and consumed in a later one, the phase that
+introduces it must also wire it into the real boot path immediately — even if
+nothing yet needs the data it produces — or the gap sits invisible until the
+first live boot, well past the point where "it's still early, no real users
+yet" is true. Corollary, found while fixing this: a synchronous singleton
+(`getDb()`) and a genuinely async prerequisite (a verified backup) cannot be
+reconciled by making the singleton wait; they are reconciled by doing the
+async part BEFORE the singleton's synchronous contract is invoked, and
+handing the sync side an already-satisfied promise (literally: a path that is
+already known good) rather than a promise it would need to await.
+
+**Second delta (smaller, same session):** the tenancy ratchet's offender
+check (`test/tenancy-ratchet.test.ts`) matches scoped-table names against the
+RAW FILE TEXT, not just SQL strings — deliberately, per its own docstring, to
+avoid false negatives. It has a real false-positive cost: `src/lib/companies.ts`
+tripped it purely because a docstring said "chart of accounts" in English
+prose, not because it queried the `accounts` table. Exempted with a comment
+explaining exactly why, rather than rewording working documentation to dodge
+a test. A ratchet built to over-trigger should be treated that way at review
+time — the fix is an explicit, reasoned exemption, not silence or a rewrite
+of prose that was correct.
+

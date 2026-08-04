@@ -1,3 +1,185 @@
+# RVOS-004/005 HANDOFF — ACTIVE (resume here)
+
+Task: **RVOS-FIX** — close RVOS-004 P3–P6, gate + merge RVOS-005, handover.
+Repo `~/revenueos`. Port 3322 only. `DEMO_MODE=1` for all tests/smoke. Never
+touch `data/revenueos.db` in QA.
+
+Branches: `feat/rvos-004-multi-client` (this one — do the P3–P6 work here) and
+`feat/rvos-005-dashboard-ux` (rebased onto 004's P2a tip already; needs
+ANOTHER rebase onto 004's final P6 commit once P6 lands — see GOTCHAS).
+`master` is untouched so far; origin has 1 commit not in this line (a
+proprietary LICENSE) — merge it, don't rebase over it, at MERGE time.
+
+## DONE (this session, all committed, tsc/lint/test/build green at each)
+
+1. `b2e79b7` — RVOS-004: the uncommitted `layout.tsx` Script-swap from the
+   RVOS-005 branch's working tree belongs to 004, not 005. Committed here;
+   005 was rebased cleanly on top (already done, do not redo).
+2. `bfe2ca4` — **RVOS-004 P3a**: `migrate()` existed since P1 but was never
+   called from `getDb()`/`open()` — on any real running instance the
+   `companies` table would never exist. Now every boot calls it
+   in-process (safe on its own — migrate() is transactionally
+   self-protecting). The REAL backed-up cutover for an office's live db is a
+   new script, `npm run migrate` (scripts/migrate.ts) — takes a verified
+   backup first, then hands migrate() that already-known-good path.
+   Also **migration 002**: `auth_sessions.company_id` (nullable — "no company
+   chosen" is a real state, not an error). `test/helpers.ts` now migrates its
+   in-memory dbs too. See EVOLUTION #26.
+3. `d2d0aa4` — **RVOS-004 P3**: session-bound company + switcher.
+   `SessionUser.companyId`, `setSessionCompany` (auth.ts — read its comment on
+   why a company id as a form-field argument here does NOT violate T2),
+   `requireBook()` (dal.ts — requireSession + a live assertUsableCompany
+   check, self-heals to /companies if the active company got archived
+   mid-session), `src/lib/companies.ts` (list/create/rename/archive,
+   archive-only, no delete), `/companies` page, `CompanySwitcher` component
+   wired into Topbar. 366 tests pass (was 354 before test additions).
+
+**P3's own gate is green.** P3 deliberately did NOT touch the 28-file
+tenancy ratchet baseline (still 0/28 ported) or the ~14 files reading the
+legacy `settings` singleton — that porting work is P4/P5/P6's job, done
+incrementally as those phases touch each area (see NEXT).
+
+## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
+
+**P4 — client onboarding** (not started)
+- Create-company flow already exists (`/companies`, `createCompanyAction`)
+  but does NOT seed a chart of accounts yet — a new company today has ZERO
+  accounts and cannot post anything. Add: seed `SEED_ACCOUNTS` (db.ts) scoped
+  to the new company's id (new function, NOT `seedCoreData` which is
+  company-1-specific global bootstrap — don't repurpose it, write
+  `seedAccountsForCompany(db, companyId)` or similar and call it from
+  `createCompanyAction` after `createCompany`).
+- Opening balances via the documented `opening` journal (docs/DAY-ONE.md §4)
+  — check that doc still describes the single-company shape and update if not.
+- Tally/CSV import must land in the ACTIVE company (`requireBook()`) — pin
+  with an explicit test. This touches `src/lib/import-csv.ts` /
+  `import-tally.ts` and the `/api/import/*` routes — check whether those are
+  already on the 28-file ratchet baseline (import-tally isn't listed; the two
+  `/api/import/*` route files ARE).
+- **This is also where the big porting work naturally starts.** Every file P4
+  touches that's on the ratchet baseline (`src/lib/actions.ts`,
+  `src/app/api/import/excel/route.ts`, `src/app/api/import/tally/preview/route.ts`,
+  `src/app/imports/page.tsx`) should be ported to the Book handle AS you touch
+  it, and struck off `BASELINE` in test/tenancy-ratchet.test.ts (the "baseline
+  does not go stale" test enforces this). Check the ratchet count after EVERY
+  phase, not just at P6 (explicit invariant).
+
+**P5 — backups**
+- `npm run backup` stays whole-DB. ADD a per-company export. `verifyBackup`
+  gains a per-company row-count assertion. Confirm the CA pack + reports
+  already run per-company via P2/P4/P6's porting (assert, don't rebuild if
+  true).
+
+**P6 — isolation suite, THE RVOS-004 ship gate**
+- By this point the ratchet needs to be at or near 0/28 — P6's whole job is
+  proving isolation, which is impossible while raw queries bypass the Book
+  handle. Budget real time for the remaining port here if P4/P5 didn't finish
+  it (they likely won't touch all 28 — `posting.ts`, `vouchers.ts`,
+  `reports.ts`, `compliance.ts`, `tax/*.ts`, most `page.tsx` report views are
+  still untouched after P3/P4/P5 as scoped above).
+- **Also close the ~14-file `settings`-singleton gap** (see GOTCHAS below) —
+  P6 explicitly asserts "books-lock/FY-selector/settings are per company",
+  which is currently FALSE (every company shows company 1's GSTIN/PAN/lock
+  state). Grep `FROM settings WHERE id = 1` across `src/` for the full list.
+- Seed 2 companies, deliberately distinguishable data; enumerate isolation
+  assertions FROM THE EXPORTS (`/api/export/[report]/route.ts` lists every
+  report kind) — don't hand-write the list.
+- Full ship gate: tests+smoke+lint+build green · code-reviewer full-branch
+  diff (0 blockers, explicit tenancy-leakage pass) · qa-runner drives :3322
+  with 2 LIVE companies (see GOTCHAS re: the already-running dev server) ·
+  migration rehearsed on a COPY of the real office db (`data/revenueos.db`),
+  snapshot restore verified BEFORE the real run · EVOLUTION updated.
+
+**PORT** — `receivablesTrend`/`documentStatusBreakdown` in `reports.ts`
+(RVOS-005's two new read models) onto the Book handle. New file, not yet in
+the ratchet baseline, so the ratchet will NOT flag them — easy to miss. Add
+both to P6's isolation enumeration.
+
+**RVOS-005 ship gate** (run fresh, post-port, on `feat/rvos-005-dashboard-ux`)
+- tsc/lint/test/build/smoke; zero-context code-reviewer full diff; qa-runner
+  over changed modules; re-drive the ⌃K/⌃A voucher-posting regression
+  (EVOLUTION #26 on the 005 branch — journal count must not change with the
+  palette open over a valid voucher) on THIS diff, don't skip as "already
+  fixed."
+
+**MERGE**: rebase 005 onto 004's final (post-P6) commit → both gates green on
+the same tree → `git fetch origin && git merge origin/master` (LICENSE, trivial)
+→ push master.
+
+**HANDOVER** (final step): update this file (mark RVOS-004+005 SHIPPED,
+delete this NEXT section), EVOLUTION.md (every P4–P6+port+gate delta),
+confirm `data/` untouched, `git status` clean + both directions in sync with
+origin/master, note RVOS-003's Windows acceptance run as standing-open
+(not closable here).
+
+## GOTCHAS
+
+- **A live dev server is already running on :3322** (`next dev`, long-running,
+  PID varies — check `ps aux | grep "next dev"`), almost certainly Pranav's
+  own session against his REAL `data/revenueos.db`. Do not kill it, do not
+  interact with it. For any isolated smoke-test/browser-drive (P6's
+  qa-runner, RVOS-005's ⌃K regression), use a separate worktree/copy with its
+  own `data/` dir — `getDb()` hardcodes `path.join(process.cwd(), "data")`,
+  not overridable by env, so same-cwd = same real database. Next also refuses
+  a second `next dev` in the same project directory outright regardless of
+  port, which is how this was discovered.
+- **The ~14-file `settings` singleton gap** (topbar.tsx already fixed for the
+  company NAME only, everything else not): `src/app/settings/page.tsx`,
+  `pack/page.tsx`, `vouchers/page.tsx`, `compliance/page.tsx`,
+  `api/export/[report]/route.ts`, `reports/gst/page.tsx`,
+  `reports/balance-sheet/page.tsx`, `lib/vouchers.ts` (×2 reads),
+  `lib/extraction.ts`, `lib/posting.ts`, `lib/actions.ts` (`updateSettings` +
+  1 more), `lib/tax/computation.ts` all do
+  `db.prepare("SELECT * FROM settings WHERE id = 1")` or similar. These need
+  to become `companies` reads scoped to the active company (via `requireBook()`
+  or at minimum the session's companyId) — NOT a ratchet-tracked concern
+  (`companies`/`settings` aren't SCOPED_TABLES) but a real T1-adjacent
+  correctness gap called out explicitly in P6's own assertions. `CompanyRow`
+  (types.ts) already mirrors `SettingsRow` 1:1 plus `name`/`created_at`/
+  `archived_at` — the swap at each site is mostly `FROM settings WHERE id = 1`
+  → `FROM companies WHERE id = @company_id`, but each call site needs a Book
+  or at least a companyId threaded in, which for several of these (reports.ts,
+  posting.ts, extraction.ts, tax/computation.ts) means changing a function
+  signature and its callers — check each one, don't blind-replace.
+- The migrate()/backup async-vs-sync resolution (EVOLUTION #26 on this
+  branch) is the pattern to reuse for anything else needing an async
+  prerequisite inside a sync boundary: do the async part BEFORE, hand the
+  sync side an already-satisfied result.
+- `test/tenancy-ratchet.test.ts`'s offender check matches raw file TEXT
+  (comments included), not just SQL — a new file mentioning a scoped-table
+  NAME in prose (e.g. "chart of **accounts**") will false-positive. Exempt
+  with a reason (see `src/lib/companies.ts`'s entry), don't reword working
+  docs to dodge it.
+- RVOS-005's branch-local EVOLUTION.md has its OWN "## 26." entry (the ⌃K
+  overlay incident) that does not exist on this (004) branch's EVOLUTION.md —
+  they diverged before 005's entry was written. When 005 is rebased onto
+  004's final tip at MERGE time, its #26 will collide with whatever number
+  004 is at by then (currently #26 here too, coincidentally) — renumber
+  005's entry to follow, don't let two different "## 26."s survive the merge.
+- `switchCompany`/`renameCompanyAction`/`archiveCompanyAction` all take a
+  `company_id` FORM FIELD by necessity — this is documented as the one
+  deliberate T2 exception (see the comment on `setSessionCompany` in
+  auth.ts). Do not "fix" this by trying to remove it; do flag it immediately
+  if any NEW action starts doing the same for anything other than
+  switch/rename/archive.
+- Root `page.tsx` (Overview) and most report pages still do NOT use
+  `requireBook()` — they're on the ratchet baseline and still read
+  unscoped. `test/route-guards.test.ts`'s "every page requires a session"
+  check only looks for the literal substring `requireSession()` in a page's
+  source; once a page switches to `requireBook()` ONLY (which internally
+  calls requireSession but the page source won't say so), that test needs
+  updating to also accept `requireBook()` — do this the first time a page
+  actually switches over, not before.
+
+## Files touched this session (RVOS-004 P3a + P3)
+scripts/migrate.ts (new) · package.json · src/lib/{db,migrations,types,auth,
+dal,companies(new)}.ts · src/lib/actions.ts · src/app/companies/page.tsx (new)
+· src/app/layout.tsx · src/components/{topbar,sidebar,company-switcher(new)}.tsx
+· test/{helpers,migrations,auth,tenancy-ratchet,companies(new)}.test.ts ·
+EVOLUTION.md · HANDOFF.md
+
+---
+
 # RVOS-003 HANDOFF (client delivery) — ACTIVE
 
 Branch `feat/rvos-003-client-delivery`, off master `76f023a`. Spec:
