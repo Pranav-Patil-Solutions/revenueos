@@ -7,9 +7,11 @@ import { SCOPED_TABLES } from "../src/lib/book";
 /**
  * Tenancy ratchet — RVOS-004 P2.
  *
- * `company_id` now exists on every book-bearing table, but almost nothing uses
- * it yet: 28 files still call `db.prepare` directly on scoped tables and so
- * read across every client. Porting them is P2's fan-out work.
+ * `company_id` now exists on every book-bearing table, but almost nothing used
+ * it at first: P2 started this baseline at 28 files calling `db.prepare`
+ * directly on scoped tables (reading across every client). Porting them is
+ * ongoing fan-out work, continued incrementally by whichever later phase
+ * touches each area (P4 struck off the three import-route files below).
  *
  * Until that finishes there is a window where a NEW query could be written the
  * old way and nobody would notice — and the eventual "no raw prepare" test
@@ -49,14 +51,11 @@ const EXEMPT = new Set([
  * ported to the Book handle — never add to this list.
  */
 const BASELINE: string[] = [
-  "src/app/api/import/excel/route.ts",
-  "src/app/api/import/tally/preview/route.ts",
   "src/app/api/upload/route.ts",
   "src/app/api/uploads/[id]/route.ts",
   "src/app/capture/page.tsx",
   "src/app/documents/[id]/page.tsx",
   "src/app/documents/page.tsx",
-  "src/app/imports/page.tsx",
   "src/app/pack/page.tsx",
   "src/app/page.tsx",
   "src/app/parties/page.tsx",

@@ -68,6 +68,12 @@ The ones you will use on day one:
 
 ## 4. Enter the opening balances
 
+> **Taking on a second client?** Each client's books are a separate
+> *company* — create one from **Companies** in the top bar, then switch to
+> it. A new company gets its own chart of accounts automatically (the same
+> 23 accounts as step 3), but starts with zero balances of its own — do this
+> step again, for that company, before posting anything else in it.
+
 **This is the step people get wrong, so it is spelled out.**
 
 RevenueOS starts with empty books. Before entering anything new, bring in the

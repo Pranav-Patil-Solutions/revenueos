@@ -286,9 +286,9 @@ async function main(): Promise<void> {
 
   // The mapping the UI form would save — persisted, so a second import asks nothing.
   const insertMapping = db.prepare(
-    `INSERT INTO ledger_mappings (ledger_name, target_kind, account_id, party_id, created_at)
-     VALUES (@ledger_name, @target_kind, @account_id, @party_id, @created_at)
-     ON CONFLICT(ledger_name) DO UPDATE SET
+    `INSERT INTO ledger_mappings (company_id, ledger_name, target_kind, account_id, party_id, created_at)
+     VALUES (1, @ledger_name, @target_kind, @account_id, @party_id, @created_at)
+     ON CONFLICT(company_id, ledger_name) DO UPDATE SET
        target_kind = excluded.target_kind,
        account_id  = excluded.account_id,
        party_id    = excluded.party_id`
@@ -306,7 +306,7 @@ async function main(): Promise<void> {
   }
   const { unmappedLedgers } = await import("../src/lib/import-tally");
   const savedMappings = db
-    .prepare("SELECT * FROM ledger_mappings")
+    .prepare("SELECT * FROM ledger_mappings WHERE company_id = 1")
     .all() as import("../src/lib/import-tally").LedgerMapping[];
   assert.deepEqual(
     unmappedLedgers(tallyVouchers, savedMappings),

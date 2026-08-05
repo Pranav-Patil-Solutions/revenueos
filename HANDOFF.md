@@ -39,30 +39,34 @@ tenancy ratchet baseline (still 0/28 ported) or the ~14 files reading the
 legacy `settings` singleton — that porting work is P4/P5/P6's job, done
 incrementally as those phases touch each area (see NEXT).
 
-## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
+4. `<hash>` — **RVOS-004 P4**: client onboarding. `seedAccountsForCompany`
+   (db.ts, new — deliberately NOT a repurposed `seedCoreData`, see its
+   docstring) called from `createCompanyAction` right after `createCompany`,
+   so a new company gets its chart of accounts immediately instead of
+   starting postable-empty. `docs/DAY-ONE.md` §4 gained a callout pointing a
+   second-client onboarding at `/companies` + re-running the opening-balance
+   step per company. Tally/CSV import ported onto the Book handle:
+   `finalizeTallyImport` (import-tally.ts) and `stageExcelImport`
+   (import-csv.ts, new) each do mapping-upsert + staging + document-create in
+   ONE company-scoped transaction; `requireApiBook()` (dal.ts, new —
+   `requireApiSession`'s counterpart, 401/409 JSON not a redirect) gates both
+   `/api/import/*` routes, `requireBook()` gates `createTallyImport` (actions.ts)
+   and `/imports` page. Ratchet baseline **28 → 25** (struck: the two
+   `/api/import/*` routes, `imports/page.tsx`). New pinning test
+   `test/import-isolation.test.ts`: two companies, both import paths, proves
+   neither's `documents`/`staged_rows`/`ledger_mappings` ever cross — including
+   that a Book can't read a sibling company's row even by exact id/name.
+   **Found + fixed while verifying:** `scripts/smoke.ts`'s own hand-rolled
+   `ledger_mappings` insert had drifted from P1's schema change (still
+   `ON CONFLICT(ledger_name)`, not `(company_id, ledger_name)`) and broke the
+   moment smoke actually ran the Tally step post-migration — invisible to the
+   tenancy ratchet since that only walks `src/lib/`. See EVOLUTION #27. 368
+   tests pass (was 366 before test additions), lint/smoke/build all green.
+   `settings` is still the P6-scoped global-singleton gap noted below —
+   `createTallyImport`'s `tax_inclusive` read is left on it deliberately, with
+   a comment, not silently "fixed" out of this phase's scope.
 
-**P4 — client onboarding** (not started)
-- Create-company flow already exists (`/companies`, `createCompanyAction`)
-  but does NOT seed a chart of accounts yet — a new company today has ZERO
-  accounts and cannot post anything. Add: seed `SEED_ACCOUNTS` (db.ts) scoped
-  to the new company's id (new function, NOT `seedCoreData` which is
-  company-1-specific global bootstrap — don't repurpose it, write
-  `seedAccountsForCompany(db, companyId)` or similar and call it from
-  `createCompanyAction` after `createCompany`).
-- Opening balances via the documented `opening` journal (docs/DAY-ONE.md §4)
-  — check that doc still describes the single-company shape and update if not.
-- Tally/CSV import must land in the ACTIVE company (`requireBook()`) — pin
-  with an explicit test. This touches `src/lib/import-csv.ts` /
-  `import-tally.ts` and the `/api/import/*` routes — check whether those are
-  already on the 28-file ratchet baseline (import-tally isn't listed; the two
-  `/api/import/*` route files ARE).
-- **This is also where the big porting work naturally starts.** Every file P4
-  touches that's on the ratchet baseline (`src/lib/actions.ts`,
-  `src/app/api/import/excel/route.ts`, `src/app/api/import/tally/preview/route.ts`,
-  `src/app/imports/page.tsx`) should be ported to the Book handle AS you touch
-  it, and struck off `BASELINE` in test/tenancy-ratchet.test.ts (the "baseline
-  does not go stale" test enforces this). Check the ratchet count after EVERY
-  phase, not just at P6 (explicit invariant).
+## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
 **P5 — backups**
 - `npm run backup` stays whole-DB. ADD a per-company export. `verifyBackup`
@@ -177,6 +181,13 @@ dal,companies(new)}.ts · src/lib/actions.ts · src/app/companies/page.tsx (new)
 · src/app/layout.tsx · src/components/{topbar,sidebar,company-switcher(new)}.tsx
 · test/{helpers,migrations,auth,tenancy-ratchet,companies(new)}.test.ts ·
 EVOLUTION.md · HANDOFF.md
+
+## Files touched this session (RVOS-004 P4)
+src/lib/{db,dal,actions,import-csv,import-tally}.ts ·
+src/app/api/import/{excel,tally/preview}/route.ts · src/app/{companies,imports}/page.tsx
+· docs/DAY-ONE.md · scripts/smoke.ts (schema-drift fix, see EVOLUTION #27) ·
+test/{route-guards,tenancy-ratchet}.test.ts · test/import-isolation.test.ts (new)
+· EVOLUTION.md · HANDOFF.md
 
 ---
 

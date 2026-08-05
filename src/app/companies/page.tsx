@@ -139,8 +139,9 @@ export default async function CompaniesPage() {
           </div>
         </form>
         <p className="mt-3 text-[11.5px] text-ink-3">
-          A new company starts with no chart of accounts and no opening
-          balances — set those up from the switcher once it is active.
+          A new company gets its own chart of accounts automatically. It
+          starts with no opening balances — switch to it and post those
+          first (Vouchers → Journal), before anything else.
         </p>
       </div>
 

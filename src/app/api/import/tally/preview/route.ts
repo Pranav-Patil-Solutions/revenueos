@@ -2,27 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getDb, UPLOADS_DIR } from "@/lib/db";
+import { UPLOADS_DIR } from "@/lib/db";
 import {
   parseDayBook,
   suggestTarget,
   unmappedLedgers,
   type LedgerMapping,
 } from "@/lib/import-tally";
-import { requireApiSession } from "@/lib/dal";
+import { requireApiBook } from "@/lib/dal";
 
 // Day books run larger than the CSV template — a full year of vouchers.
 const MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Step 1 of the Tally import: parse the Day Book, park the file, and report
- * which ledgers still need a target. Nothing is written to the books here —
- * the staged rows are created in step 2 (createTallyImport) once the user has
- * mapped the ledgers.
+ * which ledgers still need a target — read against the ACTIVE company's own
+ * mappings/parties/accounts (RVOS-004 P4), never another client's. Nothing is
+ * written to the books here — the staged rows are created in step 2
+ * (createTallyImport) once the user has mapped the ledgers.
  */
 export async function POST(req: NextRequest) {
-  const gate = await requireApiSession();
+  const gate = await requireApiBook();
   if (gate instanceof Response) return gate;
+  const { book } = gate;
   let form: FormData;
   try {
     form = await req.formData();
@@ -65,16 +67,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const db = getDb();
-  const mappings = db
-    .prepare("SELECT * FROM ledger_mappings")
-    .all() as LedgerMapping[];
-  const parties = db
-    .prepare("SELECT id, name FROM parties")
-    .all() as { id: number; name: string }[];
-  const accounts = db
-    .prepare("SELECT id, name FROM accounts")
-    .all() as { id: number; name: string }[];
+  const mappings = book.all<LedgerMapping>(
+    "SELECT * FROM ledger_mappings WHERE company_id = @company_id"
+  );
+  const parties = book.all<{ id: number; name: string }>(
+    "SELECT id, name FROM parties WHERE company_id = @company_id"
+  );
+  const accounts = book.all<{ id: number; name: string }>(
+    "SELECT id, name FROM accounts WHERE company_id = @company_id"
+  );
 
   const unmapped = unmappedLedgers(vouchers, mappings).map((ledger_name) => ({
     ledger_name,
@@ -82,9 +83,10 @@ export async function POST(req: NextRequest) {
   }));
 
   const sha256 = createHash("sha256").update(buf).digest("hex");
-  const duplicate = db
-    .prepare("SELECT id FROM documents WHERE image_sha256 = ? ORDER BY id LIMIT 1")
-    .get(sha256) as { id: number } | undefined;
+  const duplicate = book.get<{ id: number }>(
+    "SELECT id FROM documents WHERE image_sha256 = @sha AND company_id = @company_id ORDER BY id LIMIT 1",
+    { sha: sha256 }
+  );
 
   // Parked under a UUID name; createTallyImport re-reads it by token so the
   // XML is parsed once more against the freshly saved mappings.

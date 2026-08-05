@@ -752,3 +752,43 @@ a test. A ratchet built to over-trigger should be treated that way at review
 time — the fix is an explicit, reasoned exemption, not silence or a rewrite
 of prose that was correct.
 
+
+## 27. RVOS-004 P4 (2026-08-06): a smoke-test script drifted from a schema migration and nobody noticed until it ran
+
+**What happened:** P1's migration rebuilt `ledger_mappings` with a
+company-scoped uniqueness constraint (`UNIQUE(company_id, ledger_name)`,
+replacing plain `UNIQUE(ledger_name)`). `scripts/smoke.ts` has its own
+hand-rolled `INSERT INTO ledger_mappings ... ON CONFLICT(ledger_name) ...`
+for the Tally-import step, written before P1 and never updated. It didn't
+fail at P1, P2, or P3 time because nothing re-ran that exact code path in a
+way that exercised the ON CONFLICT clause against the new schema until this
+phase — it surfaced as `SQLITE_CONSTRAINT_CHECK`-adjacent
+("ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint")
+the first time `npm run smoke` was run end-to-end after P4's changes landed.
+The static tenancy-ratchet guard (`test/tenancy-ratchet.test.ts`) could not
+have caught this either way: it only walks `src/lib/`, not `scripts/`, and
+this wasn't a missing-`company_id` bug — the SQL text had gone stale, not
+unscoped.
+
+**Resolution:** Updated `scripts/smoke.ts`'s insert to
+`INSERT INTO ledger_mappings (company_id, ...)` with `ON CONFLICT(company_id,
+ledger_name)`, matching the live schema, and scoped its paired `SELECT` the
+same way. Also added `test/import-isolation.test.ts` (the explicit pinning
+test the P4 spec calls for): two companies, deliberately distinguishable
+data, both import paths (`stageExcelImport`, `finalizeTallyImport`) run
+against one company's `Book`, asserting the other company's `documents`,
+`staged_rows`, and `ledger_mappings` never move — including that a Book
+cannot read a sibling company's row even by exact id/name.
+
+**Delta (rule):** a schema migration's blast radius includes every raw SQL
+string in the repo that touches the changed table, not just the files a
+static analysis tool is scoped to walk. `scripts/` (smoke, backup, migrate,
+restore) sit outside `src/lib/`'s guard rails by construction — they're
+allowed direct `db.prepare` access because they legitimately need it — which
+means they are also invisible to any tool built to catch scoping drift there.
+Corollary: "the ship gate ran green last phase" is not evidence a script is
+still correct this phase if the schema underneath it changed; a smoke script
+is only proof of currentness the moment it's run, and phases that alter
+schema should grep for every raw reference to the changed table/column
+(`grep -rn "table_name" --include=*.ts`, not just `src/lib/`) as a matter of
+course, not rely on a scoped static guard to surface it.

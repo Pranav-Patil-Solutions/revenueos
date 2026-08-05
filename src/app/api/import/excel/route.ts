@@ -2,18 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getDb, UPLOADS_DIR } from "@/lib/db";
-import { parseImportCsv, type ImportParty } from "@/lib/import-csv";
-import { requireApiSession } from "@/lib/dal";
+import { UPLOADS_DIR } from "@/lib/db";
+import { parseImportCsv, stageExcelImport, type ImportParty } from "@/lib/import-csv";
+import { requireApiBook } from "@/lib/dal";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
 /** CSV template upload → document (source_type 'excel', status 'extracted')
  * + staged rows in ONE transaction, landing in the same review flow as a
- * photo extraction. */
+ * photo extraction — in the ACTIVE company only (RVOS-004 P4). */
 export async function POST(req: NextRequest) {
-  const gate = await requireApiSession();
+  const gate = await requireApiBook();
   if (gate instanceof Response) return gate;
+  const { book } = gate;
   let form: FormData;
   try {
     form = await req.formData();
@@ -36,8 +37,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const db = getDb();
-  const party = db.prepare("SELECT id FROM parties WHERE id = ?").get(partyId);
+  const party = book.get(
+    "SELECT id FROM parties WHERE id = @id AND company_id = @company_id",
+    { id: partyId }
+  );
   if (!party) {
     return NextResponse.json({ error: "Party not found." }, { status: 404 });
   }
@@ -70,9 +73,9 @@ export async function POST(req: NextRequest) {
   // header cell reads as "\uFEFFdate".
   const text = buf.toString("utf8").replace(/^\uFEFF/, "");
 
-  const parties = db
-    .prepare("SELECT id, name FROM parties")
-    .all() as ImportParty[];
+  const parties = book.all<ImportParty>(
+    "SELECT id, name FROM parties WHERE company_id = @company_id"
+  );
   let parsed: ReturnType<typeof parseImportCsv>;
   try {
     parsed = parseImportCsv(text, parties);
@@ -84,50 +87,22 @@ export async function POST(req: NextRequest) {
   }
 
   const sha256 = createHash("sha256").update(buf).digest("hex");
-  const duplicate = db
-    .prepare("SELECT id FROM documents WHERE image_sha256 = ? ORDER BY id LIMIT 1")
-    .get(sha256) as { id: number } | undefined;
+  const duplicate = book.get<{ id: number }>(
+    "SELECT id FROM documents WHERE image_sha256 = @sha AND company_id = @company_id ORDER BY id LIMIT 1",
+    { sha: sha256 }
+  );
 
   const filename = `${randomUUID()}.csv`;
   await writeFile(path.join(UPLOADS_DIR, filename), buf);
 
   const now = new Date().toISOString();
-  const insertRow = db.prepare(
-    `INSERT INTO staged_rows
-       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
-     VALUES (@document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
-  );
-  const tx = db.transaction((): number => {
-    const docId = db
-      .prepare(
-        `INSERT INTO documents
-           (party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
-         VALUES (?, ?, ?, 'extracted', 'excel', 'csv-template', ?, ?)`
-      )
-      .run(partyId, path.join("data", "uploads", filename), sha256, now, now)
-      .lastInsertRowid as number;
-    for (const r of parsed.rows) {
-      insertRow.run({
-        document_id: docId,
-        row_no: r.row_no,
-        entry_date: r.entry_date,
-        particulars: r.particulars,
-        ref_no: r.ref_no,
-        debit_paise: r.debit_paise,
-        credit_paise: r.credit_paise,
-        entry_type: r.entry_type,
-        gst_rate: r.gst_rate,
-        settle_account: r.settle_account,
-        confidence: r.confidence,
-        include: r.include ? 1 : 0,
-        party_id: r.party_id,
-      });
-    }
-    return docId;
+  const docId = stageExcelImport(book, {
+    partyId,
+    rows: parsed.rows,
+    imagePath: path.join("data", "uploads", filename),
+    sha256,
+    now,
   });
-  const docId = tx();
 
   return NextResponse.json({
     id: Number(docId),

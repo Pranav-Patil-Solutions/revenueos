@@ -9,8 +9,8 @@ import { setSessionCompany } from "./auth";
 import { groupFor } from "./coa";
 import { archiveCompany, createCompany, renameCompany } from "./companies";
 import { generateItems } from "./compliance";
-import { requireSession } from "./dal";
-import { getDb, UPLOADS_DIR } from "./db";
+import { requireBook, requireSession } from "./dal";
+import { getDb, seedAccountsForCompany, UPLOADS_DIR } from "./db";
 import { readSessionToken } from "./session";
 import { extractDocument } from "./extraction";
 import { rupeeStringToPaise, todayIso } from "./format";
@@ -21,10 +21,9 @@ import {
   postedDepreciation,
 } from "./tax/depreciation";
 import {
+  finalizeTallyImport,
   parseDayBook,
-  tallyVouchersToRows,
   type LedgerMapping,
-  type MappedAccount,
 } from "./import-tally";
 import { applyDraftRows, postDocument } from "./posting";
 import { GST_RATES } from "./tax/india-gst";
@@ -218,24 +217,37 @@ export async function switchCompany(formData: FormData): Promise<void> {
   redirect("/");
 }
 
+/** Onboarding a new client (RVOS-004 P4): create the company row, then seed
+ * its own chart of accounts immediately — a company with zero accounts can't
+ * post anything, so leaving this to a later manual step just means the first
+ * voucher fails with a confusing error. Opening balances are still a
+ * separate, deliberate step (docs/DAY-ONE.md §4): the app cannot guess a
+ * client's numbers. */
 export async function createCompanyAction(formData: FormData): Promise<void> {
   await requireSession();
   const entityType = String(formData.get("entity_type") ?? "proprietorship");
   if (!COMPANY_ENTITY_TYPES.includes(entityType as EntityType)) {
     throw new Error("Unknown entity type.");
   }
-  createCompany(
-    getDb(),
-    {
-      name: String(formData.get("name") ?? ""),
-      entityType: entityType as EntityType,
-      pan: String(formData.get("pan") ?? ""),
-      tan: String(formData.get("tan") ?? ""),
-      gstin: String(formData.get("gstin") ?? ""),
-      stateCode: String(formData.get("state_code") ?? ""),
-    },
-    new Date().toISOString()
-  );
+  const db = getDb();
+  // One transaction: a company row committed with no chart of accounts is
+  // exactly the postable-empty state this feature exists to prevent (caught
+  // in code review) — if seeding throws, the create must roll back with it.
+  db.transaction((): void => {
+    const id = createCompany(
+      db,
+      {
+        name: String(formData.get("name") ?? ""),
+        entityType: entityType as EntityType,
+        pan: String(formData.get("pan") ?? ""),
+        tan: String(formData.get("tan") ?? ""),
+        gstin: String(formData.get("gstin") ?? ""),
+        stateCode: String(formData.get("state_code") ?? ""),
+      },
+      new Date().toISOString()
+    );
+    seedAccountsForCompany(db, id);
+  })();
   revalidatePath("/companies");
   redirect("/companies");
 }
@@ -435,9 +447,11 @@ export async function createVoucherParty(
 /** Step 2 of the Tally import: persist the ledger mappings the user just
  * chose, re-read the parked Day Book against them, and stage every voucher —
  * mappings, document and rows in ONE transaction, so a failure anywhere
- * leaves neither half-saved mappings nor an orphan document. */
+ * leaves neither half-saved mappings nor an orphan document. Everything reads
+ * and writes through the ACTIVE company's Book (RVOS-004 P4) — an import
+ * lands in the session's chosen client, never a hardcoded or guessed one. */
 export async function createTallyImport(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const token = String(formData.get("token") ?? "");
   // The token names a file we wrote; anything but the UUID we minted (and so
   // any traversal attempt) is refused before it reaches the filesystem.
@@ -449,15 +463,22 @@ export async function createTallyImport(formData: FormData): Promise<void> {
     throw new Error("Pick a default party for vouchers without one.");
   }
 
-  const db = getDb();
-  if (!db.prepare("SELECT id FROM parties WHERE id = ?").get(partyId)) {
+  if (
+    !book.get("SELECT id FROM parties WHERE id = @id AND company_id = @company_id", {
+      id: partyId,
+    })
+  ) {
     throw new Error("Party not found.");
   }
   const partyIds = new Set(
-    (db.prepare("SELECT id FROM parties").all() as { id: number }[]).map((p) => p.id)
+    book
+      .all<{ id: number }>("SELECT id FROM parties WHERE company_id = @company_id")
+      .map((p) => p.id)
   );
   const accountIds = new Set(
-    (db.prepare("SELECT id FROM accounts").all() as { id: number }[]).map((a) => a.id)
+    book
+      .all<{ id: number }>("SELECT id FROM accounts WHERE company_id = @company_id")
+      .map((a) => a.id)
   );
 
   // "map:<ledger name>" → "party:<id>" | "account:<id>".
@@ -491,66 +512,22 @@ export async function createTallyImport(formData: FormData): Promise<void> {
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const now = new Date().toISOString();
 
-  const upsertMapping = db.prepare(
-    `INSERT INTO ledger_mappings (ledger_name, target_kind, account_id, party_id, created_at)
-     VALUES (@ledger_name, @target_kind, @account_id, @party_id, @created_at)
-     ON CONFLICT(ledger_name) DO UPDATE SET
-       target_kind = excluded.target_kind,
-       account_id  = excluded.account_id,
-       party_id    = excluded.party_id`
-  );
-  const insertRow = db.prepare(
-    `INSERT INTO staged_rows
-       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
-     VALUES (@document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
-  );
+  // `settings` is still the GLOBAL singleton (RVOS-004 P6's known gap — see
+  // HANDOFF.md's "settings singleton" note): every company reads company 1's
+  // tax_inclusive flag until that lands. Not this phase's fix.
+  const settings = book.db
+    .prepare("SELECT tax_inclusive FROM settings WHERE id = 1")
+    .get() as { tax_inclusive: number };
 
-  const docId = db.transaction((): number => {
-    for (const m of chosen) upsertMapping.run({ ...m, created_at: now });
-    // Re-read AFTER the upsert so previously-saved mappings and the ones just
-    // chosen are both in play.
-    const mappings = db
-      .prepare("SELECT * FROM ledger_mappings")
-      .all() as LedgerMapping[];
-    const accounts = db
-      .prepare("SELECT id, code, type FROM accounts")
-      .all() as MappedAccount[];
-    const settings = db
-      .prepare("SELECT tax_inclusive FROM settings WHERE id = 1")
-      .get() as { tax_inclusive: number };
-    const parsed = tallyVouchersToRows(vouchers, mappings, accounts, {
-      taxInclusive: settings.tax_inclusive === 1,
-    });
-
-    const id = db
-      .prepare(
-        `INSERT INTO documents
-           (party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
-         VALUES (?, ?, ?, 'extracted', 'tally', 'tally-daybook', ?, ?)`
-      )
-      .run(partyId, path.join("data", "uploads", token), sha256, now, now)
-      .lastInsertRowid as number;
-    for (const r of parsed.rows) {
-      insertRow.run({
-        document_id: id,
-        row_no: r.row_no,
-        entry_date: r.entry_date,
-        particulars: r.particulars,
-        ref_no: r.ref_no,
-        debit_paise: r.debit_paise,
-        credit_paise: r.credit_paise,
-        entry_type: r.entry_type,
-        gst_rate: r.gst_rate,
-        settle_account: r.settle_account,
-        confidence: r.confidence,
-        include: r.include ? 1 : 0,
-        party_id: r.party_id,
-      });
-    }
-    return id;
-  })();
+  const docId = finalizeTallyImport(book, {
+    partyId,
+    mappings: chosen,
+    vouchers,
+    taxInclusive: settings.tax_inclusive === 1,
+    imagePath: path.join("data", "uploads", token),
+    sha256,
+    now,
+  });
 
   revalidatePath("/documents");
   revalidatePath("/imports");

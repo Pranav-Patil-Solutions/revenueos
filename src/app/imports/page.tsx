@@ -1,22 +1,20 @@
 import Link from "next/link";
-import { getDb } from "@/lib/db";
 import { ImportExcel } from "@/components/import-excel";
 import { ImportTally } from "@/components/import-tally";
 import type { PartyRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
 export default async function ImportsPage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const db = getDb();
-  const parties = db
-    .prepare("SELECT * FROM parties ORDER BY name")
-    .all() as PartyRow[];
-  const accounts = db
-    .prepare("SELECT id, code, name FROM accounts ORDER BY code")
-    .all() as { id: number; code: string; name: string }[];
+  const parties = book.all<PartyRow>(
+    "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name"
+  );
+  const accounts = book.all<{ id: number; code: string; name: string }>(
+    "SELECT id, code, name FROM accounts WHERE company_id = @company_id ORDER BY code"
+  );
 
   return (
     <div>

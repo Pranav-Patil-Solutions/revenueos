@@ -342,6 +342,31 @@ export function seedCoreData(db: Database.Database): void {
   tx();
 }
 
+/**
+ * Chart of accounts for ONE newly onboarded client — RVOS-004 P4.
+ *
+ * Deliberately NOT `seedCoreData`: that function is company-1-specific global
+ * bootstrap that runs on every boot and implicitly defaults `company_id` to 1
+ * (see the DDL's `DEFAULT 1`). Repurposing it for an arbitrary company would
+ * either silently keep landing accounts on company 1 or require threading a
+ * company id through a function every other caller expects to be
+ * boot-time/global. `accounts.code`'s UNIQUE is `(company_id, code)` since
+ * migration 001, so this is safe to call once per new company — and
+ * `INSERT OR IGNORE` keeps it idempotent if it is ever called twice.
+ */
+export function seedAccountsForCompany(db: Database.Database, companyId: number): void {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO accounts (company_id, code, name, type, group_code)
+     VALUES (@company_id, @code, @name, @type, @group_code)`
+  );
+  const tx = db.transaction(() => {
+    for (const a of SEED_ACCOUNTS) {
+      insert.run({ company_id: companyId, ...a });
+    }
+  });
+  tx();
+}
+
 /** Demo parties so DEMO_MODE works on a fresh db without any setup. */
 export function seedDemoParties(db: Database.Database): void {
   const count = db.prepare("SELECT COUNT(*) AS n FROM parties").get() as {
