@@ -792,3 +792,42 @@ is only proof of currentness the moment it's run, and phases that alter
 schema should grep for every raw reference to the changed table/column
 (`grep -rn "table_name" --include=*.ts`, not just `src/lib/`) as a matter of
 course, not rely on a scoped static guard to surface it.
+
+## 28. RVOS-004 P5 (2026-08-06): the spec's own text was stale about a phase that already shipped
+
+**What happened:** `RVOS-004-SPEC.md`'s P5 bullet says "the CA pack, exports
+and every report already run per company via P2" — written when the spec was
+drafted, before P1–P4 actually shipped and settled on a narrower per-phase
+scope than originally planned. `grep -c company_id src/lib/reports.ts`
+returns 0: `reports.ts`, the CA pack (`src/app/pack/page.tsx`), and
+`/api/export/[report]/route.ts` are entirely unscoped, still reading
+`getDb()` directly with no company filter anywhere. This HANDOFF's own P6
+section had already correctly flagged this gap after P3 — the SPEC document,
+not the HANDOFF, is what was stale. Had the SPEC bullet been trusted at face
+value while building P5's per-company export, the natural move would have
+been to layer the new export on top of the CA pack / reports functions,
+silently inheriting their missing company filter and shipping a "per-company
+export" that actually always returned company 1's data regardless of which
+company was asked for — the exact leakage class P4 and P5 both exist to rule
+out, reintroduced by trusting a planning document instead of the code.
+
+**Resolution:** Verified the claim by grep before building on it, found it
+false, and built `exportCompany` (backup.ts) as a raw-data export that reads
+`SCOPED_TABLES` directly by `company_id`, independent of `reports.ts`/
+`pack/page.tsx`/the export route. It does not depend on their porting state
+at all, so it is correct today AND remains correct once P6 ports those files
+— nothing to revisit. The actual porting of `reports.ts`/`pack/page.tsx`/
+`/api/export/[report]` stays exactly P6's job, exactly as HANDOFF.md already
+said.
+
+**Delta (rule):** A spec/ticket document is a snapshot of intent at the
+moment it was written; the phases it describes can (and, here, did) land
+with different scope than assumed by a LATER bullet in the same document.
+"X already happened" inside a spec is a claim about the codebase, not a fact
+about it — verify it the same way you'd verify any other claim about code
+you didn't just write (grep, read the function, run the test), especially
+before using it as a foundation for new work. A living HANDOFF that gets
+corrected phase-by-phase is a more current source of truth than the static
+spec it was generated from; when the two disagree, that disagreement is
+itself a signal worth surfacing (as here) rather than silently trusting
+whichever one was read first.

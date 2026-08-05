@@ -66,13 +66,50 @@ incrementally as those phases touch each area (see NEXT).
    `createTallyImport`'s `tax_inclusive` read is left on it deliberately, with
    a comment, not silently "fixed" out of this phase's scope.
 
-## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
+5. `<hash>` — **RVOS-004 P5**: per-company backups. `exportCompany`
+   (backup.ts, new) writes ONE company's own data into a fresh, standalone
+   SQLite db at the current schema (`initSchema` + full migration chain, not
+   a copy of the live file) — that company's own `companies` row plus every
+   row it owns across `SCOPED_TABLES`, with ids preserved as-is (no FK
+   remapping needed: a company's own rows only ever reference its own rows).
+   Deliberately excluded: `auth_users`/`auth_sessions` (staff creds belong to
+   the installation, never a client handoff) and `settings` (still the P6
+   global-singleton gap — attaching it would misattribute one arbitrary
+   company's settings to whichever company got exported). `verifyBackup`
+   gained an opt-in `{ companyId }` mode: asserts `companies` holds EXACTLY
+   that one row, and every `SCOPED_TABLES` table has zero rows with a
+   different `company_id` — the direct mirror of P4's "worst failure" theme,
+   now on the export side. New CLI: `npm run export:company -- <id>` (or
+   `--list`). `npm run backup` is UNCHANGED (still whole-office, on purpose).
+   Only referenced ledger photos for that company are copied (best-effort:
+   `uploads_copied`/`uploads_expected` surfaces a gap instead of hiding it or
+   failing the whole export over one missing file). 373 tests pass (was 368),
+   lint/smoke/build all green.
+   **Verified, not rebuilt:** grepped `reports.ts` for `company_id` — zero
+   hits. `RVOS-004-SPEC.md`'s P5 bullet claims "the CA pack, exports and
+   every report already run per company via P2," which is NOT true yet (this
+   HANDOFF's own P6 section already knew that — the SPEC document is what's
+   stale). Per the instruction to "assert, don't rebuild if true," and since
+   it wasn't true, the per-company export was built as a raw-data export
+   independent of `reports.ts`/`pack/page.tsx`/`/api/export/[report]` rather
+   than layered on top of a porting job that hasn't happened — those three
+   are still exactly P6's job, unchanged. See EVOLUTION #28.
+   **Code-reviewed: 1 blocker, fixed.** Insertion followed `SCOPED_TABLES`
+   order, but `tds_entries.challan_id REFERENCES tds_challans(id)` and
+   `tds_entries` sits BEFORE `tds_challans` in that list — any company that
+   had ever deposited a TDS challan (routine, not an edge case) threw
+   `FOREIGN KEY constraint failed`, verified by reproduction. Fixed with
+   `dest.pragma("defer_foreign_keys = ON")` around the destination
+   transaction, so insertion order no longer has to match FK dependency
+   order (more robust than reordering `SCOPED_TABLES`, which other tables
+   could just as easily violate later). Also fixed a WARN: the per-table
+   reads off `sourceDb` weren't wrapped in one transaction, so a concurrent
+   write mid-export could produce a torn snapshot despite the CLI's "safe to
+   run while serving" claim — now wrapped in `sourceDb.transaction(...)` for
+   a single consistent read. New regression test pins the challan case.
+   374 tests pass (was 373 pre-fix, 368 before this phase's own additions).
 
-**P5 — backups**
-- `npm run backup` stays whole-DB. ADD a per-company export. `verifyBackup`
-  gains a per-company row-count assertion. Confirm the CA pack + reports
-  already run per-company via P2/P4/P6's porting (assert, don't rebuild if
-  true).
+## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
 **P6 — isolation suite, THE RVOS-004 ship gate**
 - By this point the ratchet needs to be at or near 0/28 — P6's whole job is
@@ -188,6 +225,11 @@ src/app/api/import/{excel,tally/preview}/route.ts · src/app/{companies,imports}
 · docs/DAY-ONE.md · scripts/smoke.ts (schema-drift fix, see EVOLUTION #27) ·
 test/{route-guards,tenancy-ratchet}.test.ts · test/import-isolation.test.ts (new)
 · EVOLUTION.md · HANDOFF.md
+
+## Files touched this session (RVOS-004 P5)
+src/lib/backup.ts (exportCompany + verifyBackup's companyId mode) ·
+scripts/export-company.ts (new) · package.json (export:company script) ·
+test/backup.test.ts · EVOLUTION.md · HANDOFF.md
 
 ---
 
