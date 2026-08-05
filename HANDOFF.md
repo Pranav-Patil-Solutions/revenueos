@@ -39,7 +39,7 @@ tenancy ratchet baseline (still 0/28 ported) or the ~14 files reading the
 legacy `settings` singleton — that porting work is P4/P5/P6's job, done
 incrementally as those phases touch each area (see NEXT).
 
-4. `<hash>` — **RVOS-004 P4**: client onboarding. `seedAccountsForCompany`
+4. `b47fd28` — **RVOS-004 P4**: client onboarding. `seedAccountsForCompany`
    (db.ts, new — deliberately NOT a repurposed `seedCoreData`, see its
    docstring) called from `createCompanyAction` right after `createCompany`,
    so a new company gets its chart of accounts immediately instead of
