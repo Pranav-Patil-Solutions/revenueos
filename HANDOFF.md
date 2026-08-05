@@ -66,7 +66,7 @@ incrementally as those phases touch each area (see NEXT).
    `createTallyImport`'s `tax_inclusive` read is left on it deliberately, with
    a comment, not silently "fixed" out of this phase's scope.
 
-5. `<hash>` — **RVOS-004 P5**: per-company backups. `exportCompany`
+5. `1c2c511` — **RVOS-004 P5**: per-company backups. `exportCompany`
    (backup.ts, new) writes ONE company's own data into a fresh, standalone
    SQLite db at the current schema (`initSchema` + full migration chain, not
    a copy of the live file) — that company's own `companies` row plus every
