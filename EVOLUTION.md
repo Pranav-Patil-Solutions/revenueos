@@ -874,3 +874,26 @@ path that would trigger the mutation — before committing it anywhere near a
 branch that could get booted against production-shaped data. "It's already
 done" and "it's already safe" are different claims; the first being true
 does not imply the second.
+
+## 30. RVOS-004 P6 (2026-08-06): generalized a GOTCHA to a script it didn't apply to, without reading the script
+
+**What happened:** The P6 HANDOFF entry (this same session, one commit
+earlier) wrote "`npm run smoke` — blocked on GOTCHAS' live-server/real-db
+conflict, needs an isolated `data/` dir first," extrapolated from an
+existing GOTCHA about `next dev`/browser-drives sharing a cwd with the real
+db. `scripts/smoke.ts` was never actually read before writing that. Reading
+it before running it showed the script already `mkdtempSync`s a fresh OS
+tmpdir and `chdir`s into it before ever importing `db.ts` — it was already
+immune to the exact problem the note warned about, and makes no HTTP calls
+either, so the :3322 dev server was never a factor. Running it directly
+confirmed: green, and `data/revenueos.db` untouched (verified by mtime +
+schema check same as #29).
+
+**Delta (rule):** A caution inherited from a sibling concern (here: the
+`next dev`/qa-runner cwd hazard) does not automatically transfer to a
+different command just because both involve "the same db path" in the
+abstract — each script's actual isolation mechanism has to be read, not
+assumed from a nearby note. Writing caution into a HANDOFF is itself a claim
+about the codebase (see #29's rule) and needs the same verification before
+being asserted as fact — including, and maybe especially, cautions that feel
+obviously prudent to carry over from one script to a neighboring one.

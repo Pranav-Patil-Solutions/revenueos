@@ -139,26 +139,40 @@ incrementally as those phases touch each area (see NEXT).
    plus the real-db check above) before trusting and committing it. See
    EVOLUTION #29.
 
-**P6's ratchet + settings-singleton gate is green.** Not yet done from this
-phase: `npm run smoke` (blocked on GOTCHAS' live-server/real-db conflict —
-needs an isolated `data/` dir first), migration 003 rehearsed on a COPY of
+**P6's ratchet + settings-singleton gate is green. `npm run smoke` is now
+green too** (`DEMO_MODE=1 npx tsx scripts/smoke.ts`, run directly from the
+repo root — see correction below, it needed no special isolation).
+`data/revenueos.db` confirmed untouched after the run (same file mtimes,
+`settings` table still present, no `companies` table — still pre-004
+schema). Still open from this phase: migration 003 rehearsed on a COPY of
 `data/revenueos.db` with a verified restore, and the qa-runner 2-live-company
 isolation drive called for by P6's own ship-gate spec below. RVOS-005 rebase,
 its own ship gate, the LICENSE merge, and final handover are all still open.
 
+**Correction to this HANDOFF's own earlier note:** `scripts/smoke.ts`
+already self-isolates — it `mkdtempSync`s a fresh OS tmpdir and `chdir`s
+into it BEFORE ever importing `db.ts` (see the script's own top-of-file
+comment), so `getDb()`'s `process.cwd()`-anchored path resolves inside the
+tmpdir no matter where the script is invoked from. It never touches
+`data/revenueos.db` and makes no HTTP calls, so it doesn't conflict with the
+live :3322 dev server either. The "use a separate worktree with its own
+`data/` dir" caution in GOTCHAS is real but applies to the qa-runner
+browser-drive and any manual script that does NOT do this chdir dance
+first — not to `npm run smoke`. Don't re-block on this again.
+
 ## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
 **P6 remainder — THE RVOS-004 ship gate is not closed yet**
-The port (ratchet 28→0) and the settings-singleton fix both landed (`8b0267f`,
-see DONE #6) — what's still open is the *proof*, not the code:
+The port (ratchet 28→0), the settings-singleton fix, and smoke have all
+landed/passed (`8b0267f`, see DONE #6) — what's still open is the rest of
+the proof:
 - Seed 2 companies, deliberately distinguishable data; enumerate isolation
   assertions FROM THE EXPORTS (`/api/export/[report]/route.ts` lists every
   report kind) — don't hand-write the list.
-- Full ship gate: `npm run smoke` green (needs an isolated `data/` dir first
-  — do not run it cwd'd against the live-server's real db, see GOTCHAS) ·
-  code-reviewer full-branch diff (0 blockers, explicit tenancy-leakage pass)
-  · qa-runner drives :3322 with 2 LIVE companies, in an isolated copy per
-  GOTCHAS · migration 003 rehearsed on a COPY of the real office db
+- Full ship gate: code-reviewer full-branch diff (0 blockers, explicit
+  tenancy-leakage pass) · qa-runner drives :3322 with 2 LIVE companies, in
+  an isolated copy per GOTCHAS · migration 003 rehearsed on a COPY of the
+  real office db
   (`data/revenueos.db`), snapshot restore verified, BEFORE it's ever run for
   real · EVOLUTION updated.
 
