@@ -831,3 +831,46 @@ corrected phase-by-phase is a more current source of truth than the static
 spec it was generated from; when the two disagree, that disagreement is
 itself a signal worth surfacing (as here) rather than silently trusting
 whichever one was read first.
+
+## 29. RVOS-004 P6 (2026-08-06): resuming into someone else's uncommitted work, with a live migration in it
+
+**What happened:** A new session resumed on `feat/rvos-004-multi-client` and
+found 52 modified files in the working tree — no commit, no HANDOFF entry,
+no EVOLUTION entry. The diff was, in substance, all of P6: the tenancy
+ratchet ported from 28 files to 0, and the ~14-file `settings`-singleton gap
+closed via a real schema migration (003, `DROP TABLE settings`) that
+`migrate()` runs automatically on every boot. Nothing recorded whether this
+work had been verified, and — separately — there is a live `next dev`
+process on :3322 running against the real `data/revenueos.db` (documented in
+this same HANDOFF's GOTCHAS as Pranav's own session). An automatic
+`DROP TABLE` landing uncommitted, undocumented, next to a live process
+pointed at production-shaped data is exactly the shape of thing that gets
+trusted and either lost (if reverted without checking) or run for real
+before it was rehearsed (if committed and later booted against that file
+without the P6 ship gate's own stated precondition — a rehearsed migration
+on a copy, with a verified restore — having happened).
+
+**Resolution:** Before doing anything else, verified independently rather
+than trusting the diff's existence as proof it was already good:
+`tsc --noEmit`, `npm test` (374/374), `eslint`, `npm run build` — all clean.
+Then, specifically because of the DROP-TABLE migration, checked whether it
+had already run against the real db — via a read-only `sqlite3` CLI query
+(`SELECT name FROM sqlite_master ...`, `.tables`), deliberately NOT through
+the app's own `getDb()`/`migrate()` path, since going through the app is
+exactly the thing that would trigger the migration if it hadn't run yet.
+Confirmed the real db still has `settings` and has no `companies` table at
+all — it's untouched, still on the pre-RVOS-004 schema. Only then committed
+(`8b0267f`) and updated HANDOFF/EVOLUTION to make the migration's
+not-yet-rehearsed status explicit and loud, not just inferred from GOTCHAS.
+
+**Delta (rule):** Finding a large uncommitted diff at the start of a session
+is not evidence it's safe or correct — it's an unlabeled claim, same as a
+stale spec bullet (see #28) or an unrun smoke test (see #27). Verify it the
+same way: run the actual gates (types/tests/lint/build), and when the diff
+includes anything that mutates state on its own on next run (a migration, a
+destructive script, an auto-applied schema change), check what it would do
+against the REAL target — read-only, and specifically NOT through the code
+path that would trigger the mutation — before committing it anywhere near a
+branch that could get booted against production-shaped data. "It's already
+done" and "it's already safe" are different claims; the first being true
+does not imply the second.
