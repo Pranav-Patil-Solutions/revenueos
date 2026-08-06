@@ -5,27 +5,13 @@ import path from "node:path";
 import { SCOPED_TABLES } from "../src/lib/book";
 
 /**
- * Tenancy ratchet — RVOS-004 P2.
+ * Tenancy scoping — RVOS-004 P2/P6.
  *
- * `company_id` now exists on every book-bearing table, but almost nothing used
- * it at first: P2 started this baseline at 28 files calling `db.prepare`
- * directly on scoped tables (reading across every client). Porting them is
- * ongoing fan-out work, continued incrementally by whichever later phase
- * touches each area (P4 struck off the three import-route files below).
- *
- * Until that finishes there is a window where a NEW query could be written the
- * old way and nobody would notice — and the eventual "no raw prepare" test
- * cannot be switched on yet because it would fail 28 times over. So this is a
- * ratchet: the offending set may only ever SHRINK.
- *
- * Three assertions, each earning its place:
- *   - no file outside the baseline may start doing this (catches new code)
- *   - the count may not grow (catches a port that quietly regresses)
- *   - the baseline may not go stale (a ported file must be struck off, so the
- *     list keeps telling the truth about how much work is left)
- *
- * When BASELINE reaches zero, delete this file and replace it with a flat
- * assertion that the offending set is empty.
+ * P2 started a ratchet at 28 files calling `db.prepare` directly on a
+ * company-scoped table (reading across every client's books). P6 finished
+ * porting all of them onto the Book handle (`src/lib/book.ts`), which binds
+ * `company_id` and refuses a query that never mentions it — so this is now a
+ * flat assertion that the offending set stays empty, not a shrinking list.
  */
 
 /** Files that legitimately reach past the Book handle. Each needs a reason. */
@@ -45,38 +31,6 @@ const EXEMPT = new Set([
   // accounts" in English prose, not because it queries the accounts table.
   "src/lib/companies.ts",
 ]);
-
-/**
- * Files still querying scoped tables directly. STRIKE ENTRIES OFF as they are
- * ported to the Book handle — never add to this list.
- */
-const BASELINE: string[] = [
-  "src/app/api/upload/route.ts",
-  "src/app/api/uploads/[id]/route.ts",
-  "src/app/capture/page.tsx",
-  "src/app/documents/[id]/page.tsx",
-  "src/app/documents/page.tsx",
-  "src/app/pack/page.tsx",
-  "src/app/page.tsx",
-  "src/app/parties/page.tsx",
-  "src/app/reports/gst/page.tsx",
-  "src/app/settings/accounts/page.tsx",
-  "src/app/settings/page.tsx",
-  "src/app/tax/computation/page.tsx",
-  "src/app/tax/depreciation/page.tsx",
-  "src/app/tax/tds/page.tsx",
-  "src/app/vouchers/page.tsx",
-  "src/lib/actions.ts",
-  "src/lib/compliance.ts",
-  "src/lib/extraction.ts",
-  "src/lib/fy.ts",
-  "src/lib/posting.ts",
-  "src/lib/reports.ts",
-  "src/lib/tax/computation.ts",
-  "src/lib/tax/depreciation.ts",
-  "src/lib/tax/tds.ts",
-  "src/lib/vouchers.ts",
-];
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -99,41 +53,12 @@ function offenders(): string[] {
   return out.sort();
 }
 
-test("no NEW file queries a scoped table without the Book handle", () => {
-  const current = offenders();
-  const added = current.filter((f) => !BASELINE.includes(f));
+test("no file queries a scoped table without the Book handle", () => {
+  const found = offenders();
   assert.deepEqual(
-    added,
+    found,
     [],
-    `these files query company-scoped tables directly and are not in the baseline: ${added.join(", ")}. ` +
+    `these files query company-scoped tables directly: ${found.join(", ")}. ` +
       `Use the Book handle (src/lib/book.ts) — it binds company_id and refuses a query that omits it.`
   );
-});
-
-test("the number of unported files never grows", () => {
-  const current = offenders();
-  assert.ok(
-    current.length <= BASELINE.length,
-    `unported files went from ${BASELINE.length} to ${current.length} — tenancy scoping is going backwards`
-  );
-});
-
-test("the baseline does not go stale — ported files must be struck off", () => {
-  // Otherwise the list stops telling the truth about how much work is left,
-  // and the ratchet silently loosens.
-  const current = offenders();
-  const fixedButStillListed = BASELINE.filter((f) => !current.includes(f));
-  assert.deepEqual(
-    fixedButStillListed,
-    [],
-    `these no longer query scoped tables directly and should be removed from BASELINE: ${fixedButStillListed.join(", ")}`
-  );
-});
-
-test("progress is visible", () => {
-  // Not a pass/fail so much as a number that shows up in every test run, so
-  // "how far through P2 are we" never needs someone to go and count.
-  const remaining = offenders().length;
-  assert.ok(remaining >= 0);
-  console.log(`    tenancy: ${BASELINE.length - remaining}/${BASELINE.length} files ported to the Book handle`);
 });

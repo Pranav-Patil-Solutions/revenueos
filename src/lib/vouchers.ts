@@ -1,8 +1,10 @@
-import type Database from "better-sqlite3";
+import type { Book } from "./book";
+import { getCompany } from "./companies";
 import { assertBalanced, buildLegs, type Leg } from "./posting";
 import { roundHalfUp } from "./tax/india-gst";
 import { computeTds, type TdsComputation } from "./tax/tds";
 import type {
+  CompanyRow,
   JournalKind,
   PartyRow,
   SettingsRow,
@@ -76,13 +78,10 @@ const SETTLE: Record<SettleAccount, string> = { cash: "1000", bank: "1100" };
 
 /** Soft books lock: entries on or before settings.books_locked_through are
  * refused (fix-forward still applies after the lock date). */
-export function assertNotLocked(
-  db: Database.Database,
-  entryDate: string
-): void {
-  const s = db
-    .prepare("SELECT books_locked_through FROM settings WHERE id = 1")
-    .get() as Pick<SettingsRow, "books_locked_through"> | undefined;
+export function assertNotLocked(book: Book, entryDate: string): void {
+  const s = getCompany(book.db, book.companyId) as
+    | Pick<SettingsRow, "books_locked_through">
+    | undefined;
   const locked = s?.books_locked_through ?? "";
   if (locked !== "" && entryDate <= locked) {
     throw new Error(
@@ -105,7 +104,7 @@ function assertAmount(paise: number): void {
 }
 
 /** Legs for one voucher input. Exported for tests — pure given db lookups. */
-function legsFor(db: Database.Database, input: VoucherInput): Leg[] {
+function legsFor(book: Book, input: VoucherInput): Leg[] {
   switch (input.kind) {
     case "contra": {
       assertAmount(input.amount_paise);
@@ -132,9 +131,11 @@ function legsFor(db: Database.Database, input: VoucherInput): Leg[] {
         throw new Error("A journal needs at least two legs.");
       }
       const codes = new Set(
-        (db.prepare("SELECT code FROM accounts").all() as { code: string }[]).map(
-          (a) => a.code
-        )
+        (
+          book.all(
+            "SELECT code FROM accounts WHERE company_id = @company_id"
+          ) as { code: string }[]
+        ).map((a) => a.code)
       );
       return input.legs.map((l, i) => {
         const label = `leg ${i + 1}`;
@@ -162,9 +163,10 @@ function legsFor(db: Database.Database, input: VoucherInput): Leg[] {
     }
     default: {
       assertAmount(input.amount_paise);
-      const party = db
-        .prepare("SELECT * FROM parties WHERE id = ?")
-        .get(input.party_id) as PartyRow | undefined;
+      const party = book.get(
+        "SELECT * FROM parties WHERE id = @partyId AND company_id = @company_id",
+        { partyId: input.party_id }
+      ) as PartyRow | undefined;
       if (!party) throw new Error("Voucher party not found.");
       // AR kinds need a customer, AP kinds a supplier — the form filters its
       // options, but the server must hold on a direct call too.
@@ -180,9 +182,7 @@ function legsFor(db: Database.Database, input: VoucherInput): Leg[] {
             `"${party.name}" is a ${party.kind}.`
         );
       }
-      const settings = db
-        .prepare("SELECT * FROM settings WHERE id = 1")
-        .get() as SettingsRow;
+      const settings = getCompany(book.db, book.companyId) as CompanyRow;
       const row: Pick<
         StagedRow,
         | "row_no"
@@ -209,45 +209,52 @@ function legsFor(db: Database.Database, input: VoucherInput): Leg[] {
  * assertBalanced, journal + lines insert. Any throw rolls back everything.
  */
 export function postManualVoucher(
-  db: Database.Database,
+  book: Book,
   input: VoucherInput
 ): { journalId: number } {
-  const tx = db.transaction((): number => {
+  return book.tx((b): { journalId: number } => {
     assertDate(input.entry_date);
-    assertNotLocked(db, input.entry_date);
-    const legs = legsFor(db, input);
+    assertNotLocked(b, input.entry_date);
+    const legs = legsFor(b, input);
     assertBalanced(legs);
 
-    const accounts = db
-      .prepare("SELECT id, code FROM accounts")
-      .all() as { id: number; code: string }[];
+    const accounts = b.all(
+      "SELECT id, code FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
 
-    const journalId = db
-      .prepare(
-        `INSERT INTO journals (entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-         VALUES (?, ?, ?, ?, NULL, NULL, ?)`
-      )
-      .run(
-        input.entry_date,
-        input.kind === "journal" ? input.entry_type ?? input.kind : input.kind,
-        input.memo,
-        input.ref_no,
-        new Date().toISOString()
-      ).lastInsertRowid as number;
+    const journalId = b.run(
+      `INSERT INTO journals
+         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
+       VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, NULL, NULL, @now)`,
+      {
+        entry_date: input.entry_date,
+        entry_type: input.kind === "journal" ? input.entry_type ?? input.kind : input.kind,
+        memo: input.memo,
+        ref_no: input.ref_no,
+        now: new Date().toISOString(),
+      }
+    ).lastInsertRowid as number;
 
-    const insertLine = db.prepare(
-      `INSERT INTO journal_lines (journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
     legs.forEach((l, i) => {
       const acc = accountId.get(l.accountCode);
       if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
-      insertLine.run(journalId, i + 1, acc, l.partyId, l.debitPaise, l.creditPaise);
+      b.run(
+        `INSERT INTO journal_lines
+           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
+         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+        {
+          journalId,
+          lineNo: i + 1,
+          accountId: acc,
+          partyId: l.partyId,
+          debitPaise: l.debitPaise,
+          creditPaise: l.creditPaise,
+        }
+      );
     });
-    return journalId;
+    return { journalId };
   });
-  return { journalId: tx() };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,19 +291,20 @@ export interface TdsVoucherInput {
  * to a payee on a return.
  */
 export function postVoucherWithTds(
-  db: Database.Database,
+  book: Book,
   input: TdsVoucherInput
 ): { journalId: number; tdsEntryId: number; computation: TdsComputation } {
-  const tx = db.transaction(() => {
+  return book.tx((b) => {
     assertDate(input.entry_date);
-    assertNotLocked(db, input.entry_date);
+    assertNotLocked(b, input.entry_date);
     if (!Number.isInteger(input.base_paise) || input.base_paise <= 0) {
       throw new Error("The bill amount must be a positive amount in paise.");
     }
 
-    const party = db
-      .prepare("SELECT * FROM parties WHERE id = ?")
-      .get(input.party_id) as PartyRow | undefined;
+    const party = b.get(
+      "SELECT * FROM parties WHERE id = @partyId AND company_id = @company_id",
+      { partyId: input.party_id }
+    ) as PartyRow | undefined;
     if (!party) throw new Error("Payee not found.");
 
     const computation = computeTds(
@@ -355,48 +363,53 @@ export function postVoucherWithTds(
     }
     assertBalanced(legs);
 
-    const accounts = db
-      .prepare("SELECT id, code FROM accounts")
-      .all() as { id: number; code: string }[];
+    const accounts = b.all(
+      "SELECT id, code FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
     const now = new Date().toISOString();
 
-    const journalId = db
-      .prepare(
-        `INSERT INTO journals (entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-         VALUES (?, 'tds_deduction', ?, ?, NULL, NULL, ?)`
-      )
-      .run(input.entry_date, input.memo, input.ref_no, now)
-      .lastInsertRowid as number;
+    const journalId = b.run(
+      `INSERT INTO journals
+         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
+       VALUES (@company_id, @entry_date, 'tds_deduction', @memo, @ref_no, NULL, NULL, @now)`,
+      { entry_date: input.entry_date, memo: input.memo, ref_no: input.ref_no, now }
+    ).lastInsertRowid as number;
 
-    const insertLine = db.prepare(
-      `INSERT INTO journal_lines (journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
     legs.forEach((l, i) => {
       const acc = accountId.get(l.accountCode);
       if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
-      insertLine.run(journalId, i + 1, acc, l.partyId, l.debitPaise, l.creditPaise);
+      b.run(
+        `INSERT INTO journal_lines
+           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
+         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+        {
+          journalId,
+          lineNo: i + 1,
+          accountId: acc,
+          partyId: l.partyId,
+          debitPaise: l.debitPaise,
+          creditPaise: l.creditPaise,
+        }
+      );
     });
 
-    const tdsEntryId = db
-      .prepare(
-        `INSERT INTO tds_entries
-           (party_id, section, entry_date, base_paise, tds_paise, rate_bp, journal_id, challan_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`
-      )
-      .run(
-        input.party_id,
-        computation.section,
-        input.entry_date,
-        input.base_paise,
+    const tdsEntryId = b.run(
+      `INSERT INTO tds_entries
+         (company_id, party_id, section, entry_date, base_paise, tds_paise, rate_bp, journal_id, challan_id, created_at)
+       VALUES (@company_id, @partyId, @section, @entry_date, @basePaise, @tdsPaise, @rateBp, @journalId, NULL, @now)`,
+      {
+        partyId: input.party_id,
+        section: computation.section,
+        entry_date: input.entry_date,
+        basePaise: input.base_paise,
         tdsPaise,
         rateBp,
         journalId,
-        now
-      ).lastInsertRowid as number;
+        now,
+      }
+    ).lastInsertRowid as number;
 
     return { journalId, tdsEntryId: Number(tdsEntryId), computation };
   });
-  return tx();
 }

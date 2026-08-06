@@ -79,6 +79,46 @@ export function renameCompany(db: Database.Database, id: number, name: string): 
   if (info.changes === 0) throw new Error("No such active company.");
 }
 
+export interface CompanySettingsInput {
+  companyName: string;
+  gstin: string;
+  stateCode: string;
+  country: string;
+  currency: string;
+  rate: number;
+  taxInclusive: 0 | 1;
+  entityType: EntityType;
+  pan: string;
+  tan: string;
+  itRegime: string;
+  presumptive: string;
+  lockedThrough: string;
+  fyAuditCase: 0 | 1;
+}
+
+/** The office/tax-identity fields, per company (RVOS-004 P6 settings-singleton
+ * fix) — the RVOS-003-era "settings" singleton is gone; every company owns
+ * its own row on `companies`. */
+export function updateCompanySettings(
+  db: Database.Database,
+  id: number,
+  input: CompanySettingsInput
+): void {
+  const info = db
+    .prepare(
+      `UPDATE companies SET
+         name = @companyName, company_name = @companyName, gstin = @gstin,
+         state_code = @stateCode, country = @country, currency = @currency,
+         default_gst_rate = @rate, tax_inclusive = @taxInclusive,
+         entity_type = @entityType, pan = @pan, tan = @tan, it_regime = @itRegime,
+         presumptive = @presumptive, books_locked_through = @lockedThrough,
+         fy_audit_case = @fyAuditCase
+       WHERE id = @id AND archived_at IS NULL`
+    )
+    .run({ ...input, id });
+  if (info.changes === 0) throw new Error("No such active company.");
+}
+
 export function archiveCompany(db: Database.Database, id: number, now: string): void {
   const info = db
     .prepare(`UPDATE companies SET archived_at = @now WHERE id = @id AND archived_at IS NULL`)

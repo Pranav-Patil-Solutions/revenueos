@@ -206,4 +206,22 @@ const sessionCompany: Migration = {
   },
 };
 
-export const MIGRATIONS: Migration[] = [companies, sessionCompany];
+/**
+ * 003 — drop the retired `settings` singleton.
+ *
+ * RVOS-004 P6 finished porting every reader/writer onto `companies` (see
+ * `getCompany`/`updateCompanySettings` in companies.ts). Migration 001 kept
+ * `settings` around only so the app kept working mid-branch between commits;
+ * that reason is gone now. Dropping it turns "a query still points at the
+ * frozen company-1 table" from a silent staleness bug into a loud SQL error
+ * on the next boot, which is the failure mode this app always prefers.
+ */
+const dropSettings: Migration = {
+  version: 3,
+  name: "settings: drop the retired singleton",
+  up: (db: Database.Database) => {
+    db.exec(`DROP TABLE IF EXISTS settings;`);
+  },
+};
+
+export const MIGRATIONS: Migration[] = [companies, sessionCompany, dropSettings];

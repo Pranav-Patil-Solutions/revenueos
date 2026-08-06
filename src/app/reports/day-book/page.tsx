@@ -1,8 +1,7 @@
-import { getDb } from "@/lib/db";
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { formatDate, inr, monthLabel } from "@/lib/format";
 import { dayBook } from "@/lib/reports";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -11,11 +10,11 @@ export default async function DayBookPage({
 }: {
   searchParams: Promise<{ month?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
   const month = /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month : undefined;
-  const entries = dayBook(getDb(), month);
+  const entries = dayBook(book, month);
 
   return (
     <div>

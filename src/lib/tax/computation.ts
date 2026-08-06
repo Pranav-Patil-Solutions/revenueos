@@ -1,4 +1,5 @@
-import type Database from "better-sqlite3";
+import type { Book } from "../book";
+import { getCompany } from "../companies";
 import { fyEnd, fyStart } from "../fy";
 import { profitAndLoss } from "../reports";
 import { depreciationSchedule } from "./depreciation";
@@ -14,11 +15,7 @@ import {
   type TaxResult,
   type RateGroup,
 } from "./india-it";
-import type {
-  ItAdjustmentRow,
-  SettingsRow,
-  TaxPaymentRow,
-} from "../types";
+import type { ItAdjustmentRow, TaxPaymentRow } from "../types";
 
 /**
  * Book profit → taxable income → tax payable, for one financial year.
@@ -84,35 +81,35 @@ export interface Computation {
 
 /** Debits booked to the depreciation expense account within the FY — what the
  * books charged, which tax law replaces with its own figure. */
-function bookDepreciation(db: Database.Database, fy: string): number {
-  const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(jl.debit_paise) - SUM(jl.credit_paise), 0) AS d
-       FROM journal_lines jl
-       JOIN journals j ON j.id = jl.journal_id
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE a.code = '5800' AND j.entry_date BETWEEN ? AND ?`
-    )
-    .get(fyStart(fy), fyEnd(fy)) as { d: number };
+function bookDepreciation(book: Book, fy: string): number {
+  const row = book.get(
+    `SELECT COALESCE(SUM(jl.debit_paise) - SUM(jl.credit_paise), 0) AS d
+     FROM journal_lines jl
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id
+       AND a.code = '5800' AND j.entry_date BETWEEN @from AND @to`,
+    { from: fyStart(fy), to: fyEnd(fy) }
+  ) as { d: number };
   return row.d;
 }
 
-export function buildComputation(
-  db: Database.Database,
-  fy: string
-): Computation {
-  const settings = db
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
+export function buildComputation(book: Book, fy: string): Computation {
+  // The active company always exists and is usable by the time a Book is
+  // constructed (requireBook/requireApiBook already asserted it) — see
+  // src/lib/dal.ts.
+  const settings = getCompany(book.db, book.companyId)!;
   const { rates, provisional, provisional_note } = ratesFor(fy);
 
-  const pnl = profitAndLoss(db, { from: fyStart(fy), to: fyEnd(fy) });
-  const adjustments = db
-    .prepare("SELECT * FROM it_adjustments WHERE fy = ? ORDER BY id")
-    .all(fy) as ItAdjustmentRow[];
-  const payments = db
-    .prepare("SELECT * FROM tax_payments WHERE fy = ? ORDER BY paid_on, id")
-    .all(fy) as TaxPaymentRow[];
+  const pnl = profitAndLoss(book, { from: fyStart(fy), to: fyEnd(fy) });
+  const adjustments = book.all(
+    "SELECT * FROM it_adjustments WHERE company_id = @company_id AND fy = @fy ORDER BY id",
+    { fy }
+  ) as ItAdjustmentRow[];
+  const payments = book.all(
+    "SELECT * FROM tax_payments WHERE company_id = @company_id AND fy = @fy ORDER BY paid_on, id",
+    { fy }
+  ) as TaxPaymentRow[];
 
   const addbacks = adjustments
     .filter((a) => a.kind === "addback")
@@ -121,8 +118,8 @@ export function buildComputation(
     .filter((a) => a.kind === "deduction")
     .reduce((s, a) => s + a.amount_paise, 0);
 
-  const bookDep = bookDepreciation(db, fy);
-  const itDep = depreciationSchedule(db, fy).total_depreciation_paise;
+  const bookDep = bookDepreciation(book, fy);
+  const itDep = depreciationSchedule(book, fy).total_depreciation_paise;
   const turnover = pnl.total_income_paise;
 
   const lines: ComputationLine[] = [];

@@ -1,27 +1,25 @@
 import Link from "next/link";
-import { getDb } from "@/lib/db";
 import { StatTile } from "@/components/stat-tile";
 import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp, inr, monthLabel, thisMonth } from "@/lib/format";
 import { dashboardStats } from "@/lib/reports";
 import type { DocumentWithParty } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const db = getDb();
   const month = thisMonth();
-  const stats = dashboardStats(db, month);
-  const recent = db
-    .prepare(
-      `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
-       FROM documents d JOIN parties p ON p.id = d.party_id
-       ORDER BY d.id DESC LIMIT 8`
-    )
-    .all() as DocumentWithParty[];
+  const stats = dashboardStats(book, month);
+  const recent = book.all<DocumentWithParty>(
+    `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
+     FROM documents d
+     JOIN parties p ON p.id = d.party_id AND p.company_id = @company_id
+     WHERE d.company_id = @company_id
+     ORDER BY d.id DESC LIMIT 8`
+  );
 
   return (
     <div>

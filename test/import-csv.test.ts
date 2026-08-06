@@ -1,7 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import { rupeeStringToPaise } from "../src/lib/format";
 import {
   parseCsv,
@@ -197,6 +200,7 @@ function importDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
   db.prepare(
     `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
      VALUES ('Sharma Traders', 'customer', '', '27', '', '2026-07-01T00:00:00Z'),
@@ -261,7 +265,7 @@ test("end-to-end: parse → stage (frozen CHECK holds) → post → TB zero, bot
     settle_account: r.settle_account,
     include: r.include === 1,
   }));
-  const { journals } = postDocument(db, 1, drafts);
+  const { journals } = postDocument(book(db, 1), 1, drafts);
   assert.equal(journals, 2);
 
   const sum = db

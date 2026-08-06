@@ -1,11 +1,10 @@
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { FySelect } from "@/components/fy-select";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { fyEnd, fyLabel, fyList } from "@/lib/fy";
 import { balanceSheet, type BalanceSheetGroup } from "@/lib/reports";
-import type { SettingsRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -39,11 +38,10 @@ export default async function BalanceSheetPage({
 }: {
   searchParams: Promise<{ fy?: string; as_of?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const fys = fyList(db);
+  const fys = fyList(book);
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : undefined;
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(sp.as_of ?? "")
     ? sp.as_of!
@@ -51,10 +49,8 @@ export default async function BalanceSheetPage({
       ? fyEnd(fy)
       : todayIso();
 
-  const settings = db
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
-  const bs = balanceSheet(db, asOf, settings);
+  const settings = getCompany(book.db, book.companyId)!;
+  const bs = balanceSheet(book, asOf, settings);
   const assets = bs.groups.filter((g) => g.section === "assets");
   const liabilities = bs.groups.filter(
     (g) => g.section === "equity" || g.section === "liabilities"

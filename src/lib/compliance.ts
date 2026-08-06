@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Book } from "./book";
 import { fyEnd, fyLabel, fyStart, fyStartYear, monthsOfFy } from "./fy";
 import { monthLabel } from "./format";
 import type { ComplianceMarkRow, EntityType, SettingsRow } from "./types";
@@ -375,7 +375,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
  * them owe deposits and returns even before settings catch up.
  */
 export function generateItems(
-  db: Database.Database,
+  book: Book,
   fy: string,
   settings: SettingsRow,
   today: string
@@ -383,9 +383,11 @@ export function generateItems(
   if (!ISO_DATE.test(today)) throw new Error(`Bad today "${today}"`);
   const hasTds =
     (
-      db
-        .prepare("SELECT COUNT(*) AS n FROM tds_entries WHERE entry_date BETWEEN ? AND ?")
-        .get(fyStart(fy), fyEnd(fy)) as { n: number }
+      book.get(
+        `SELECT COUNT(*) AS n FROM tds_entries
+         WHERE company_id = @company_id AND entry_date BETWEEN @from AND @to`,
+        { from: fyStart(fy), to: fyEnd(fy) }
+      ) as { n: number }
     ).n > 0;
   const unmarked = [
     ...dueItems(fy, {
@@ -405,16 +407,16 @@ export function generateItems(
   );
 
   const marks = new Map<string, ComplianceMarkRow>();
-  for (const m of db
-    .prepare("SELECT * FROM compliance_marks")
-    .all() as ComplianceMarkRow[]) {
-    marks.set(`${m.rule_code} ${m.period}`, m);
+  for (const m of book.all(
+    "SELECT * FROM compliance_marks WHERE company_id = @company_id"
+  ) as ComplianceMarkRow[]) {
+    marks.set(`${m.rule_code} ${m.period}`, m);
   }
 
   const ruleOrder = new Map(RULES.map((r, i) => [r.code, i]));
   return unmarked
     .map((item): ComplianceItem => {
-      const mark = marks.get(`${item.rule_code} ${item.period}`);
+      const mark = marks.get(`${item.rule_code} ${item.period}`);
       return {
         ...item,
         status: mark ? mark.status : item.due_date < today ? "overdue" : "pending",

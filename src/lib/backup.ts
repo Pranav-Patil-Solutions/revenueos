@@ -185,10 +185,10 @@ export async function createBackup(
  *
  * Deliberately NOT copied: `auth_users` / `auth_sessions` (firm staff
  * credentials belong to this office's installation, never to a client
- * handoff) and `settings` (still the pre-P6 GLOBAL singleton — see
- * HANDOFF.md's gotcha — copying it would attach one arbitrary company's
- * settings to a DIFFERENT company's exported book, which is worse than
- * omitting it).
+ * handoff). The company's own profile/tax-identity fields ARE copied — they
+ * now live on its own `companies` row (RVOS-004 P6 retired the old GLOBAL
+ * `settings` singleton), so exporting that one row is exactly right, not a
+ * cross-company leak.
  */
 export async function exportCompany(
   sourceDb: Database.Database,
@@ -332,7 +332,7 @@ export function verifyBackup(
     const verdict = check[0]?.integrity_check;
     if (verdict !== "ok") return `integrity_check said "${verdict}"`;
 
-    for (const table of ["journals", "journal_lines", "accounts", "settings"]) {
+    for (const table of ["journals", "journal_lines", "accounts", "companies"]) {
       db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
     }
     const lines = db.prepare("SELECT COUNT(*) AS n FROM journal_lines").get() as {

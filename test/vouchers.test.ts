@@ -1,10 +1,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import type Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { buildLegs } from "../src/lib/posting";
 import { postDocument } from "../src/lib/posting";
 import { balanceSheet, trialBalance } from "../src/lib/reports";
-import type { PartyRow, SettingsRow } from "../src/lib/types";
+import { getCompany } from "../src/lib/companies";
+import type { PartyRow } from "../src/lib/types";
 import { postManualVoucher } from "../src/lib/vouchers";
 import { draftRows, postedDb, stagedDb } from "./helpers";
 
@@ -29,7 +31,8 @@ function legsOf(db: Database.Database, journalId: number) {
 
 test("structured sale voucher posts exactly buildLegs' output", () => {
   const db = postedDb();
-  const { journalId } = postManualVoucher(db, {
+  const b = book(db, 1);
+  const { journalId } = postManualVoucher(b, {
     kind: "sale",
     entry_date: "2026-07-20",
     memo: "Manual sale",
@@ -41,7 +44,7 @@ test("structured sale voucher posts exactly buildLegs' output", () => {
   });
 
   const party = db.prepare("SELECT * FROM parties WHERE id = 1").get() as PartyRow;
-  const settings = db.prepare("SELECT * FROM settings WHERE id = 1").get() as SettingsRow;
+  const settings = getCompany(db, 1)!;
   const expected = buildLegs(
     {
       row_no: 0,
@@ -73,9 +76,10 @@ test("structured sale voucher posts exactly buildLegs' output", () => {
 
 test("structured voucher rejects a party of the wrong kind", () => {
   const db = postedDb(); // party 1 is a customer
+  const b = book(db, 1);
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "purchase",
         entry_date: "2026-07-20",
         memo: "",
@@ -91,7 +95,8 @@ test("structured voucher rejects a party of the wrong kind", () => {
 
 test("contra moves cash → bank with exact paise", () => {
   const db = postedDb();
-  const { journalId } = postManualVoucher(db, {
+  const b = book(db, 1);
+  const { journalId } = postManualVoucher(b, {
     kind: "contra",
     entry_date: "2026-07-20",
     memo: "Cash deposited",
@@ -106,7 +111,7 @@ test("contra moves cash → bank with exact paise", () => {
   ]);
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "contra",
         entry_date: "2026-07-20",
         memo: "",
@@ -121,9 +126,10 @@ test("contra moves cash → bank with exact paise", () => {
 
 test("free-form journal: explicit legs post; unbalanced is rejected atomically", () => {
   const db = postedDb();
+  const b = book(db, 1);
   const before = journalCount(db);
 
-  const { journalId } = postManualVoucher(db, {
+  const { journalId } = postManualVoucher(b, {
     kind: "journal",
     entry_date: "2026-07-21",
     memo: "Rent",
@@ -141,7 +147,7 @@ test("free-form journal: explicit legs post; unbalanced is rejected atomically",
 
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "journal",
         entry_date: "2026-07-21",
         memo: "bad",
@@ -155,7 +161,7 @@ test("free-form journal: explicit legs post; unbalanced is rejected atomically",
   );
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "journal",
         entry_date: "2026-07-21",
         memo: "two-sided leg",
@@ -169,7 +175,7 @@ test("free-form journal: explicit legs post; unbalanced is rejected atomically",
   );
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "journal",
         entry_date: "2026-07-21",
         memo: "bad code",
@@ -186,11 +192,12 @@ test("free-form journal: explicit legs post; unbalanced is rejected atomically",
 
 test("books lock rejects back-dated vouchers and document posting", () => {
   const db = postedDb();
-  db.prepare("UPDATE settings SET books_locked_through = '2026-07-31' WHERE id = 1").run();
+  const b = book(db, 1);
+  db.prepare("UPDATE companies SET books_locked_through = '2026-07-31' WHERE id = 1").run();
 
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "journal",
         entry_date: "2026-07-15",
         memo: "back-dated",
@@ -205,7 +212,7 @@ test("books lock rejects back-dated vouchers and document posting", () => {
   // On the lock date itself: still locked (lock is inclusive).
   assert.throws(
     () =>
-      postManualVoucher(db, {
+      postManualVoucher(b, {
         kind: "contra",
         entry_date: "2026-07-31",
         memo: "",
@@ -217,7 +224,7 @@ test("books lock rejects back-dated vouchers and document posting", () => {
     /locked/
   );
   // First open day posts fine.
-  postManualVoucher(db, {
+  postManualVoucher(b, {
     kind: "contra",
     entry_date: "2026-08-01",
     memo: "",
@@ -229,15 +236,17 @@ test("books lock rejects back-dated vouchers and document posting", () => {
 
   // The document path hits the same guard (fixture rows are July-dated).
   const staged = stagedDb();
+  const bStaged = book(staged, 1);
   staged
-    .prepare("UPDATE settings SET books_locked_through = '2026-07-31' WHERE id = 1")
+    .prepare("UPDATE companies SET books_locked_through = '2026-07-31' WHERE id = 1")
     .run();
-  assert.throws(() => postDocument(staged, 1, draftRows(staged, [10])), /locked/);
+  assert.throws(() => postDocument(bStaged, 1, draftRows(staged, [10])), /locked/);
 });
 
 test("mixed manual batch keeps TB at zero and the BS balanced", () => {
   const db = postedDb();
-  postManualVoucher(db, {
+  const b = book(db, 1);
+  postManualVoucher(b, {
     kind: "sale",
     entry_date: "2026-08-03",
     memo: "s",
@@ -247,7 +256,7 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     gst_rate: 18,
     settle_account: "cash",
   });
-  postManualVoucher(db, {
+  postManualVoucher(b, {
     kind: "receipt",
     entry_date: "2026-08-04",
     memo: "r",
@@ -257,7 +266,7 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     gst_rate: null,
     settle_account: "bank",
   });
-  postManualVoucher(db, {
+  postManualVoucher(b, {
     kind: "contra",
     entry_date: "2026-08-05",
     memo: "c",
@@ -266,7 +275,7 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     to: "cash",
     amount_paise: 25_000,
   });
-  postManualVoucher(db, {
+  postManualVoucher(b, {
     kind: "journal",
     entry_date: "2026-08-06",
     memo: "j",
@@ -277,9 +286,9 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     ],
   });
 
-  const tb = trialBalance(db);
+  const tb = trialBalance(b);
   assert.equal(tb.balanced, true);
-  const settings = db.prepare("SELECT * FROM settings WHERE id = 1").get() as SettingsRow;
-  const bs = balanceSheet(db, "2027-03-31", settings);
+  const settings = getCompany(db, 1)!;
+  const bs = balanceSheet(b, "2027-03-31", settings);
   assert.equal(bs.balanced, true);
 });

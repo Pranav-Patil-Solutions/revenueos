@@ -33,6 +33,7 @@ function bookAt(file: string): Database.Database {
   const db = new Database(file);
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: T0 });
   const acc = (code: string) =>
     (db.prepare("SELECT id FROM accounts WHERE code = ?").get(code) as { id: number }).id;
 

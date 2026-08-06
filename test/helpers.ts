@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { initSchema, seedCoreData } from "../src/lib/db";
 import { migrate } from "../src/lib/migrate";
 import { MIGRATIONS } from "../src/lib/migrations";
@@ -65,6 +66,6 @@ export function draftRows(
 /** Books with the demo fixture fully posted (row 10 excluded at review). */
 export function postedDb(): Database.Database {
   const db = stagedDb();
-  postDocument(db, 1, draftRows(db, [10]));
+  postDocument(book(db, 1), 1, draftRows(db, [10]));
   return db;
 }

@@ -9,12 +9,13 @@ import {
   profitAndLoss,
   trialBalance,
 } from "../src/lib/reports";
+import { book } from "../src/lib/book";
 import { postedDb } from "./helpers";
 
 const MONTH = "2026-07";
 
 test("trial balance: balanced, with the expected account balances", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const tb = trialBalance(db);
   assert.equal(tb.balanced, true);
   assert.equal(tb.total_debit_paise, tb.total_credit_paise);
@@ -33,7 +34,7 @@ test("trial balance: balanced, with the expected account balances", () => {
 });
 
 test("P&L for the month: income ₹16,000.00, purchases ₹5,000.00", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const pnl = profitAndLoss(db, MONTH);
   assert.equal(pnl.total_income_paise, 1_600_000);
   assert.equal(pnl.total_expense_paise, 500_000);
@@ -45,7 +46,7 @@ test("P&L for the month: income ₹16,000.00, purchases ₹5,000.00", () => {
 });
 
 test("GSTR-3B: the exact filing-prep figures", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const g = gstr3b(db, MONTH);
   assert.equal(g.outward_taxable_paise, 1_600_000); // ₹16,000.00
   assert.equal(g.cgst_paise, 129_000); // ₹1,290.00
@@ -56,13 +57,13 @@ test("GSTR-3B: the exact filing-prep figures", () => {
 });
 
 test("GSTR-3B: an empty month is all zeros", () => {
-  const g = gstr3b(postedDb(), "2026-08");
+  const g = gstr3b(book(postedDb(), 1), "2026-08");
   assert.equal(g.outward_taxable_paise, 0);
   assert.equal(g.net_payable_paise, 0);
 });
 
 test("GSTR-1 B2B: 3 invoices + 1 credit note, tax splits per document", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const rows = gstr1B2B(db, MONTH);
   assert.equal(rows.length, 4);
   assert.equal(rows.filter((r) => r.doc_type === "Invoice").length, 3);
@@ -88,7 +89,7 @@ test("GSTR-1 B2B: 3 invoices + 1 credit note, tax splits per document", () => {
 });
 
 test("party statement: 7 AR movements, closing ₹12,580.00, running balance", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const s = partyStatement(db, 1);
   assert.ok(s);
   assert.equal(s.lines.length, 7); // opening, 3 sales, 2 receipts, 1 credit note
@@ -104,7 +105,7 @@ test("party statement: 7 AR movements, closing ₹12,580.00, running balance", (
 });
 
 test("party statement asOf slices BOTH ledgers, inclusively", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const early = partyStatement(db, 1, "2026-07-05")!;
   assert.equal(early.lines.length, 3); // opening, sale #241, the 5 Jul receipt
   assert.equal(early.closing_paise, 980_000); // 5,000 + 11,800 − 7,000
@@ -123,7 +124,7 @@ test("party statement asOf slices BOTH ledgers, inclusively", () => {
 });
 
 test("day book: 9 journals in date order, each internally balanced", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const entries = dayBook(db, MONTH);
   assert.equal(entries.length, 9);
   const dates = entries.map((e) => e.entry_date);
@@ -137,7 +138,7 @@ test("day book: 9 journals in date order, each internally balanced", () => {
 });
 
 test("dashboard stats", () => {
-  const db = postedDb();
+  const db = book(postedDb(), 1);
   const s = dashboardStats(db, MONTH);
   assert.equal(s.receivables_paise, 1_258_000);
   assert.equal(s.gst_payable_paise, 168_000);

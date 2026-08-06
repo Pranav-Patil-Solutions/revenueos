@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import type Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { buildComputation } from "../src/lib/tax/computation";
 import { postManualVoucher } from "../src/lib/vouchers";
 import { postedDb } from "./helpers";
@@ -30,7 +31,7 @@ function addAdjustment(
 
 test("book path: with nothing to adjust, total income is the book profit", () => {
   const db = postedDb();
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   assert.equal(c.book_profit_paise, BOOK_PROFIT);
   assert.equal(c.book_depreciation_paise, 0);
   assert.equal(c.it_depreciation_paise, 0);
@@ -45,7 +46,7 @@ test("the depreciation bridge: book charge comes back out, the Act's goes in", (
   const db = postedDb();
   addAsset(db, R(100_000)); // computers, full year → 40% = ₹40,000
   // The books charged a different figure — the two must not be conflated.
-  postManualVoucher(db, {
+  postManualVoucher(book(db, 1), {
     kind: "journal",
     entry_type: "depreciation",
     entry_date: "2027-03-31",
@@ -57,7 +58,7 @@ test("the depreciation bridge: book charge comes back out, the Act's goes in", (
     ],
   });
 
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   assert.equal(c.book_depreciation_paise, R(30_000));
   assert.equal(c.it_depreciation_paise, R(40_000));
   // Book profit is already net of the ₹30,000 charge.
@@ -77,7 +78,7 @@ test("adjustments move total income in the direction they claim", () => {
   const db = postedDb();
   addAdjustment(db, "addback", R(50_000));
   addAdjustment(db, "deduction", R(20_000));
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   assert.equal(c.addbacks_paise, R(50_000));
   assert.equal(c.deductions_paise, R(20_000));
   assert.equal(
@@ -90,9 +91,9 @@ test("a presumptive scheme replaces the book path entirely", () => {
   const db = postedDb();
   addAsset(db, R(100_000)); // would otherwise deduct ₹40,000
   addAdjustment(db, "addback", R(50_000)); // and this would otherwise add
-  db.prepare("UPDATE settings SET presumptive = '44AD' WHERE id = 1").run();
+  db.prepare("UPDATE companies SET presumptive = '44AD' WHERE id = 1").run();
 
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   // Turnover is ₹16,000 of sales in the demo books; 8% of it, no digital split.
   assert.equal(c.turnover_paise, R(16_000));
   assert.equal(c.gross_total_income_paise, R(1_280));
@@ -106,7 +107,7 @@ test("taxes paid net off the liability, and an overpayment reads as a refund", (
   const db = postedDb();
   // Push income into a taxable band so there is something to net against.
   addAdjustment(db, "addback", R(15_00_000));
-  const before = buildComputation(db, FY);
+  const before = buildComputation(book(db, 1), FY);
   assert.ok(before.tax.total_tax_paise > 0, "should be taxable");
 
   db.prepare(
@@ -114,7 +115,7 @@ test("taxes paid net off the liability, and an overpayment reads as a refund", (
      VALUES (?, 'advance', '2026-06-15', ?, '', 'now')`
   ).run(FY, before.tax.total_tax_paise + R(5_000));
 
-  const after = buildComputation(db, FY);
+  const after = buildComputation(book(db, 1), FY);
   assert.equal(after.payments_paise, before.tax.total_tax_paise + R(5_000));
   assert.equal(after.net_payable_paise, -R(5_000)); // negative = refund
 });
@@ -124,7 +125,7 @@ test("the rate caveat reaches the computation for a year with no table", () => {
   // 2030-31 has no rate table — the carried-forward rates must arrive with
   // the warning attached, so every consumer is told before the numbers are
   // used.
-  const c = buildComputation(db, "2030-31");
+  const c = buildComputation(book(db, 1), "2030-31");
   assert.equal(c.provisional, true);
   assert.match(c.caveat, /No rate table for 2030-31/);
   assert.match(c.caveat, /Confirm this year's rates before filing/);
@@ -132,7 +133,7 @@ test("the rate caveat reaches the computation for a year with no table", () => {
 
 test("a verified year computes caveat-free", () => {
   const db = postedDb();
-  const c = buildComputation(db, FY); // 2026-27 — verified 2026-07-21
+  const c = buildComputation(book(db, 1), FY); // 2026-27 — verified 2026-07-21
   assert.equal(c.provisional, false);
   assert.equal(c.caveat, "");
 });
@@ -140,7 +141,7 @@ test("a verified year computes caveat-free", () => {
 test("total income is rounded to the nearest ten rupees before tax is applied", () => {
   const db = postedDb();
   addAdjustment(db, "addback", R(1_234) + 56); // ₹1,234.56
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   assert.equal(c.gross_total_income_paise, BOOK_PROFIT + R(1_234) + 56);
   assert.equal(c.taxable_income_paise % R(10), 0, "rounded to a ₹10 multiple");
   assert.equal(c.taxable_income_paise, R(12_230));
@@ -149,14 +150,14 @@ test("total income is rounded to the nearest ten rupees before tax is applied", 
 test("a firm gets its partner-remuneration ceiling as guidance, not a silent cap", () => {
   const db = postedDb();
   assert.equal(
-    buildComputation(db, FY).partner_remuneration_ceiling_paise,
+    buildComputation(book(db, 1), FY).partner_remuneration_ceiling_paise,
     null,
     "not a firm — no ceiling"
   );
 
-  db.prepare("UPDATE settings SET entity_type = 'partnership' WHERE id = 1").run();
+  db.prepare("UPDATE companies SET entity_type = 'partnership' WHERE id = 1").run();
   addAdjustment(db, "deduction", R(50_00_000)); // an absurd remuneration claim
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   // Book profit ₹11,000 → the floor applies.
   assert.equal(c.partner_remuneration_ceiling_paise, R(300_000));
   assert.equal(c.book_profit_paise, BOOK_PROFIT);
@@ -172,8 +173,8 @@ test("the remuneration ceiling is measured on book profit, NOT with depreciation
   // whole depreciation charge — and only shows up when that charge is non-zero,
   // which is why the first version of this test missed it.
   const db = postedDb();
-  db.prepare("UPDATE settings SET entity_type = 'partnership' WHERE id = 1").run();
-  postManualVoucher(db, {
+  db.prepare("UPDATE companies SET entity_type = 'partnership' WHERE id = 1").run();
+  postManualVoucher(book(db, 1), {
     kind: "journal",
     entry_type: "depreciation",
     entry_date: "2027-03-31",
@@ -185,7 +186,7 @@ test("the remuneration ceiling is measured on book profit, NOT with depreciation
     ],
   });
 
-  const c = buildComputation(db, FY);
+  const c = buildComputation(book(db, 1), FY);
   assert.equal(c.book_depreciation_paise, R(9_50_000));
   // A large book charge pushes the P&L into a loss, so the ceiling is the floor.
   assert.equal(c.book_profit_paise, BOOK_PROFIT - R(9_50_000));
@@ -197,16 +198,16 @@ test("the remuneration ceiling is measured on book profit, NOT with depreciation
 test("entity type drives which rate structure is used", () => {
   const db = postedDb();
   addAdjustment(db, "addback", R(20_00_000)); // ₹20L of income
-  const individual = buildComputation(db, FY);
+  const individual = buildComputation(book(db, 1), FY);
   assert.match(individual.tax.basis, /Individual/);
 
-  db.prepare("UPDATE settings SET entity_type = 'partnership' WHERE id = 1").run();
-  const firm = buildComputation(db, FY);
+  db.prepare("UPDATE companies SET entity_type = 'partnership' WHERE id = 1").run();
+  const firm = buildComputation(book(db, 1), FY);
   assert.match(firm.tax.basis, /Firm/);
   // A firm pays a flat rate from the first rupee, so it owes more than an
   // individual on the same income, whose first ₹4L is exempt.
   assert.ok(firm.tax.total_tax_paise > individual.tax.total_tax_paise);
 
-  db.prepare("UPDATE settings SET entity_type = 'company' WHERE id = 1").run();
-  assert.match(buildComputation(db, FY).tax.basis, /company/);
+  db.prepare("UPDATE companies SET entity_type = 'company' WHERE id = 1").run();
+  assert.match(buildComputation(book(db, 1), FY).tax.basis, /company/);
 });

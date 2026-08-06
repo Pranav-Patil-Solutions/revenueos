@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { updateSettings } from "@/lib/actions";
 import { GST_RATES } from "@/lib/tax/india-gst";
-import type { SettingsRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -12,11 +11,9 @@ const label = "mb-1.5 block text-[12.5px] font-medium text-ink-3";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const s = getDb()
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
+  const s = getCompany(book.db, book.companyId)!;
 
   return (
     <div>

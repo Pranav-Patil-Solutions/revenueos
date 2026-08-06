@@ -1,6 +1,6 @@
 import { FySelect } from "@/components/fy-select";
 import { markCompliance } from "@/lib/actions";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { formatDate, monthLabel, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import {
@@ -8,8 +8,7 @@ import {
   type ComplianceItem,
   type ComplianceStatus,
 } from "@/lib/compliance";
-import type { SettingsRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -69,19 +68,18 @@ export default async function CompliancePage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const books = fyList(db);
+  const books = fyList(book);
   const fys = books.includes(currentFy()) ? books : [currentFy(), ...books];
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : fys[0];
-  const settings = db
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
+  // The active company always exists and is usable by the time a Book is
+  // constructed (requireBook already asserted it) — see src/lib/dal.ts.
+  const settings = getCompany(book.db, book.companyId)!;
 
   const today = todayIso();
-  const items = generateItems(db, fy, settings, today);
+  const items = generateItems(book, fy, settings, today);
   const counts = items.reduce(
     (c, i) => ((c[i.status] += 1), c),
     { pending: 0, overdue: 0, done: 0, na: 0 } as Record<ComplianceStatus, number>

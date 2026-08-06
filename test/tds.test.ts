@@ -1,7 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import { trialBalance } from "../src/lib/reports";
 import {
   computeTds,
@@ -20,6 +23,7 @@ function tdsDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
   db.prepare(
     `INSERT INTO parties (name, kind, gstin, pan, state_code, phone, created_at)
      VALUES ('Verma Contractors', 'supplier', '', 'ABCPV1234F', '27', '', '2026-04-01T00:00:00Z'),
@@ -111,7 +115,7 @@ test("salary (192B) has no standard rate and says so", () => {
 
 test("a 194C payment posts Dr expense / Cr 2300 / Cr bank, register row linked", () => {
   const db = tdsDb();
-  const { journalId, tdsEntryId, computation } = postVoucherWithTds(db, {
+  const { journalId, tdsEntryId, computation } = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-10",
     memo: "Shed repair",
     ref_no: "TDS-1",
@@ -136,7 +140,7 @@ test("a 194C payment posts Dr expense / Cr 2300 / Cr bank, register row linked",
   assert.equal(bal("5900"), R(10_000));
   assert.equal(bal("2300"), -R(100));
   assert.equal(bal("1100"), -R(9_900));
-  assert.equal(trialBalance(db).balanced, true);
+  assert.equal(trialBalance(book(db, 1)).balanced, true);
 
   const entry = db
     .prepare("SELECT * FROM tds_entries WHERE id = ?")
@@ -157,7 +161,7 @@ test("ATOMIC: a register insert failure leaves no journal behind", () => {
   db.exec("DROP TABLE tds_entries");
   db.exec("CREATE TABLE tds_entries (id INTEGER PRIMARY KEY CHECK (id < 0))");
   assert.throws(() =>
-    postVoucherWithTds(db, {
+    postVoucherWithTds(book(db, 1), {
       entry_date: "2026-07-10",
       memo: "Doomed",
       ref_no: "X",
@@ -178,7 +182,7 @@ test("ATOMIC: a register insert failure leaves no journal behind", () => {
 
 test("no-PAN payee is deducted at 20% through the posting path too", () => {
   const db = tdsDb();
-  const { computation } = postVoucherWithTds(db, {
+  const { computation } = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-11",
     memo: "Casual labour",
     ref_no: "TDS-2",
@@ -194,7 +198,7 @@ test("no-PAN payee is deducted at 20% through the posting path too", () => {
 
 test("the manual override books the office's own figure (salary), bounded by the bill", () => {
   const db = tdsDb();
-  const { computation, journalId } = postVoucherWithTds(db, {
+  const { computation, journalId } = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-31",
     memo: "July salary",
     ref_no: "SAL-7",
@@ -215,7 +219,7 @@ test("the manual override books the office's own figure (salary), bounded by the
   assert.equal(cr2300.b, R(3_500)); // what was actually booked
   assert.throws(
     () =>
-      postVoucherWithTds(db, {
+      postVoucherWithTds(book(db, 1), {
         entry_date: "2026-07-31",
         memo: "bad",
         ref_no: "",
@@ -234,7 +238,7 @@ test("an override stores its EFFECTIVE rate in the register, not the unused defa
   // ₹3,500 on ₹50,000 is 7% = 700 bp; storing the section default (0 for
   // 192B) would make the register's rate disagree with what was deducted.
   const db = tdsDb();
-  const { tdsEntryId } = postVoucherWithTds(db, {
+  const { tdsEntryId } = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-31",
     memo: "salary",
     ref_no: "",
@@ -251,7 +255,7 @@ test("an override stores its EFFECTIVE rate in the register, not the unused defa
   assert.equal(row.rate_bp, 700);
   assert.equal(row.tds_paise, R(3_500));
   // An override that happens to equal the computed figure keeps the section bp.
-  const same = postVoucherWithTds(db, {
+  const same = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-08-01", memo: "", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
     settle_account: "bank", tds_paise_override: R(100),
@@ -278,7 +282,7 @@ test("the schema refuses a challan without a backing journal", () => {
 
 test("a zero-TDS voucher (below-rate override) still posts a clean two-leg journal", () => {
   const db = tdsDb();
-  const { journalId } = postVoucherWithTds(db, {
+  const { journalId } = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-12",
     memo: "No deduction",
     ref_no: "",
@@ -293,15 +297,15 @@ test("a zero-TDS voucher (below-rate override) still posts a clean two-leg journ
     .prepare("SELECT COUNT(*) n FROM journal_lines WHERE journal_id = ?")
     .get(journalId) as { n: number }).n;
   assert.equal(legs, 2); // no zero-amount 2300 leg — the SQL CHECK would reject it
-  assert.equal(trialBalance(db).balanced, true);
+  assert.equal(trialBalance(book(db, 1)).balanced, true);
 });
 
 test("books lock refuses a back-dated TDS voucher atomically", () => {
   const db = tdsDb();
-  db.prepare("UPDATE settings SET books_locked_through = '2026-07-31' WHERE id = 1").run();
+  db.prepare("UPDATE companies SET books_locked_through = '2026-07-31' WHERE id = 1").run();
   assert.throws(
     () =>
-      postVoucherWithTds(db, {
+      postVoucherWithTds(book(db, 1), {
         entry_date: "2026-07-10",
         memo: "late",
         ref_no: "",
@@ -326,19 +330,19 @@ function seedQuarterData(db: Database.Database): void {
     ["2026-04-15", R(10_000)],
     ["2026-06-20", R(20_000)],
   ] as const) {
-    postVoucherWithTds(db, {
+    postVoucherWithTds(book(db, 1), {
       entry_date: date, memo: "work", ref_no: "", party_id: VERMA,
       expense_account_code: "5900", base_paise: base, section: "194C",
       settle_account: "bank",
     });
   }
-  postVoucherWithTds(db, {
+  postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-01", memo: "labour", ref_no: "", party_id: NOPAN,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
     settle_account: "cash",
   });
   // Q2 (Jul–Sep): salary — 24Q, not 26Q.
-  postVoucherWithTds(db, {
+  postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-31", memo: "salary", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(50_000), section: "192B",
     settle_account: "bank", tds_paise_override: R(3_500),
@@ -348,7 +352,7 @@ function seedQuarterData(db: Database.Database): void {
 test("26Q groups by payee+section within the quarter; salary stays out", () => {
   const db = tdsDb();
   seedQuarterData(db);
-  const q1 = q26Summary(db, "2026-27", 1);
+  const q1 = q26Summary(book(db, 1), "2026-27", 1);
   assert.equal(q1.lines.length, 2); // Verma aggregated, no-PAN separate
   const verma = q1.lines.find((l) => l.party_id === VERMA)!;
   assert.equal(verma.deductions, 2);
@@ -361,15 +365,15 @@ test("26Q groups by payee+section within the quarter; salary stays out", () => {
   assert.equal(q1.missing_pan_count, 1);
   assert.equal(q1.total_tds_paise, R(2_300));
   // Salary is Q2 and 24Q — invisible to both Q1 and 26Q.
-  assert.equal(q26Summary(db, "2026-27", 2).lines.length, 0);
-  const q2Salary = q24Summary(db, "2026-27", 2);
+  assert.equal(q26Summary(book(db, 1), "2026-27", 2).lines.length, 0);
+  const q2Salary = q24Summary(book(db, 1), "2026-27", 2);
   assert.equal(q2Salary.lines.length, 1);
   assert.equal(q2Salary.total_tds_paise, R(3_500));
 });
 
 test("the challan row itself names its form — junk or missing form is refused", () => {
   const db = tdsDb();
-  const j = postManualVoucher(db, {
+  const j = postManualVoucher(book(db, 1), {
     kind: "journal", entry_type: "tds_challan", entry_date: "2026-07-05",
     memo: "", ref_no: "",
     legs: [
@@ -392,12 +396,12 @@ test("a challan covers one return form — salary and non-salary never share one
   // must partition them so 26Q and 24Q undeposited figures stay reconcilable
   // from the challan rows.
   const db = tdsDb();
-  postVoucherWithTds(db, {
+  postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-10", memo: "work", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
     settle_account: "bank",
   });
-  postVoucherWithTds(db, {
+  postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-31", memo: "salary", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(50_000), section: "192B",
     settle_account: "bank", tds_paise_override: R(3_500),
@@ -418,14 +422,14 @@ test("a challan covers one return form — salary and non-salary never share one
 test("challan deposit zeroes 2300 and stamps the entries it covered", () => {
   const db = tdsDb();
   seedQuarterData(db);
-  const q1 = q26Summary(db, "2026-27", 1);
+  const q1 = q26Summary(book(db, 1), "2026-27", 1);
   assert.equal(q1.undeposited_paise, R(2_300));
 
   // The deposit: one journal Dr 2300 / Cr Bank, a challan row, and the
   // entries stamped — the same one-transaction shape the action uses.
   const now = "2026-07-05T00:00:00Z";
   db.transaction(() => {
-    const { journalId } = postManualVoucher(db, {
+    const { journalId } = postManualVoucher(book(db, 1), {
       kind: "journal",
       entry_type: "tds_challan",
       entry_date: "2026-07-05",
@@ -458,8 +462,8 @@ test("challan deposit zeroes 2300 and stamps the entries it covered", () => {
       .get() as { b: number }
   ).b;
   assert.equal(bal2300, -R(3_500)); // only the undeposited salary remains
-  assert.equal(q26Summary(db, "2026-27", 1).undeposited_paise, 0);
-  assert.equal(trialBalance(db).balanced, true);
-  const register = tdsRegister(db, "2026-27");
+  assert.equal(q26Summary(book(db, 1), "2026-27", 1).undeposited_paise, 0);
+  assert.equal(trialBalance(book(db, 1)).balanced, true);
+  const register = tdsRegister(book(db, 1), "2026-27");
   assert.equal(register.filter((r) => r.challan_id !== null).length, 3);
 });

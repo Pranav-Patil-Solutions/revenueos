@@ -1,9 +1,8 @@
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { inr, monthLabel, thisMonth } from "@/lib/format";
 import { gstr1B2B, gstr3b } from "@/lib/reports";
-import type { SettingsRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -12,14 +11,13 @@ export default async function GstReportPage({
 }: {
   searchParams: Promise<{ month?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
   const month = /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month! : thisMonth();
-  const db = getDb();
-  const settings = db.prepare("SELECT * FROM settings WHERE id = 1").get() as SettingsRow;
-  const g = gstr3b(db, month);
-  const b2b = gstr1B2B(db, month);
+  const settings = getCompany(book.db, book.companyId)!;
+  const g = gstr3b(book, month);
+  const b2b = gstr1B2B(book, month);
 
   const row = "flex items-center justify-between border-b border-hairline/60 px-5 py-3 last:border-0";
 

@@ -1,7 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
+import { getCompany } from "../src/lib/companies";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import {
   dueItems,
   ruleForFy,
@@ -19,6 +23,7 @@ function complianceDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
   return db;
 }
 
@@ -26,7 +31,7 @@ function settingsWith(
   db: Database.Database,
   patch: Partial<SettingsRow>
 ): SettingsRow {
-  const row = db.prepare("SELECT * FROM settings WHERE id = 1").get() as SettingsRow;
+  const row = getCompany(db, 1)!;
   return { ...row, ...patch };
 }
 
@@ -128,7 +133,7 @@ test("ITR due date: entity + audit tiers, income-based not form-based", () => {
 test("a presumptive scheme collapses advance tax to the single 15 Mar item", () => {
   const db = complianceDb();
   const items = generateItems(
-    db,
+    book(db, 1),
     FY,
     settingsWith(db, { presumptive: "44AD" }),
     "2026-04-01"
@@ -138,7 +143,7 @@ test("a presumptive scheme collapses advance tax to the single 15 Mar item", () 
   assert.equal(at[0].period, `${FY}-Q4`);
   assert.equal(at[0].due_date, "2027-03-15");
   // Non-presumptive books keep all four.
-  const four = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  const four = generateItems(book(db, 1), FY, settingsWith(db, {}), "2026-04-01");
   assert.equal(four.filter((i) => i.rule_code === "advance-tax").length, 4);
 });
 
@@ -177,7 +182,7 @@ test("every rule carries provenance; verified rules cite their authority", () =>
 
 test("no GSTIN and no TAN: only advance tax + ITR remain", () => {
   const db = complianceDb();
-  const items = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  const items = generateItems(book(db, 1), FY, settingsWith(db, {}), "2026-04-01");
   assert.equal(items.length, 5);
   assert.ok(items.every((i) => i.regime === "it"));
 });
@@ -185,14 +190,14 @@ test("no GSTIN and no TAN: only advance tax + ITR remain", () => {
 test("a GSTIN turns the GST rows on; a TAN turns the TDS rows on", () => {
   const db = complianceDb();
   const gst = generateItems(
-    db,
+    book(db, 1),
     FY,
     settingsWith(db, { gstin: "27ABCDE1234F1Z5" }),
     "2026-04-01"
   );
   assert.equal(gst.length, 29); // 24 GST + 4 advance + ITR
   const both = generateItems(
-    db,
+    book(db, 1),
     FY,
     settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" }),
     "2026-04-01"
@@ -206,7 +211,7 @@ test("posted deductions turn TDS rows on even with no TAN in settings", () => {
     `INSERT INTO parties (name, kind, gstin, pan, state_code, phone, created_at)
      VALUES ('Verma Contractors', 'supplier', '', 'ABCPV1234F', '27', '', '2026-04-01T00:00:00Z')`
   ).run();
-  postVoucherWithTds(db, {
+  postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-10",
     memo: "",
     ref_no: "",
@@ -216,10 +221,10 @@ test("posted deductions turn TDS rows on even with no TAN in settings", () => {
     section: "194C",
     settle_account: "bank",
   });
-  const items = generateItems(db, FY, settingsWith(db, {}), "2026-04-01");
+  const items = generateItems(book(db, 1), FY, settingsWith(db, {}), "2026-04-01");
   assert.equal(items.filter((i) => i.regime === "tds").length, 16);
   // The deduction sits in FY 2026-27 — the year before shows no TDS rows.
-  const prior = generateItems(db, "2025-26", settingsWith(db, {}), "2026-04-01");
+  const prior = generateItems(book(db, 1), "2025-26", settingsWith(db, {}), "2026-04-01");
   assert.equal(prior.filter((i) => i.regime === "tds").length, 0);
 });
 
@@ -227,7 +232,7 @@ test("status derives from the injected today, strictly after the due date", () =
   const db = complianceDb();
   const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5" });
   const on = (today: string) =>
-    generateItems(db, FY, s, today).find(
+    generateItems(book(db, 1), FY, s, today).find(
       (i) => i.rule_code === "gstr1" && i.period === "2026-04"
     )!;
   assert.equal(on("2026-05-11").status, "pending"); // due today = still pending
@@ -243,7 +248,7 @@ test("a mark overrides the derived status — done or na, however late", () => {
      VALUES ('gstr1', '2026-04', 'done', '2026-05-09T00:00:00Z', 'filed early'),
             ('gstr3b', '2026-04', 'na', '2026-06-01T00:00:00Z', '')`
   ).run();
-  const items = generateItems(db, FY, s, "2027-01-01"); // long past both dues
+  const items = generateItems(book(db, 1), FY, s, "2027-01-01"); // long past both dues
   const g1 = items.find((i) => i.rule_code === "gstr1" && i.period === "2026-04")!;
   const g3 = items.find((i) => i.rule_code === "gstr3b" && i.period === "2026-04")!;
   assert.equal(g1.status, "done");
@@ -257,7 +262,7 @@ test("a mark overrides the derived status — done or na, however late", () => {
 test("items come back sorted by due date", () => {
   const db = complianceDb();
   const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" });
-  const items = generateItems(db, FY, s, "2026-04-01");
+  const items = generateItems(book(db, 1), FY, s, "2026-04-01");
   for (let i = 1; i < items.length; i++) {
     assert.ok(items[i - 1].due_date <= items[i].due_date);
   }
@@ -271,14 +276,14 @@ test("board membership is independent of today — only statuses change", () => 
   const db = complianceDb();
   const s = settingsWith(db, { gstin: "27ABCDE1234F1Z5", tan: "MUMP12345A" });
   const keys = (today: string) =>
-    generateItems(db, FY, s, today).map((i) => `${i.rule_code} ${i.period}`);
+    generateItems(book(db, 1), FY, s, today).map((i) => `${i.rule_code} ${i.period}`);
   assert.deepEqual(keys("2026-04-01"), keys("2028-12-31"));
 });
 
 test("generateItems rejects a malformed today", () => {
   const db = complianceDb();
-  assert.throws(() => generateItems(db, FY, settingsWith(db, {}), "today"));
-  assert.throws(() => generateItems(db, FY, settingsWith(db, {}), ""));
+  assert.throws(() => generateItems(book(db, 1), FY, settingsWith(db, {}), "today"));
+  assert.throws(() => generateItems(book(db, 1), FY, settingsWith(db, {}), ""));
 });
 
 // ── year authority (RVOS-003 P1) ─────────────────────────────────────────

@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getDb, UPLOADS_DIR } from "@/lib/db";
-import { requireApiSession } from "@/lib/dal";
+import { UPLOADS_DIR } from "@/lib/db";
+import { requireApiBook } from "@/lib/dal";
 
 const ALLOWED_EXT: Record<string, string> = {
   jpg: "image/jpeg",
@@ -14,8 +14,9 @@ const ALLOWED_EXT: Record<string, string> = {
 const MAX_BYTES = 15 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
-  const gate = await requireApiSession();
+  const gate = await requireApiBook();
   if (gate instanceof Response) return gate;
+  const { book } = gate;
   let form: FormData;
   try {
     form = await req.formData();
@@ -35,8 +36,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "party_id is required." }, { status: 400 });
   }
 
-  const db = getDb();
-  const party = db.prepare("SELECT id FROM parties WHERE id = ?").get(partyId);
+  const party = book.get(
+    "SELECT id FROM parties WHERE id = @partyId AND company_id = @company_id",
+    { partyId }
+  );
   if (!party) {
     return NextResponse.json({ error: "Party not found." }, { status: 404 });
   }
@@ -67,21 +70,26 @@ export async function POST(req: NextRequest) {
 
   const buf = Buffer.from(await file.arrayBuffer());
   const sha256 = createHash("sha256").update(buf).digest("hex");
-  const duplicate = db
-    .prepare(
-      "SELECT id FROM documents WHERE image_sha256 = ? ORDER BY id LIMIT 1"
-    )
-    .get(sha256) as { id: number } | undefined;
+  const duplicate = book.get(
+    `SELECT id FROM documents
+     WHERE company_id = @company_id AND image_sha256 = @sha256
+     ORDER BY id LIMIT 1`,
+    { sha256 }
+  ) as { id: number } | undefined;
 
   const filename = `${randomUUID()}.${ext}`;
   await writeFile(path.join(UPLOADS_DIR, filename), buf);
 
-  const result = db
-    .prepare(
-      `INSERT INTO documents (party_id, image_path, image_sha256, status, created_at)
-       VALUES (?, ?, ?, 'uploaded', ?)`
-    )
-    .run(partyId, path.join("data", "uploads", filename), sha256, new Date().toISOString());
+  const result = book.run(
+    `INSERT INTO documents (party_id, image_path, image_sha256, status, created_at, company_id)
+     VALUES (@partyId, @imagePath, @sha256, 'uploaded', @now, @company_id)`,
+    {
+      partyId,
+      imagePath: path.join("data", "uploads", filename),
+      sha256,
+      now: new Date().toISOString(),
+    }
+  );
 
   return NextResponse.json({
     id: Number(result.lastInsertRowid),

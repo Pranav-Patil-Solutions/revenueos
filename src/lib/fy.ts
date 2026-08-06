@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Book } from "./book";
 import { todayIso } from "./format";
 
 /**
@@ -81,10 +81,10 @@ export function quarterOf(iso: string): 1 | 2 | 3 | 4 {
 
 /** FYs the books span (earliest journal → current FY), newest first.
  * Always contains at least the current FY, so selects never render empty. */
-export function fyList(db: Database.Database): string[] {
-  const row = db
-    .prepare("SELECT MIN(entry_date) AS min FROM journals")
-    .get() as { min: string | null };
+export function fyList(book: Book): string[] {
+  const row = book.get(
+    "SELECT MIN(entry_date) AS min FROM journals WHERE company_id = @company_id"
+  ) as { min: string | null };
   const last = startYearOf(currentFy());
   const first = row.min ? Math.min(startYearOf(fyOf(row.min)), last) : last;
   const list: string[] = [];

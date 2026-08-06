@@ -6,8 +6,15 @@ import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { setSessionCompany } from "./auth";
+import type { Book } from "./book";
 import { groupFor } from "./coa";
-import { archiveCompany, createCompany, renameCompany } from "./companies";
+import {
+  archiveCompany,
+  createCompany,
+  getCompany,
+  renameCompany,
+  updateCompanySettings,
+} from "./companies";
 import { generateItems } from "./compliance";
 import { requireBook, requireSession } from "./dal";
 import { getDb, seedAccountsForCompany, UPLOADS_DIR } from "./db";
@@ -45,7 +52,6 @@ import type {
   ItRegime,
   PartyKind,
   Presumptive,
-  SettingsRow,
 } from "./types";
 
 const ENTRY_TYPES: EntryType[] = [
@@ -107,21 +113,20 @@ function parseDraftRows(rowsJson: string): DraftRowInput[] {
   });
 }
 
-function saveDraft(docId: number, rows: DraftRowInput[]): void {
-  const db = getDb();
-  const doc = db
-    .prepare("SELECT * FROM documents WHERE id = ?")
-    .get(docId) as DocumentRow | undefined;
+function saveDraft(book: Book, docId: number, rows: DraftRowInput[]): void {
+  const doc = book.get(
+    "SELECT * FROM documents WHERE id = @docId AND company_id = @company_id",
+    { docId }
+  ) as DocumentRow | undefined;
   if (!doc) throw new Error("Document not found.");
   if (doc.status === "posted") {
     throw new Error("Document is posted — its rows are locked.");
   }
-  const tx = db.transaction(() => applyDraftRows(db, docId, rows));
-  tx();
+  book.tx((b) => applyDraftRows(b, docId, rows));
 }
 
 export async function createParty(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const name = String(formData.get("name") ?? "").trim();
   const kind = String(formData.get("kind") ?? "");
   const gstin = String(formData.get("gstin") ?? "").trim().toUpperCase();
@@ -135,12 +140,11 @@ export async function createParty(formData: FormData): Promise<void> {
   if (pan !== "" && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) {
     throw new Error("PAN must look like ABCPV1234F (or be left blank).");
   }
-  getDb()
-    .prepare(
-      `INSERT INTO parties (name, kind, gstin, pan, state_code, phone, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(name, kind, gstin, pan, stateCode, phone, new Date().toISOString());
+  book.run(
+    `INSERT INTO parties (company_id, name, kind, gstin, pan, state_code, phone, created_at)
+     VALUES (@company_id, @name, @kind, @gstin, @pan, @stateCode, @phone, @now)`,
+    { name, kind, gstin, pan, stateCode, phone, now: new Date().toISOString() }
+  );
   revalidatePath("/parties");
   redirect("/parties");
 }
@@ -150,7 +154,7 @@ const IT_REGIMES: ItRegime[] = ["old", "new"];
 const PRESUMPTIVE: Presumptive[] = ["", "44AD", "44ADA"];
 
 export async function updateSettings(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const rate = Number(formData.get("default_gst_rate") ?? 18);
   const entityType = String(formData.get("entity_type") ?? "proprietorship");
   if (!ENTITY_TYPES.includes(entityType as EntityType)) {
@@ -168,31 +172,23 @@ export async function updateSettings(formData: FormData): Promise<void> {
   if (lockedThrough !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(lockedThrough)) {
     throw new Error("Books-locked-through must be a date (YYYY-MM-DD) or blank.");
   }
-  getDb()
-    .prepare(
-      `UPDATE settings SET
-         company_name = ?, gstin = ?, state_code = ?, country = ?,
-         currency = ?, default_gst_rate = ?, tax_inclusive = ?,
-         entity_type = ?, pan = ?, tan = ?, it_regime = ?, presumptive = ?,
-         books_locked_through = ?, fy_audit_case = ?
-       WHERE id = 1`
-    )
-    .run(
-      String(formData.get("company_name") ?? "").trim() || "My Company",
-      String(formData.get("gstin") ?? "").trim().toUpperCase(),
-      String(formData.get("state_code") ?? "").trim(),
-      String(formData.get("country") ?? "IN").trim().toUpperCase() || "IN",
-      String(formData.get("currency") ?? "INR").trim().toUpperCase() || "INR",
-      Number.isFinite(rate) ? rate : 18,
-      formData.get("tax_inclusive") === "on" ? 1 : 0,
-      entityType,
-      String(formData.get("pan") ?? "").trim().toUpperCase(),
-      String(formData.get("tan") ?? "").trim().toUpperCase(),
-      itRegime,
-      presumptive,
-      lockedThrough,
-      formData.get("fy_audit_case") === "on" ? 1 : 0
-    );
+  const companyName = String(formData.get("company_name") ?? "").trim() || "My Company";
+  updateCompanySettings(book.db, book.companyId, {
+    companyName,
+    gstin: String(formData.get("gstin") ?? "").trim().toUpperCase(),
+    stateCode: String(formData.get("state_code") ?? "").trim(),
+    country: String(formData.get("country") ?? "IN").trim().toUpperCase() || "IN",
+    currency: String(formData.get("currency") ?? "INR").trim().toUpperCase() || "INR",
+    rate: Number.isFinite(rate) ? rate : 18,
+    taxInclusive: formData.get("tax_inclusive") === "on" ? 1 : 0,
+    entityType: entityType as EntityType,
+    pan: String(formData.get("pan") ?? "").trim().toUpperCase(),
+    tan: String(formData.get("tan") ?? "").trim().toUpperCase(),
+    itRegime,
+    presumptive,
+    lockedThrough,
+    fyAuditCase: formData.get("fy_audit_case") === "on" ? 1 : 0,
+  });
   revalidatePath("/settings");
   redirect("/settings");
 }
@@ -285,7 +281,7 @@ const ACCOUNT_TYPES: AccountType[] = [
 /** COA is add-only/rename-only — accounts are never deleted or retyped, the
  * books may already reference them. */
 export async function createAccount(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
   const type = String(formData.get("type") ?? "");
@@ -298,25 +294,30 @@ export async function createAccount(formData: FormData): Promise<void> {
     throw new Error("Unknown account type.");
   }
   if (!groupFor(groupCode)) throw new Error("Unknown account group.");
-  const db = getDb();
-  const existing = db
-    .prepare("SELECT id FROM accounts WHERE code = ?")
-    .get(code);
+  const existing = book.get(
+    "SELECT id FROM accounts WHERE company_id = @company_id AND code = @code",
+    { code }
+  );
   if (existing) throw new Error(`Account code ${code} already exists.`);
-  db.prepare(
-    "INSERT INTO accounts (code, name, type, group_code) VALUES (?, ?, ?, ?)"
-  ).run(code, name, type, groupCode);
+  book.run(
+    `INSERT INTO accounts (company_id, code, name, type, group_code)
+     VALUES (@company_id, @code, @name, @type, @groupCode)`,
+    { code, name, type, groupCode }
+  );
   revalidatePath("/settings/accounts");
   redirect("/settings/accounts");
 }
 
 export async function renameAccount(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const id = Number(formData.get("id"));
   const name = String(formData.get("name") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad account id.");
   if (!name) throw new Error("Account name is required.");
-  getDb().prepare("UPDATE accounts SET name = ? WHERE id = ?").run(name, id);
+  book.run(
+    "UPDATE accounts SET name = @name WHERE id = @id AND company_id = @company_id",
+    { id, name }
+  );
   revalidatePath("/settings/accounts");
   redirect("/settings/accounts");
 }
@@ -357,7 +358,7 @@ function parseVoucherLegs(legsJson: string): JournalLegInput[] {
 
 /** Manual voucher entry — parses the form by kind, posts one journal. */
 export async function createVoucher(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const kind = String(formData.get("kind") ?? "");
   const entry_date = String(formData.get("entry_date") ?? "").trim();
   const memo = String(formData.get("memo") ?? "").trim();
@@ -415,7 +416,7 @@ export async function createVoucher(formData: FormData): Promise<void> {
     throw new Error("Unknown voucher kind.");
   }
 
-  const { journalId } = postManualVoucher(getDb(), input);
+  const { journalId } = postManualVoucher(book, input);
   revalidatePath("/vouchers");
   revalidatePath("/reports");
   revalidatePath("/");
@@ -428,18 +429,17 @@ export async function createVoucherParty(
   name: string,
   kind: PartyKind
 ): Promise<{ id: number; name: string }> {
-  await requireSession();
+  const { book } = await requireBook();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Party name is required.");
   if (kind !== "customer" && kind !== "supplier") {
     throw new Error("Party kind must be customer or supplier.");
   }
-  const id = getDb()
-    .prepare(
-      `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
-       VALUES (?, ?, '', '', '', ?)`
-    )
-    .run(trimmed, kind, new Date().toISOString()).lastInsertRowid as number;
+  const id = book.run(
+    `INSERT INTO parties (company_id, name, kind, gstin, state_code, phone, created_at)
+     VALUES (@company_id, @name, @kind, '', '', '', @now)`,
+    { name: trimmed, kind, now: new Date().toISOString() }
+  ).lastInsertRowid as number;
   revalidatePath("/parties");
   return { id: Number(id), name: trimmed };
 }
@@ -512,12 +512,7 @@ export async function createTallyImport(formData: FormData): Promise<void> {
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const now = new Date().toISOString();
 
-  // `settings` is still the GLOBAL singleton (RVOS-004 P6's known gap — see
-  // HANDOFF.md's "settings singleton" note): every company reads company 1's
-  // tax_inclusive flag until that lands. Not this phase's fix.
-  const settings = book.db
-    .prepare("SELECT tax_inclusive FROM settings WHERE id = 1")
-    .get() as { tax_inclusive: number };
+  const settings = getCompany(book.db, book.companyId)!;
 
   const docId = finalizeTallyImport(book, {
     partyId,
@@ -556,7 +551,7 @@ function formPaise(formData: FormData, field: string, label: string): number {
 }
 
 export async function createAsset(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const name = String(formData.get("name") ?? "").trim();
   const block = String(formData.get("block") ?? "");
   const purchaseDate = String(formData.get("purchase_date") ?? "").trim();
@@ -577,19 +572,18 @@ export async function createAsset(formData: FormData): Promise<void> {
   const cost = formPaise(formData, "cost", "Cost");
   if (cost === 0) throw new Error("Cost must be more than zero.");
 
-  getDb()
-    .prepare(
-      `INSERT INTO fixed_assets
-         (name, block, cost_paise, purchase_date, put_to_use_date, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(name, block, cost, purchaseDate, putToUse, new Date().toISOString());
+  book.run(
+    `INSERT INTO fixed_assets
+       (company_id, name, block, cost_paise, purchase_date, put_to_use_date, created_at)
+     VALUES (@company_id, @name, @block, @cost, @purchaseDate, @putToUse, @now)`,
+    { name, block, cost, purchaseDate, putToUse, now: new Date().toISOString() }
+  );
   revalidatePath("/tax/depreciation");
   redirect("/tax/depreciation");
 }
 
 export async function disposeAsset(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const id = Number(formData.get("id"));
   const disposedDate = String(formData.get("disposed_date") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad asset id.");
@@ -598,10 +592,10 @@ export async function disposeAsset(formData: FormData): Promise<void> {
   }
   const proceeds = formPaise(formData, "disposal", "Sale proceeds");
 
-  const db = getDb();
-  const asset = db
-    .prepare("SELECT * FROM fixed_assets WHERE id = ?")
-    .get(id) as FixedAssetRow | undefined;
+  const asset = book.get(
+    "SELECT * FROM fixed_assets WHERE id = @id AND company_id = @company_id",
+    { id }
+  ) as FixedAssetRow | undefined;
   if (!asset) throw new Error("Asset not found.");
   if (asset.disposed_date) throw new Error("That asset is already disposed.");
   if (disposedDate < asset.purchase_date) {
@@ -618,9 +612,10 @@ export async function disposeAsset(formData: FormData): Promise<void> {
   if (disposedDate < asset.put_to_use_date) {
     throw new Error("An asset can't be sold before it was put to use.");
   }
-  db.prepare(
-    "UPDATE fixed_assets SET disposed_date = ?, disposal_paise = ? WHERE id = ?"
-  ).run(disposedDate, proceeds, id);
+  book.run(
+    "UPDATE fixed_assets SET disposed_date = @disposedDate, disposal_paise = @proceeds WHERE id = @id AND company_id = @company_id",
+    { disposedDate, proceeds, id }
+  );
   revalidatePath("/tax/depreciation");
   redirect("/tax/depreciation");
 }
@@ -635,29 +630,28 @@ export async function disposeAsset(formData: FormData): Promise<void> {
  * click here would need a manual reversing entry to undo.
  */
 export async function postDepreciationEntry(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const fy = String(formData.get("fy") ?? "").trim();
-  const db = getDb();
   const to = fyEnd(fy); // the entry is dated the last day of the year
 
   // Guard and insert in ONE transaction (postManualVoucher's own transaction
   // nests as a savepoint). Checking outside it would let two quick submits
   // both pass the guard before either wrote — and with post-only books the
   // duplicate could only be undone by a manual reversing entry.
-  const journalId = db.transaction((): number => {
-    const existing = postedDepreciation(db, fy);
+  const journalId = book.tx((b): number => {
+    const existing = postedDepreciation(b, fy);
     if (existing) {
       throw new Error(
         `${fyLabel(fy)} depreciation is already posted (journal #${existing.id}). Books are post-only — correct it with a manual reversing entry.`
       );
     }
-    const schedule = depreciationSchedule(db, fy);
+    const schedule = depreciationSchedule(b, fy);
     if (schedule.total_depreciation_paise <= 0) {
       throw new Error(
         `Nothing to depreciate in ${fyLabel(fy)} — add assets and their put-to-use dates first.`
       );
     }
-    return postManualVoucher(db, {
+    return postManualVoucher(b, {
       kind: "journal",
       entry_type: "depreciation",
       entry_date: to,
@@ -678,7 +672,7 @@ export async function postDepreciationEntry(formData: FormData): Promise<void> {
         },
       ],
     }).journalId;
-  })();
+  });
   revalidatePath("/tax/depreciation");
   revalidatePath("/reports");
   revalidatePath("/");
@@ -690,7 +684,7 @@ export async function postDepreciationEntry(formData: FormData): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function addItAdjustment(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy); // throws on a malformed FY key
   const kind = String(formData.get("kind") ?? "");
@@ -702,37 +696,36 @@ export async function addItAdjustment(formData: FormData): Promise<void> {
   const amount = formPaise(formData, "amount", "Amount");
   if (amount === 0) throw new Error("Amount must be more than zero.");
 
-  getDb()
-    .prepare(
-      `INSERT INTO it_adjustments (fy, kind, section, description, amount_paise, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+  book.run(
+    `INSERT INTO it_adjustments (company_id, fy, kind, section, description, amount_paise, created_at)
+     VALUES (@company_id, @fy, @kind, @section, @description, @amount, @now)`,
+    {
       fy,
       kind,
-      String(formData.get("section") ?? "").trim(),
+      section: String(formData.get("section") ?? "").trim(),
       description,
       amount,
-      new Date().toISOString()
-    );
+      now: new Date().toISOString(),
+    }
+  );
   revalidatePath("/tax/computation");
   redirect(`/tax/computation?fy=${fy}`);
 }
 
 export async function deleteItAdjustment(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const id = Number(formData.get("id"));
   const fy = String(formData.get("fy") ?? "").trim();
   if (!Number.isInteger(id) || id <= 0) throw new Error("Bad adjustment id.");
   // Safe to delete outright: adjustments are computation metadata, never
   // posted to the books, so nothing references them.
-  getDb().prepare("DELETE FROM it_adjustments WHERE id = ?").run(id);
+  book.run("DELETE FROM it_adjustments WHERE id = @id AND company_id = @company_id", { id });
   revalidatePath("/tax/computation");
   redirect(`/tax/computation?fy=${fy}`);
 }
 
 export async function addTaxPayment(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy);
   const kind = String(formData.get("kind") ?? "");
@@ -746,19 +739,18 @@ export async function addTaxPayment(formData: FormData): Promise<void> {
   const amount = formPaise(formData, "amount", "Amount");
   if (amount === 0) throw new Error("Amount must be more than zero.");
 
-  getDb()
-    .prepare(
-      `INSERT INTO tax_payments (fy, kind, paid_on, amount_paise, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(
+  book.run(
+    `INSERT INTO tax_payments (company_id, fy, kind, paid_on, amount_paise, note, created_at)
+     VALUES (@company_id, @fy, @kind, @paidOn, @amount, @note, @now)`,
+    {
       fy,
       kind,
       paidOn,
       amount,
-      String(formData.get("note") ?? "").trim(),
-      new Date().toISOString()
-    );
+      note: String(formData.get("note") ?? "").trim(),
+      now: new Date().toISOString(),
+    }
+  );
   revalidatePath("/tax/computation");
   redirect(`/tax/computation?fy=${fy}`);
 }
@@ -769,7 +761,7 @@ export async function addTaxPayment(formData: FormData): Promise<void> {
 
 /** Pay a bill net of TDS — one journal + one register row, atomically. */
 export async function createTdsVoucher(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const entry_date = String(formData.get("entry_date") ?? "").trim();
   if (!ISO_DATE.test(entry_date)) {
     throw new Error("Payment date is required (YYYY-MM-DD).");
@@ -790,7 +782,7 @@ export async function createTdsVoucher(formData: FormData): Promise<void> {
     if (tds_paise_override < 0) throw new Error("TDS must not be negative.");
   }
 
-  postVoucherWithTds(getDb(), {
+  postVoucherWithTds(book, {
     entry_date,
     memo: String(formData.get("memo") ?? "").trim(),
     ref_no: String(formData.get("ref_no") ?? "").trim(),
@@ -815,7 +807,7 @@ export async function createTdsVoucher(formData: FormData): Promise<void> {
  * neither over- nor under-clear account 2300.
  */
 export async function createTdsChallan(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy);
   const quarter = Number(formData.get("quarter"));
@@ -831,24 +823,23 @@ export async function createTdsChallan(formData: FormData): Promise<void> {
   const challan_no = String(formData.get("challan_no") ?? "").trim();
   const bsr_code = String(formData.get("bsr_code") ?? "").trim();
 
-  const db = getDb();
   const q = QUARTER_RANGES[quarter as 1 | 2 | 3 | 4](fy);
-  db.transaction(() => {
+  book.tx((b) => {
     // One challan covers one return form: mixing salary and non-salary
     // deductions in a single deposit would make the 26Q/24Q undeposited
     // figures impossible to reconcile from the challan rows.
-    const pending = db
-      .prepare(
-        `SELECT id, tds_paise FROM tds_entries
-         WHERE challan_id IS NULL AND entry_date BETWEEN ? AND ?
-           AND (CASE WHEN ? = '24Q' THEN section = '192B' ELSE section <> '192B' END)`
-      )
-      .all(q.from, q.to, form) as { id: number; tds_paise: number }[];
+    const pending = b.all<{ id: number; tds_paise: number }>(
+      `SELECT id, tds_paise FROM tds_entries
+       WHERE company_id = @company_id AND challan_id IS NULL
+         AND entry_date BETWEEN @from AND @to
+         AND (CASE WHEN @form = '24Q' THEN section = '192B' ELSE section <> '192B' END)`,
+      { from: q.from, to: q.to, form }
+    );
     const amount = pending.reduce((s, e) => s + e.tds_paise, 0);
     if (amount <= 0) {
       throw new Error(`Nothing undeposited for ${form} in that quarter.`);
     }
-    const { journalId } = postManualVoucher(db, {
+    const { journalId } = postManualVoucher(b, {
       kind: "journal",
       entry_type: "tds_challan",
       entry_date: paid_on,
@@ -859,16 +850,19 @@ export async function createTdsChallan(formData: FormData): Promise<void> {
         { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: amount },
       ],
     });
-    const challanId = db
-      .prepare(
-        `INSERT INTO tds_challans (fy, quarter, form, challan_no, bsr_code, paid_on, amount_paise, journal_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(fy, quarter, form, challan_no, bsr_code, paid_on, amount, journalId, new Date().toISOString())
-      .lastInsertRowid as number;
-    const stamp = db.prepare("UPDATE tds_entries SET challan_id = ? WHERE id = ?");
-    for (const e of pending) stamp.run(challanId, e.id);
-  })();
+    const challanId = b.run(
+      `INSERT INTO tds_challans
+         (company_id, fy, quarter, form, challan_no, bsr_code, paid_on, amount_paise, journal_id, created_at)
+       VALUES (@company_id, @fy, @quarter, @form, @challan_no, @bsr_code, @paid_on, @amount, @journalId, @now)`,
+      { fy, quarter, form, challan_no, bsr_code, paid_on, amount, journalId, now: new Date().toISOString() }
+    ).lastInsertRowid as number;
+    for (const e of pending) {
+      b.run(
+        "UPDATE tds_entries SET challan_id = @challanId WHERE id = @id AND company_id = @company_id",
+        { challanId, id: e.id }
+      );
+    }
+  });
   revalidatePath("/tax/tds");
   revalidatePath("/reports");
   redirect(`/tax/tds?fy=${fy}&q=${quarter}`);
@@ -903,7 +897,7 @@ const QUARTER_RANGES: Record<1 | 2 | 3 | 4, (fy: string) => { from: string; to: 
  * day the regime returns.
  */
 export async function markCompliance(formData: FormData): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   const fy = String(formData.get("fy") ?? "").trim();
   fyStart(fy); // throws on a malformed FY key
   const rule_code = String(formData.get("rule_code") ?? "");
@@ -912,47 +906,46 @@ export async function markCompliance(formData: FormData): Promise<void> {
   if (status !== "done" && status !== "na" && status !== "clear") {
     throw new Error("A mark is done, na, or clear.");
   }
-  const db = getDb();
 
   if (status === "clear") {
-    const gone = db
-      .prepare("DELETE FROM compliance_marks WHERE rule_code = ? AND period = ?")
-      .run(rule_code, period);
+    const gone = book.run(
+      "DELETE FROM compliance_marks WHERE company_id = @company_id AND rule_code = @rule_code AND period = @period",
+      { rule_code, period }
+    );
     if (gone.changes === 0) {
       throw new Error(`No mark to clear: ${rule_code} ${period}.`);
     }
   } else {
-    if (!fyList(db).includes(fy)) {
+    if (!fyList(book).includes(fy)) {
       throw new Error(`FY ${fy} is not on the books.`);
     }
-    const settings = db
-      .prepare("SELECT * FROM settings WHERE id = 1")
-      .get() as SettingsRow;
-    const valid = generateItems(db, fy, settings, todayIso());
+    const settings = getCompany(book.db, book.companyId)!;
+    const valid = generateItems(book, fy, settings, todayIso());
     if (!valid.some((i) => i.rule_code === rule_code && i.period === period)) {
       throw new Error(`No such compliance item on the board: ${rule_code} ${period}.`);
     }
-    db.prepare(
-      `INSERT INTO compliance_marks (rule_code, period, status, marked_at, note)
-       VALUES (@rule_code, @period, @status, @marked_at, @note)
-       ON CONFLICT (rule_code, period) DO UPDATE SET
-         status = excluded.status, marked_at = excluded.marked_at, note = excluded.note`
-    ).run({
-      rule_code,
-      period,
-      status,
-      marked_at: new Date().toISOString(),
-      note: String(formData.get("note") ?? "").trim(),
-    });
+    book.run(
+      `INSERT INTO compliance_marks (company_id, rule_code, period, status, marked_at, note)
+       VALUES (@company_id, @rule_code, @period, @status, @marked_at, @note)
+       ON CONFLICT (company_id, rule_code, period) DO UPDATE SET
+         status = excluded.status, marked_at = excluded.marked_at, note = excluded.note`,
+      {
+        rule_code,
+        period,
+        status,
+        marked_at: new Date().toISOString(),
+        note: String(formData.get("note") ?? "").trim(),
+      }
+    );
   }
   revalidatePath("/compliance");
   redirect(`/compliance?fy=${fy}`);
 }
 
 export async function runExtraction(docId: number): Promise<void> {
-  await requireSession();
+  const { book } = await requireBook();
   try {
-    await extractDocument(docId);
+    await extractDocument(book, docId);
   } catch {
     // Failure state + message are already stored on the document row.
   }
@@ -964,8 +957,8 @@ export async function saveDraftRows(
   docId: number,
   rowsJson: string
 ): Promise<void> {
-  await requireSession();
-  saveDraft(docId, parseDraftRows(rowsJson));
+  const { book } = await requireBook();
+  saveDraft(book, docId, parseDraftRows(rowsJson));
   revalidatePath(`/documents/${docId}`);
 }
 
@@ -973,26 +966,26 @@ export async function saveAndPost(
   docId: number,
   rowsJson: string
 ): Promise<void> {
-  await requireSession();
-  postDocument(getDb(), docId, parseDraftRows(rowsJson));
+  const { book } = await requireBook();
+  postDocument(book, docId, parseDraftRows(rowsJson));
   revalidatePath(`/documents/${docId}`);
   revalidatePath("/documents");
   revalidatePath("/");
 }
 
 export async function deleteDocument(docId: number): Promise<void> {
-  await requireSession();
-  const db = getDb();
-  const doc = db
-    .prepare("SELECT * FROM documents WHERE id = ?")
-    .get(docId) as DocumentRow | undefined;
+  const { book } = await requireBook();
+  const doc = book.get(
+    "SELECT * FROM documents WHERE id = @docId AND company_id = @company_id",
+    { docId }
+  ) as DocumentRow | undefined;
   if (!doc) throw new Error("Document not found.");
   if (doc.status === "posted") {
     throw new Error(
       "Posted documents cannot be deleted — the books reference them. Fix forward with an opposite entry."
     );
   }
-  db.prepare("DELETE FROM documents WHERE id = ?").run(docId); // staged rows cascade
+  book.run("DELETE FROM documents WHERE id = @docId AND company_id = @company_id", { docId }); // staged rows cascade
   await unlink(path.join(process.cwd(), doc.image_path)).catch(() => {});
   revalidatePath("/documents");
   redirect("/documents");
