@@ -160,21 +160,51 @@ live :3322 dev server either. The "use a separate worktree with its own
 browser-drive and any manual script that does NOT do this chdir dance
 first — not to `npm run smoke`. Don't re-block on this again.
 
+7. `5e44a6f` — **RVOS-004 P6: the isolation suite itself**
+   (`test/isolation-suite.test.ts`). This is the ship gate's actual proof,
+   the piece #6 above landed the code for but not the evidence. Seeds
+   companies A, B (deliberately distinguishable: different parties, GSTINs,
+   PANs, asset blocks, amounts) and C (onboarded, never posted to — the "no
+   data" control), then for every report kind the export route ships —
+   read from the route's own source, not hand-copied, with a meta-test that
+   fails if a new kind is ever added here uncovered — proves B's arrival
+   changes nothing about A's or C's world (before/after snapshots), that
+   name-bearing reports (GSTR-1, TDS register, party statements) never leak
+   a foreign party/GSTIN/PAN string, and that a company's Book returns
+   `null`/nothing for another company's real row id, never the wrong row.
+   Also pins: settings (GSTIN/PAN/books-lock) are per company and the
+   compliance engine reflects that; `requireBook()` never wraps its Book
+   construction in `cache()` (grepped dal.ts, didn't assume). **Verified the
+   suite isn't vacuous**: deliberately broke `gstr1B2B`'s company_id filter,
+   confirmed the suite caught the leak (company C's GSTR-1 came back with
+   company A's invoice), then reverted. 376 tests pass (was 371).
+   **This commit was briefly, accidentally made on a DIFFERENT branch** —
+   see EVOLUTION #31 — and has been cherry-picked back here; no other work
+   was lost, see that entry for the full account.
+
+**Still open from the P6 ship gate**: migration 003 rehearsed on a COPY of
+`data/revenueos.db` with a verified restore, and the qa-runner 2-live-company
+browser drive against an isolated `:3322`-style instance (the `~/revenueos-preview`
+worktree stood up this session is the right place — see its own setup notes
+in this session's conversation; it needs a real `npm install`, not a
+symlinked `node_modules`, because Turbopack refuses to resolve through a
+symlink that points outside the project root). RVOS-005 rebase, its own
+ship gate, the LICENSE merge, and final handover are all still open.
+
 ## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
 **P6 remainder — THE RVOS-004 ship gate is not closed yet**
-The port (ratchet 28→0), the settings-singleton fix, and smoke have all
-landed/passed (`8b0267f`, see DONE #6) — what's still open is the rest of
-the proof:
-- Seed 2 companies, deliberately distinguishable data; enumerate isolation
-  assertions FROM THE EXPORTS (`/api/export/[report]/route.ts` lists every
-  report kind) — don't hand-write the list.
-- Full ship gate: code-reviewer full-branch diff (0 blockers, explicit
-  tenancy-leakage pass) · qa-runner drives :3322 with 2 LIVE companies, in
-  an isolated copy per GOTCHAS · migration 003 rehearsed on a COPY of the
-  real office db
+The port (ratchet 28→0), the settings-singleton fix, smoke, and the
+automated isolation suite have all landed/passed (`8b0267f`, `5e44a6f` —
+see DONE #6/#7) — what's still open is the parts an automated test can't
+stand in for:
+- code-reviewer full-branch diff (0 blockers, explicit tenancy-leakage pass)
+- qa-runner drives :3322 with 2 LIVE companies, in an isolated copy per
+  GOTCHAS (`~/revenueos-preview` worktree, real `npm install`)
+- migration 003 rehearsed on a COPY of the real office db
   (`data/revenueos.db`), snapshot restore verified, BEFORE it's ever run for
-  real · EVOLUTION updated.
+  real
+- EVOLUTION updated (already current through #31 as of this commit)
 
 **PORT** — `receivablesTrend`/`documentStatusBreakdown` in `reports.ts`
 (RVOS-005's two new read models) onto the Book handle. New file, not yet in
@@ -200,6 +230,18 @@ origin/master, note RVOS-003's Windows acceptance run as standing-open
 
 ## GOTCHAS
 
+- **This machine runs multiple concurrent Claude Code sessions, any of which
+  can `git checkout` this repo out from under another.** Confirmed live
+  2026-08-08 (see EVOLUTION #31): the branch this HANDOFF was written
+  against changed to an unrelated `feat/companies-page-redesign` between
+  one turn and the next, mid-task, with no warning — a commit almost landed
+  on the wrong branch. Before trusting `git status`/`git branch
+  --show-current` after any gap in a session (a resume, a long tool call,
+  picking this HANDOFF back up fresh), re-check both — don't assume the
+  branch you left checked out is still checked out. If it changed and you
+  don't know why, that's likely another session's doing, not corruption —
+  investigate (`pgrep -fl claude`, `git reflog`) before acting, and ask
+  before rewriting anything on a branch you don't have context for.
 - **A live dev server is already running on :3322** (`next dev`, long-running,
   PID varies — check `ps aux | grep "next dev"`), almost certainly Pranav's
   own session against his REAL `data/revenueos.db`. Do not kill it, do not

@@ -897,3 +897,46 @@ assumed from a nearby note. Writing caution into a HANDOFF is itself a claim
 about the codebase (see #29's rule) and needs the same verification before
 being asserted as fact — including, and maybe especially, cautions that feel
 obviously prudent to carry over from one script to a neighboring one.
+
+## 31. RVOS-004 P6 (2026-08-08): a concurrent session switched this repo's branch mid-task, and a commit almost landed on it
+
+**What happened:** After building `test/isolation-suite.test.ts` and
+verifying it (376 tests pass, including a deliberate-leak-then-revert
+check), the commit was made — and landed on `feat/companies-page-redesign`,
+not `feat/rvos-004-multi-client`. Checking `git reflog` showed the working
+tree had been `git checkout`'d from `feat/rvos-004-multi-client` to
+`feat/companies-page-redesign` between the previous HANDOFF commit
+(`07e39fe`) and this one — not something this session did. `pgrep -fl
+claude` found half a dozen other live Claude Code processes on the machine
+(VS Code extension instances). The most likely explanation: another
+concurrent session was pointed at this same repo and switched branches to
+start an unrelated task, and this session's next commit — made without
+re-checking `git branch --show-current` after resuming from a context
+gap — landed wherever the working tree happened to be pointed, not where
+the last-known state said it was.
+
+**Resolution:** Before touching anything, confirmed no destructive race was
+in progress (`git status` clean, no lock files, `git reflog` showed exactly
+one checkout then one commit — nothing else had touched
+`feat/companies-page-redesign`). Surfaced the situation to Pranav rather
+than silently fixing it, since rewriting a branch another session might be
+using is exactly the kind of action that needs a human in the loop even
+when the mechanics are safe. With his go-ahead: cherry-picked the commit
+onto `feat/rvos-004-multi-client` (clean apply, same tree), then reset
+`feat/companies-page-redesign` back to `07e39fe` — provably lossless, since
+the reflog confirmed that commit was the ONLY thing on that branch beyond
+shared history.
+
+**Delta (rule):** In an environment where multiple Claude Code sessions can
+run concurrently against the same working directory (this machine, per
+[[concurrent-session-check]] in the global memory — already flagged after a
+2026-07-18 incident in a different repo), a session resuming after ANY
+gap — a `/clear`, a long tool call, a context-compaction resume — must
+re-verify `git branch --show-current` and `git status` before its next
+commit, not trust the branch it last remembered being on. The failure mode
+here was cheap to fix (nothing else was on the wrong branch yet), but the
+same blind spot on a repo where a concurrent session HAD already committed
+would turn "whoops, wrong branch" into "whose commit do I just cherry-picked
+over," or worse, an accidental `git reset`/`checkout -- .` discarding
+someone else's uncommitted work. Re-verifying branch identity is now a
+standing check, not a one-time fix — see this HANDOFF's own GOTCHAS entry.
