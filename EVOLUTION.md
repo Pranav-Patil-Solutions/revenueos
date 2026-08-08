@@ -981,3 +981,28 @@ exercise the pre-migration code path at all. This is the same lesson as
 coat: a migration's "ship gate" needs to be exercised against a
 BEFORE-shaped database, not an idealized AFTER-shaped one, or it will
 rubber-stamp exactly the class of bug it exists to catch.
+
+## 33. RVOS-004 P6 (2026-08-08): ship gate closed — no failures on the final two passes
+
+**What happened:** The last two ship-gate line items ran clean. The
+zero-context code-reviewer pass over the FULL branch diff
+(`master...feat/rvos-004-multi-client`, 81 files) found 0 blockers,
+including its explicit tenancy-leakage pass — it independently verified
+(not just accepted) that `book.ts`'s runtime guard and the ratchet test
+share one code path, that `requireBook()` never caches a company across
+calls, and that `test/isolation-suite.test.ts` isn't vacuous. The
+qa-runner's live 2-company HTTP drive against a freshly refreshed
+`~/revenueos-preview` (this branch's tip, wiped `data/`) found 0
+cross-company leaks across every report kind, including a direct
+per-record check (`/parties/<id>` 404s for the wrong company, not just a
+filtered list) that no unit test in this repo currently performs.
+
+**No fix needed — logged per the standing rule that a clean gate run gets
+recorded too, not only the ones that found something** (see [[agentic-workflow-standard|the global instruction]]:
+every build session ends with either a logged delta or an explicit "no
+failures"). The two prior findings this same ship gate DID surface (#32:
+`verifyBackup` broken on pre-migration databases; the branch-mixup
+near-miss, #31) already prove the gate is doing real work — this entry is
+the honest complement: verified doesn't mean re-litigated. The RVOS-004
+ship gate — tests/smoke/lint/build, code-reviewer, qa-runner, and a
+verified-restorable migration rehearsal — is now fully closed.

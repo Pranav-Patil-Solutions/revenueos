@@ -215,26 +215,56 @@ first — not to `npm run smoke`. Don't re-block on this again.
    decision for whenever the live :3322 dev server is stopped and Pranav is
    ready, not something to do automatically off the back of a rehearsal.
 
-**Still open from the P6 ship gate**: code-reviewer full-branch diff, and
-the qa-runner 2-live-company browser drive against an isolated
-`:3322`-style instance (the `~/revenueos-preview` worktree stood up this
-session is the right place — it needs a real `npm install`, not a
-symlinked `node_modules`, because Turbopack refuses to resolve through a
-symlink that points outside the project root). RVOS-005 rebase, its own
-ship gate, the LICENSE merge, and final handover are all still open.
+10. **code-reviewer full-branch diff — DONE, 2026-08-08, 0 blockers.**
+    Reviewed `git diff master...feat/rvos-004-multi-client` (81 files,
+    ~5756 insertions — the whole RVOS-004 feature, P1 through P6, as one
+    diff) with an explicit tenancy-leakage pass. Independently verified
+    (not just took on trust): `book.ts`'s runtime guard and
+    `test/tenancy-ratchet.test.ts` share the same `scopingProblem`/
+    `scopedTablesIn` logic, so there's no drift between what's enforced
+    and what's tested; `requireBook`/`requireApiBook` re-validate the
+    active company fresh on every call, never cached; `exportCompany`
+    reads inside one transaction and never touches `auth_users`/
+    `auth_sessions`; migration 001 reads `settings`' actual columns via
+    `PRAGMA table_info` rather than a hardcoded list; every multi-table
+    JOIN across `reports.ts`/`posting.ts`/`vouchers.ts`/`tax/*.ts`/
+    `compliance.ts` scopes `company_id` on each joined table, not just the
+    outer WHERE; and `test/isolation-suite.test.ts` itself isn't vacuous
+    (confirmed it posts real distinguishing data and does genuine
+    before/after diffing, not a comparison of two empty results). 377/377
+    tests passing.
+
+11. **qa-runner 2-live-company drive — DONE, 2026-08-08, 0 failures.**
+    Refreshed the `~/revenueos-preview` worktree to this branch's tip
+    (`240adbc`) with a wiped `data/` dir (it had been left on a stale
+    commit from earlier in this session), confirmed a real `npm install`
+    (not the symlinked `node_modules` Turbopack rejects), booted `next dev
+    -p 3323`, and drove it via raw HTTP (curl + cookie jar — no browser
+    tool available) through first-run signup, two real companies ("QA
+    Company Alpha" id 2, "QA Company Beta" id 3, alongside the pre-existing
+    seeded company 1, untouched), each posted a party + a sale voucher at
+    a distinct, identifiable amount (₹57,321.00 / ₹83,109.00). Checked
+    all 11 export-route report kinds plus every reports/vouchers/parties/
+    pack page, in both switch directions, at the LIVE server/HTTP level —
+    a different layer than the unit-level isolation suite, catching stale
+    -session/wrong-company-picked-up bugs the unit tests structurally
+    can't. Zero cross-company leaks in any HTML page or JSON/CSV body.
+    Also directly confirmed per-RECORD scoping, not just list filtering:
+    `/parties/3` (Alpha's own party) 404s while Beta is active, and the
+    reverse. Confirmed the topbar's company-switcher `<select>` genuinely
+    reflects the active company in rendered HTML, and that `/companies`
+    correctly lists ALL companies regardless of which is active (per spec
+    R3 — staff see every company; only the DATA is scoped, not the list).
+    The real `data/revenueos.db` behind :3322 was never touched — this
+    ran entirely against the isolated worktree.
+
+**RVOS-004's ship gate is now fully closed**: tests/smoke/lint/build green,
+code-reviewer 0 blockers with an explicit tenancy-leakage pass, qa-runner
+0 failures across 2 live companies, migration rehearsed with a verified
+restore, EVOLUTION current through #32. What's left is RVOS-005's own
+work, the merge, and handover — see below.
 
 ## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
-
-**P6 remainder — THE RVOS-004 ship gate is not closed yet**
-The port (ratchet 28→0), the settings-singleton fix, smoke, the automated
-isolation suite, and the migration rehearsal (with a real bug found and
-fixed along the way) have all landed/passed (`8b0267f`, `5e44a6f`,
-`2f95c7d` — see DONE #6/#7/#8/#9) — what's still open is the two things
-that genuinely need a human-facing tool, not an automated test:
-- code-reviewer full-branch diff (0 blockers, explicit tenancy-leakage pass)
-- qa-runner drives :3322 with 2 LIVE companies, in an isolated copy per
-  GOTCHAS (`~/revenueos-preview` worktree, real `npm install`)
-- EVOLUTION updated (already current through #32 as of this commit)
 
 **PORT** — `receivablesTrend`/`documentStatusBreakdown` in `reports.ts`
 (RVOS-005's two new read models) onto the Book handle. New file, not yet in
