@@ -99,6 +99,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               go(results[active]);
             } else if (e.key === "Escape") {
               e.preventDefault();
+              // Without this, Escape also bubbles to the window-level
+              // Shortcuts listener, which dismisses the same palette a
+              // second time — harmless only because both calls are
+              // idempotent, not because this is the intended contract.
+              e.stopPropagation();
               onClose();
             }
           }}

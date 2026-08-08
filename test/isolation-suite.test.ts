@@ -13,10 +13,12 @@ import {
   balanceSheet,
   dashboardStats,
   dayBook,
+  documentStatusBreakdown,
   gstr1B2B,
   gstr3b,
   partyStatement,
   profitAndLoss,
+  receivablesTrend,
   trialBalance,
 } from "../src/lib/reports";
 import { depreciationSchedule } from "../src/lib/tax/depreciation";
@@ -117,6 +119,24 @@ function insertAsset(
   });
 }
 
+function insertDocument(
+  db: Database.Database,
+  companyId: number,
+  d: { partyId: number; status: string; imagePath: string }
+): void {
+  db.prepare(
+    `INSERT INTO documents (company_id, party_id, image_path, image_sha256, status, created_at)
+     VALUES (@company_id, @partyId, @imagePath, @sha, @status, @now)`
+  ).run({
+    company_id: companyId,
+    partyId: d.partyId,
+    imagePath: d.imagePath,
+    sha: `sha-${d.imagePath}`,
+    status: d.status,
+    now: NOW,
+  });
+}
+
 function setCompanySettings(
   db: Database.Database,
   id: number,
@@ -157,6 +177,8 @@ function postCompanyData(
     assetCost: number;
     invRef: string;
     tdsRef: string;
+    docStatus: string;
+    docImagePath: string;
   }
 ): Co {
   setCompanySettings(db, id, {
@@ -204,6 +226,11 @@ function postCompanyData(
     cost: seed.assetCost,
     purchase: "2026-04-01",
   });
+  insertDocument(db, id, {
+    partyId,
+    status: seed.docStatus,
+    imagePath: seed.docImagePath,
+  });
   return {
     id,
     book: b,
@@ -231,6 +258,8 @@ function snapshot(b: Book, settings: ReturnType<typeof getCompany>) {
     gstr3b: gstr3b(b, MONTH),
     gstr1: gstr1B2B(b, MONTH),
     dashboard: dashboardStats(b, MONTH),
+    trend: receivablesTrend(b, MONTH, 4),
+    docStatus: documentStatusBreakdown(b),
     depreciation: depreciationSchedule(b, FY),
     computation: buildComputation(b, FY),
     tdsRegister: tdsRegister(b, FY),
@@ -300,6 +329,8 @@ test("every report function: company B's arrival changes nothing about company A
     assetCost: 1_00_000_00,
     invRef: "A-INV-1",
     tdsRef: "A-TDS-1",
+    docStatus: "posted",
+    docImagePath: "alpha.jpg",
   });
   const C_ID = createCompany(db, { name: "Gamma Unused" }, NOW);
   seedAccountsForCompany(db, C_ID);
@@ -324,6 +355,11 @@ test("every report function: company B's arrival changes nothing about company A
   assert.equal(beforeC.gstr3b.net_payable_paise, 0);
   assert.deepEqual(beforeC.gstr1, []);
   assert.equal(beforeC.dashboard.journals_this_month, 0);
+  assert.deepEqual(
+    beforeC.trend.map((p) => p.closing_paise),
+    [0, 0, 0, 0]
+  );
+  assert.deepEqual(beforeC.docStatus, []);
   assert.equal(beforeC.depreciation.total_depreciation_paise, 0);
   assert.equal(beforeC.computation.book_profit_paise, 0);
   assert.deepEqual(beforeC.tdsRegister, []);
@@ -345,6 +381,8 @@ test("every report function: company B's arrival changes nothing about company A
     assetCost: 2_00_000_00,
     invRef: "B-INV-1",
     tdsRef: "B-TDS-1",
+    docStatus: "extracted",
+    docImagePath: "beta.jpg",
   });
 
   const afterA = snapshot(A.book, getCompany(db, A.id));
@@ -357,6 +395,10 @@ test("every report function: company B's arrival changes nothing about company A
   // own data must actually be present.
   assert.ok(afterA.trialBalance.lines.length > 0, "company A's trial balance is suspiciously empty");
   assert.ok(afterA.gstr1.length > 0, "company A's GSTR-1 is suspiciously empty");
+  assert.ok(
+    afterA.trend.some((p) => p.closing_paise !== 0),
+    "company A's receivables trend is suspiciously all-zero"
+  );
 
   // And B, once it exists, must show ITS OWN data and none of A's markers.
   const bBook = B.book;
@@ -389,6 +431,8 @@ test("partyStatement: a company's Book cannot read another company's party, even
     assetCost: 1_00_000_00,
     invRef: "A-INV-1",
     tdsRef: "A-TDS-1",
+    docStatus: "posted",
+    docImagePath: "alpha.jpg",
   });
   const B_ID = createCompany(db, { name: "Beta Metals" }, NOW);
   seedAccountsForCompany(db, B_ID);
@@ -406,6 +450,8 @@ test("partyStatement: a company's Book cannot read another company's party, even
     assetCost: 2_00_000_00,
     invRef: "B-INV-1",
     tdsRef: "B-TDS-1",
+    docStatus: "extracted",
+    docImagePath: "beta.jpg",
   });
 
   // Real results for each company's own party.
@@ -450,6 +496,8 @@ test("company settings (GSTIN/PAN/books-lock) are per company, not shared", () =
     assetCost: 1_00_000_00,
     invRef: "A-INV-1",
     tdsRef: "A-TDS-1",
+    docStatus: "posted",
+    docImagePath: "alpha.jpg",
   });
   const B_ID = createCompany(db, { name: "Beta Metals" }, NOW);
   seedAccountsForCompany(db, B_ID);
