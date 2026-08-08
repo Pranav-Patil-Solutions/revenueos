@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { paiseToRupeeString, thisMonth, toCsv, todayIso } from "@/lib/format";
 import { fyEnd, fyStart } from "@/lib/fy";
 import {
@@ -19,8 +19,7 @@ import {
   depreciationSchedule,
   HALF_YEAR_DAYS,
 } from "@/lib/tax/depreciation";
-import type { SettingsRow } from "@/lib/types";
-import { requireApiSession } from "@/lib/dal";
+import { requireApiBook } from "@/lib/dal";
 
 const rupees = paiseToRupeeString;
 
@@ -42,8 +41,9 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ report: string }> }
 ) {
-  const gate = await requireApiSession();
+  const gate = await requireApiBook();
   if (gate instanceof Response) return gate;
+  const { book } = gate;
   const { report } = await params;
   const sp = req.nextUrl.searchParams;
   const format = sp.get("format") ?? "json";
@@ -57,7 +57,6 @@ export async function GET(
     return NextResponse.json({ error: "month must be YYYY-MM" }, { status: 400 });
   }
 
-  const db = getDb();
   let filename: string;
   let headers: string[];
   let rows: (string | number | null)[][];
@@ -65,7 +64,7 @@ export async function GET(
 
   switch (report) {
     case "trial-balance": {
-      const tb = trialBalance(db);
+      const tb = trialBalance(book);
       filename = "trial-balance";
       headers = ["Code", "Account", "Type", "Debit", "Credit"];
       rows = tb.lines.map((l) => [
@@ -84,7 +83,7 @@ export async function GET(
       break;
     }
     case "day-book": {
-      const entries = dayBook(db, sp.has("month") ? month : undefined);
+      const entries = dayBook(book, sp.has("month") ? month : undefined);
       filename = "day-book";
       headers = ["Date", "Journal", "Type", "Memo", "Ref", "Account", "Party", "Debit", "Credit"];
       rows = entries.flatMap((e) =>
@@ -113,7 +112,7 @@ export async function GET(
         : sp.has("month")
           ? month
           : undefined;
-      const pnl = profitAndLoss(db, period);
+      const pnl = profitAndLoss(book, period);
       filename = fy ? `profit-and-loss-fy-${fy}` : "profit-and-loss";
       headers = ["Section", "Code", "Account", "Amount"];
       rows = [
@@ -133,7 +132,7 @@ export async function GET(
       break;
     }
     case "gstr-3b": {
-      const g = gstr3b(db, month);
+      const g = gstr3b(book, month);
       filename = `gstr-3b-${month}`;
       headers = ["Field", "Value"];
       rows = [
@@ -157,7 +156,7 @@ export async function GET(
       break;
     }
     case "gstr-1": {
-      const list = gstr1B2B(db, month);
+      const list = gstr1B2B(book, month);
       filename = `gstr-1-b2b-${month}`;
       headers = ["Party", "GSTIN", "State", "Date", "Doc type", "Ref", "Taxable", "CGST", "SGST", "IGST", "Gross"];
       rows = list.map((r) => [
@@ -174,7 +173,7 @@ export async function GET(
       break;
     }
     case "statement": {
-      const s = partyId > 0 ? partyStatement(db, partyId) : null;
+      const s = partyId > 0 ? partyStatement(book, partyId) : null;
       if (!s) {
         return NextResponse.json({ error: "statement needs a valid ?party=<id>" }, { status: 400 });
       }
@@ -207,10 +206,8 @@ export async function GET(
         return NextResponse.json({ error: "fy must look like 2026-27" }, { status: 400 });
       }
       const asOf = asOfParam ?? (fy ? fyEnd(fy) : todayIso());
-      const settings = db
-        .prepare("SELECT * FROM settings WHERE id = 1")
-        .get() as SettingsRow;
-      const bs = balanceSheet(db, asOf, settings);
+      const settings = getCompany(book.db, book.companyId)!;
+      const bs = balanceSheet(book, asOf, settings);
       filename = `balance-sheet-${asOf}`;
       headers = ["Section", "Group", "Code", "Account", "Amount"];
       const sectionLabel = (s: string): string =>
@@ -254,7 +251,7 @@ export async function GET(
           { status: 400 }
         );
       }
-      const schedule = depreciationSchedule(db, fy);
+      const schedule = depreciationSchedule(book, fy);
       filename = `depreciation-${fy}`;
       headers = [
         "Block", "Rate %", "Opening", "Additions (full rate)",
@@ -308,7 +305,7 @@ export async function GET(
           { status: 400 }
         );
       }
-      const c = buildComputation(db, fy);
+      const c = buildComputation(book, fy);
       filename = `computation-${fy}`;
       headers = ["Line", "Note", "Amount"];
       rows = [
@@ -399,8 +396,8 @@ export async function GET(
       }
       const s =
         report === "tds-26q"
-          ? q26Summary(db, fy, quarter as 1 | 2 | 3 | 4)
-          : q24Summary(db, fy, quarter as 1 | 2 | 3 | 4);
+          ? q26Summary(book, fy, quarter as 1 | 2 | 3 | 4)
+          : q24Summary(book, fy, quarter as 1 | 2 | 3 | 4);
       filename = `${report}-${fy}-q${quarter}`;
       headers = ["Payee", "PAN", "Section", "Deductions", "Base", "TDS"];
       rows = [

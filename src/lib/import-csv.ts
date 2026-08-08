@@ -1,3 +1,4 @@
+import type { Book } from "./book";
 import { rupeeStringToPaise } from "./format";
 import { GST_RATES } from "./tax/india-gst";
 import type { EntryType, SettleAccount } from "./types";
@@ -273,4 +274,63 @@ export function parseImportCsv(
 
   const included = rows.filter((r) => r.include).length;
   return { rows, included, excluded: rows.length - included };
+}
+
+export interface StageExcelImportInput {
+  partyId: number;
+  rows: ImportRow[];
+  imagePath: string;
+  sha256: string;
+  now: string;
+}
+
+/**
+ * Persist a parsed CSV template as a document + staged rows, scoped to the
+ * Book's active company (RVOS-004 P4). An import can only ever write into the
+ * company the caller's Book was opened for — there is no company id
+ * parameter to pass wrong, because the Book already IS the scope. This is
+ * the fix for the worst failure mode this app has: an import silently
+ * posting into the wrong client's books (see the isolation test in
+ * test/import-isolation.test.ts).
+ */
+export function stageExcelImport(book: Book, input: StageExcelImportInput): number {
+  return book.tx((b) => {
+    const docId = b.run(
+      `INSERT INTO documents
+         (company_id, party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
+       VALUES (@company_id, @party_id, @image_path, @image_sha256, 'extracted', 'excel', 'csv-template', @now, @now)`,
+      {
+        party_id: input.partyId,
+        image_path: input.imagePath,
+        image_sha256: input.sha256,
+        now: input.now,
+      }
+    ).lastInsertRowid as number;
+
+    for (const r of input.rows) {
+      b.run(
+        `INSERT INTO staged_rows
+           (company_id, document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+         VALUES (@company_id, @document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
+                 @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`,
+        {
+          document_id: docId,
+          row_no: r.row_no,
+          entry_date: r.entry_date,
+          particulars: r.particulars,
+          ref_no: r.ref_no,
+          debit_paise: r.debit_paise,
+          credit_paise: r.credit_paise,
+          entry_type: r.entry_type,
+          gst_rate: r.gst_rate,
+          settle_account: r.settle_account,
+          confidence: r.confidence,
+          include: r.include ? 1 : 0,
+          party_id: r.party_id,
+        }
+      );
+    }
+    return docId;
+  });
 }

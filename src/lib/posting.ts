@@ -1,4 +1,5 @@
-import type Database from "better-sqlite3";
+import type { Book } from "./book";
+import { getCompany } from "./companies";
 import {
   isInterState,
   splitCgstSgst,
@@ -7,6 +8,7 @@ import {
 } from "./tax/india-gst";
 import { assertNotLocked } from "./vouchers";
 import type {
+  CompanyRow,
   DocumentRow,
   DraftRowInput,
   PartyRow,
@@ -196,29 +198,31 @@ export function buildLegs(
  * callers guard: the draft action rejects posted docs, postDocument re-checks
  * inside its transaction. */
 export function applyDraftRows(
-  db: Database.Database,
+  book: Book,
   docId: number,
   rows: DraftRowInput[]
 ): void {
-  const update = db.prepare(
-    `UPDATE staged_rows SET
-       entry_date = ?, particulars = ?, ref_no = ?, debit_paise = ?, credit_paise = ?,
-       entry_type = ?, gst_rate = ?, settle_account = ?, include = ?
-     WHERE id = ? AND document_id = ?`
-  );
   for (const r of rows) {
-    update.run(
-      r.entry_date,
-      r.particulars,
-      r.ref_no,
-      r.debit_paise,
-      r.credit_paise,
-      r.entry_type,
-      r.gst_rate,
-      r.settle_account,
-      r.include ? 1 : 0,
-      r.id,
-      docId
+    book.run(
+      `UPDATE staged_rows SET
+         entry_date = @entry_date, particulars = @particulars, ref_no = @ref_no,
+         debit_paise = @debit_paise, credit_paise = @credit_paise,
+         entry_type = @entry_type, gst_rate = @gst_rate, settle_account = @settle_account,
+         include = @include
+       WHERE id = @id AND document_id = @docId AND company_id = @company_id`,
+      {
+        entry_date: r.entry_date,
+        particulars: r.particulars,
+        ref_no: r.ref_no,
+        debit_paise: r.debit_paise,
+        credit_paise: r.credit_paise,
+        entry_type: r.entry_type,
+        gst_rate: r.gst_rate,
+        settle_account: r.settle_account,
+        include: r.include ? 1 : 0,
+        id: r.id,
+        docId,
+      }
     );
   }
 }
@@ -231,14 +235,15 @@ export function applyDraftRows(
  * everything including the status flip.
  */
 export function postDocument(
-  db: Database.Database,
+  book: Book,
   docId: number,
   rows: DraftRowInput[]
 ): { journals: number } {
-  const tx = db.transaction((): number => {
-    const doc = db
-      .prepare("SELECT * FROM documents WHERE id = ?")
-      .get(docId) as DocumentRow | undefined;
+  return book.tx((b): { journals: number } => {
+    const doc = b.get(
+      "SELECT * FROM documents WHERE id = @docId AND company_id = @company_id",
+      { docId }
+    ) as DocumentRow | undefined;
     if (!doc) throw new Error("Document not found.");
     if (doc.status !== "extracted") {
       throw new Error(
@@ -249,78 +254,86 @@ export function postDocument(
     }
     // Imports can carry a party per staged row (row.party_id); NULL falls back
     // to the document's party, so the photo path is untouched.
-    const getParty = db.prepare("SELECT * FROM parties WHERE id = ?");
     const partyCache = new Map<number, PartyRow>();
     const partyFor = (partyId: number): PartyRow => {
       let p = partyCache.get(partyId);
       if (!p) {
-        p = getParty.get(partyId) as PartyRow | undefined;
+        p = b.get(
+          "SELECT * FROM parties WHERE id = @partyId AND company_id = @company_id",
+          { partyId }
+        ) as PartyRow | undefined;
         if (!p) throw new Error(`party ${partyId} not found`);
         partyCache.set(partyId, p);
       }
       return p;
     };
-    const settings = db
-      .prepare("SELECT * FROM settings WHERE id = 1")
-      .get() as SettingsRow;
-    const accounts = db
-      .prepare("SELECT id, code FROM accounts")
-      .all() as { id: number; code: string }[];
+    const settings = getCompany(b.db, b.companyId) as CompanyRow;
+    const accounts = b.all(
+      "SELECT id, code FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
 
-    applyDraftRows(db, docId, rows);
+    applyDraftRows(b, docId, rows);
 
-    const staged = db
-      .prepare(
-        "SELECT * FROM staged_rows WHERE document_id = ? ORDER BY row_no"
-      )
-      .all(docId) as StagedRow[];
+    const staged = b.all(
+      "SELECT * FROM staged_rows WHERE document_id = @docId AND company_id = @company_id ORDER BY row_no",
+      { docId }
+    ) as StagedRow[];
     const included = staged.filter((r) => r.include === 1);
     if (included.length === 0) {
       throw new Error("No rows are included — nothing to post.");
     }
 
-    const insertJournal = db.prepare(
-      `INSERT INTO journals (entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    const insertLine = db.prepare(
-      `INSERT INTO journal_lines (journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const stampRow = db.prepare(
-      "UPDATE staged_rows SET posted_journal_id = ? WHERE id = ?"
-    );
     const now = new Date().toISOString();
 
     for (const row of included) {
       if (!row.entry_date) {
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
-      assertNotLocked(db, row.entry_date);
+      assertNotLocked(b, row.entry_date);
       const legs = buildLegs(row, partyFor(row.party_id ?? doc.party_id), settings);
       assertBalanced(legs);
-      const journalId = insertJournal.run(
-        row.entry_date,
-        row.entry_type,
-        row.particulars,
-        row.ref_no,
-        docId,
-        row.id,
-        now
+      const journalId = b.run(
+        `INSERT INTO journals
+           (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
+         VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, @docId, @rowId, @now)`,
+        {
+          entry_date: row.entry_date,
+          entry_type: row.entry_type,
+          memo: row.particulars,
+          ref_no: row.ref_no,
+          docId,
+          rowId: row.id,
+          now,
+        }
       ).lastInsertRowid as number;
       legs.forEach((l, i) => {
         const acc = accountId.get(l.accountCode);
         if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
-        insertLine.run(journalId, i + 1, acc, l.partyId, l.debitPaise, l.creditPaise);
+        b.run(
+          `INSERT INTO journal_lines
+             (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
+           VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+          {
+            journalId,
+            lineNo: i + 1,
+            accountId: acc,
+            partyId: l.partyId,
+            debitPaise: l.debitPaise,
+            creditPaise: l.creditPaise,
+          }
+        );
       });
-      stampRow.run(journalId, row.id);
+      b.run(
+        "UPDATE staged_rows SET posted_journal_id = @journalId WHERE id = @rowId AND company_id = @company_id",
+        { journalId, rowId: row.id }
+      );
     }
 
-    db.prepare(
-      "UPDATE documents SET status = 'posted', posted_at = ? WHERE id = ?"
-    ).run(now, docId);
-    return included.length;
+    b.run(
+      "UPDATE documents SET status = 'posted', posted_at = @now WHERE id = @docId AND company_id = @company_id",
+      { now, docId }
+    );
+    return { journals: included.length };
   });
-  return { journals: tx() };
 }

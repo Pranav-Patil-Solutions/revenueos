@@ -2,12 +2,11 @@ import { ExportLinks } from "@/components/report-tabs";
 import { FySelect } from "@/components/fy-select";
 import { TaxTabs } from "@/components/tax-tabs";
 import { addItAdjustment, addTaxPayment, deleteItAdjustment } from "@/lib/actions";
-import { getDb } from "@/lib/db";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { buildComputation } from "@/lib/tax/computation";
 import type { ItAdjustmentRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -31,18 +30,18 @@ export default async function ComputationPage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const books = fyList(db);
+  const books = fyList(book);
   const fys = books.includes(currentFy()) ? books : [currentFy(), ...books];
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : fys[0];
 
-  const c = buildComputation(db, fy);
-  const adjustments = db
-    .prepare("SELECT * FROM it_adjustments WHERE fy = ? ORDER BY id")
-    .all(fy) as ItAdjustmentRow[];
+  const c = buildComputation(book, fy);
+  const adjustments = book.all(
+    "SELECT * FROM it_adjustments WHERE company_id = @company_id AND fy = @fy ORDER BY id",
+    { fy }
+  ) as ItAdjustmentRow[];
   const presumptive = c.presumptive !== "";
 
   return (

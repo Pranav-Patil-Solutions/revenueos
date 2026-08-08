@@ -1,9 +1,9 @@
 import { VoucherForm } from "@/components/voucher-form";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { KEY_HINTS, type VoucherNavKind } from "@/lib/keymap";
-import type { JournalKind, SettingsRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import type { CompanyRow, JournalKind } from "@/lib/types";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,7 @@ export default async function VouchersPage({
 }: {
   searchParams: Promise<{ kind?: string; posted?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
   const kind: VoucherNavKind = KINDS.includes(sp.kind as VoucherNavKind)
@@ -51,25 +51,21 @@ export default async function VouchersPage({
     : "sale";
   const postedId = /^\d+$/.test(sp.posted ?? "") ? Number(sp.posted) : null;
 
-  const db = getDb();
-  const settings = db
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
-  const parties = db
-    .prepare("SELECT id, name, kind FROM parties ORDER BY name")
-    .all() as { id: number; name: string; kind: "customer" | "supplier" }[];
-  const accounts = db
-    .prepare("SELECT code, name FROM accounts ORDER BY code")
-    .all() as { code: string; name: string }[];
-  const recent = db
-    .prepare(
-      `SELECT j.id, j.entry_date, j.entry_type, j.memo, j.ref_no,
-              (SELECT SUM(debit_paise) FROM journal_lines WHERE journal_id = j.id) AS total_paise
-       FROM journals j
-       WHERE j.source_document_id IS NULL
-       ORDER BY j.id DESC LIMIT 8`
-    )
-    .all() as RecentVoucher[];
+  const settings = getCompany(book.db, book.companyId) as CompanyRow;
+  const parties = book.all(
+    "SELECT id, name, kind FROM parties WHERE company_id = @company_id ORDER BY name"
+  ) as { id: number; name: string; kind: "customer" | "supplier" }[];
+  const accounts = book.all(
+    "SELECT code, name FROM accounts WHERE company_id = @company_id ORDER BY code"
+  ) as { code: string; name: string }[];
+  const recent = book.all(
+    `SELECT j.id, j.entry_date, j.entry_type, j.memo, j.ref_no,
+            (SELECT SUM(debit_paise) FROM journal_lines
+              WHERE journal_id = j.id AND company_id = @company_id) AS total_paise
+     FROM journals j
+     WHERE j.company_id = @company_id AND j.source_document_id IS NULL
+     ORDER BY j.id DESC LIMIT 8`
+  ) as RecentVoucher[];
 
   return (
     <div>

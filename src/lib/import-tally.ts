@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import type { Book } from "./book";
 import { rupeeStringToPaise } from "./format";
 import { ACC } from "./posting";
 import { GST_RATES, splitExclusive, splitInclusive } from "./tax/india-gst";
@@ -26,6 +27,10 @@ import type {
  * 2. Ledger names are mapped to this book's accounts/parties ONCE and the
  *    mapping persists (ledger_mappings), so the second import of the same
  *    book asks nothing.
+ *
+ * `finalizeTallyImport` (RVOS-004 P4) is the one function here that writes —
+ * it takes the caller's Book, never a bare db + company id, so a voucher can
+ * only ever land in the company that Book was opened for.
  *
  * Tally's sign convention: AMOUNT is negative for a debit, positive for a
  * credit. Every voucher's ledger entries sum to zero — we assert that rather
@@ -504,4 +509,88 @@ export function tallyVouchersToRows(
 
   const included = rows.filter((r) => r.include).length;
   return { rows, included, excluded: rows.length - included };
+}
+
+export interface FinalizeTallyImportInput {
+  partyId: number;
+  /** Newly chosen mappings from the mapping form — upserted before the
+   * re-read below, so previously-saved mappings and these are both in play. */
+  mappings: LedgerMapping[];
+  vouchers: TallyVoucher[];
+  taxInclusive: boolean;
+  imagePath: string;
+  sha256: string;
+  now: string;
+}
+
+/**
+ * Step 2 of the Tally import, persisted — RVOS-004 P4. Upserts the ledger
+ * mappings just chosen, re-reads the full mapping table, stages every
+ * voucher, and writes the document — ALL against the Book's active company,
+ * in ONE transaction. A caller holding company B's Book can only ever write
+ * company B's rows: there is no company id parameter to get wrong, because
+ * the Book already IS the scope (see test/import-isolation.test.ts).
+ */
+export function finalizeTallyImport(book: Book, input: FinalizeTallyImportInput): number {
+  return book.tx((b) => {
+    for (const m of input.mappings) {
+      b.run(
+        `INSERT INTO ledger_mappings (company_id, ledger_name, target_kind, account_id, party_id, created_at)
+         VALUES (@company_id, @ledger_name, @target_kind, @account_id, @party_id, @created_at)
+         ON CONFLICT(company_id, ledger_name) DO UPDATE SET
+           target_kind = excluded.target_kind,
+           account_id  = excluded.account_id,
+           party_id    = excluded.party_id`,
+        { ...m, created_at: input.now }
+      );
+    }
+
+    const mappings = b.all<LedgerMapping>(
+      "SELECT * FROM ledger_mappings WHERE company_id = @company_id"
+    );
+    const accounts = b.all<MappedAccount>(
+      "SELECT id, code, type FROM accounts WHERE company_id = @company_id"
+    );
+    const parsed = tallyVouchersToRows(input.vouchers, mappings, accounts, {
+      taxInclusive: input.taxInclusive,
+    });
+
+    const docId = b.run(
+      `INSERT INTO documents
+         (company_id, party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
+       VALUES (@company_id, @party_id, @image_path, @image_sha256, 'extracted', 'tally', 'tally-daybook', @now, @now)`,
+      {
+        party_id: input.partyId,
+        image_path: input.imagePath,
+        image_sha256: input.sha256,
+        now: input.now,
+      }
+    ).lastInsertRowid as number;
+
+    for (const r of parsed.rows) {
+      b.run(
+        `INSERT INTO staged_rows
+           (company_id, document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+         VALUES (@company_id, @document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
+                 @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`,
+        {
+          document_id: docId,
+          row_no: r.row_no,
+          entry_date: r.entry_date,
+          particulars: r.particulars,
+          ref_no: r.ref_no,
+          debit_paise: r.debit_paise,
+          credit_paise: r.credit_paise,
+          entry_type: r.entry_type,
+          gst_rate: r.gst_rate,
+          settle_account: r.settle_account,
+          confidence: r.confidence,
+          include: r.include ? 1 : 0,
+          party_id: r.party_id,
+        }
+      );
+    }
+    return docId;
+  });
 }

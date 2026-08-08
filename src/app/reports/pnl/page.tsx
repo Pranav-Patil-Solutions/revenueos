@@ -1,10 +1,9 @@
-import { getDb } from "@/lib/db";
 import { ExportLinks, ReportTabs } from "@/components/report-tabs";
 import { FySelect } from "@/components/fy-select";
 import { inr, monthLabel } from "@/lib/format";
 import { fyEnd, fyLabel, fyList, fyStart } from "@/lib/fy";
 import { profitAndLoss, type PnlPeriod } from "@/lib/reports";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -13,18 +12,17 @@ export default async function PnlPage({
 }: {
   searchParams: Promise<{ month?: string; fy?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const fys = fyList(db);
+  const fys = fyList(book);
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : undefined;
   const month =
     !fy && /^\d{4}-\d{2}$/.test(sp.month ?? "") ? sp.month : undefined;
   const period: PnlPeriod | undefined = fy
     ? { from: fyStart(fy), to: fyEnd(fy) }
     : month;
-  const pnl = profitAndLoss(db, period);
+  const pnl = profitAndLoss(book, period);
   const hasData = pnl.income_lines.length > 0 || pnl.expense_lines.length > 0;
 
   const line = "flex items-center justify-between px-5 py-2.5 text-[13px]";

@@ -2,12 +2,11 @@ import { ExportLinks } from "@/components/report-tabs";
 import { FySelect } from "@/components/fy-select";
 import { TaxTabs } from "@/components/tax-tabs";
 import { createTdsChallan, createTdsVoucher } from "@/lib/actions";
-import { getDb } from "@/lib/db";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
 import type { PartyRow, TdsChallanRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -20,24 +19,24 @@ export default async function TdsPage({
 }: {
   searchParams: Promise<{ fy?: string; q?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const books = fyList(db);
+  const books = fyList(book);
   const fys = books.includes(currentFy()) ? books : [currentFy(), ...books];
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : fys[0];
   const quarter = ([1, 2, 3, 4] as const).find((n) => String(n) === sp.q) ?? 1;
 
-  const register = tdsRegister(db, fy);
-  const q26 = q26Summary(db, fy, quarter);
-  const q24 = q24Summary(db, fy, quarter);
-  const challans = db
-    .prepare("SELECT * FROM tds_challans WHERE fy = ? ORDER BY paid_on DESC, id DESC")
-    .all(fy) as TdsChallanRow[];
-  const parties = db
-    .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
-    .all() as PartyRow[];
+  const register = tdsRegister(book, fy);
+  const q26 = q26Summary(book, fy, quarter);
+  const q24 = q24Summary(book, fy, quarter);
+  const challans = book.all(
+    "SELECT * FROM tds_challans WHERE company_id = @company_id AND fy = @fy ORDER BY paid_on DESC, id DESC",
+    { fy }
+  ) as TdsChallanRow[];
+  const parties = book.all(
+    "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
+  ) as PartyRow[];
   const undepositedAll = register
     .filter((r) => r.challan_id === null)
     .reduce((s, r) => s + r.tds_paise, 0);

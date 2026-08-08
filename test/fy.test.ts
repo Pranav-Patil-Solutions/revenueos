@@ -1,7 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import { todayIso } from "../src/lib/format";
 import {
   currentFy,
@@ -73,15 +76,17 @@ test("fyList: spans earliest journal through current FY, newest first", () => {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
+  const b = book(db, 1);
 
   // Empty books → just the current FY.
-  assert.deepEqual(fyList(db), [currentFy()]);
+  assert.deepEqual(fyList(b), [currentFy()]);
 
   db.prepare(
-    `INSERT INTO journals (entry_date, entry_type, created_at)
-     VALUES ('2024-05-10', 'sale', '2024-05-10T00:00:00Z')`
+    `INSERT INTO journals (company_id, entry_date, entry_type, created_at)
+     VALUES (1, '2024-05-10', 'sale', '2024-05-10T00:00:00Z')`
   ).run();
-  const list = fyList(db);
+  const list = fyList(b);
   assert.equal(list[0], currentFy());
   assert.equal(list[list.length - 1], "2024-25");
   // Contiguous, descending.

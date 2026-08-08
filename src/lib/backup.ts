@@ -12,6 +12,10 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { SCOPED_TABLES } from "./book";
+import { initSchema } from "./db";
+import { migrate } from "./migrate";
+import { MIGRATIONS } from "./migrations";
 
 /**
  * Backups — RVOS-003 P3.
@@ -54,6 +58,20 @@ export interface BackupResult {
   sha256: string;
   created_at: string;
   uploads_copied: number;
+}
+
+export interface CompanyExportResult {
+  dir: string;
+  db_path: string;
+  bytes: number;
+  sha256: string;
+  created_at: string;
+  company_id: number;
+  /** Row count actually copied, per scoped table — visible so "0 accounts,
+   * 0 journals" reads as a red flag rather than a silent empty export. */
+  row_counts: Record<string, number>;
+  uploads_copied: number;
+  uploads_expected: number;
 }
 
 export interface BackupFile {
@@ -148,6 +166,145 @@ export async function createBackup(
 }
 
 /**
+ * Export ONE company's own books into a standalone database — RVOS-004 P5.
+ *
+ * `npm run backup` protects the whole office; this is for the day a client
+ * asks for their own books, or moves their books to their own CA. Handing
+ * over the whole-DB backup would hand over every OTHER client's data too —
+ * "an import posting into the wrong client's books" was P4's worst failure
+ * mode, and an export leaking a second client's data into a handoff file is
+ * the mirror image of it, so this is built and verified with the same
+ * paranoia (see the `opts.companyId` mode of `verifyBackup`).
+ *
+ * The output is a real, openable SQLite database at the CURRENT schema
+ * (built via `initSchema` + the full migration chain, not a copy of the live
+ * file), containing only: that one row from `companies`, and every row this
+ * company owns across `SCOPED_TABLES`. IDs are preserved as-is — every
+ * foreign key inside one company's own data already only ever points at that
+ * company's own rows, so no remapping is needed or attempted.
+ *
+ * Deliberately NOT copied: `auth_users` / `auth_sessions` (firm staff
+ * credentials belong to this office's installation, never to a client
+ * handoff). The company's own profile/tax-identity fields ARE copied — they
+ * now live on its own `companies` row (RVOS-004 P6 retired the old GLOBAL
+ * `settings` singleton), so exporting that one row is exactly right, not a
+ * cross-company leak.
+ */
+export async function exportCompany(
+  sourceDb: Database.Database,
+  companyId: number,
+  backupsDir: string,
+  now: string,
+  filesRoot?: string
+): Promise<CompanyExportResult> {
+  const company = sourceDb
+    .prepare("SELECT * FROM companies WHERE id = @id")
+    .get({ id: companyId }) as Record<string, unknown> | undefined;
+  if (!company) throw new Error(`No such company: ${companyId}`);
+
+  const dir = path.join(backupsDir, `${BACKUP_PREFIX}company-${companyId}-${stampFor(now)}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = path.join(dir, DB_BASENAME);
+
+  const rowCounts: Record<string, number> = {};
+  try {
+    const dest = new DatabaseCtor(dbPath);
+    try {
+      initSchema(dest);
+      migrate(dest, MIGRATIONS, { now });
+
+      const insertRow = (table: string, row: Record<string, unknown>): void => {
+        const cols = Object.keys(row);
+        dest
+          .prepare(
+            `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols
+              .map((c) => `@${c}`)
+              .join(", ")})`
+          )
+          .run(row);
+      };
+
+      // Read every table from ONE snapshot of sourceDb: without this,
+      // concurrent writes from the live app between two of these SELECTs
+      // (e.g. a journal committed after its account but before its lines)
+      // could produce a torn, non-atomic export — the CLI promises "safe to
+      // run while the app is serving," so the read side needs the same
+      // consistency guarantee createBackup's online-backup API gives the
+      // whole-db path.
+      const tableRows: Record<string, Record<string, unknown>[]> = sourceDb.transaction(() => {
+        const snapshot: Record<string, Record<string, unknown>[]> = {};
+        for (const table of SCOPED_TABLES) {
+          snapshot[table] = sourceDb
+            .prepare(`SELECT * FROM ${table} WHERE company_id = @company_id`)
+            .all({ company_id: companyId }) as Record<string, unknown>[];
+        }
+        return snapshot;
+      })();
+
+      // `defer_foreign_keys` (not the ordering of SCOPED_TABLES) is what keeps
+      // this correct: tds_entries.challan_id REFERENCES tds_challans(id), but
+      // tds_entries is copied first in SCOPED_TABLES order. Deferring checks
+      // to commit means insertion order never has to match FK dependency
+      // order — a real requirement caught in review, verified with a
+      // reconciled-challan fixture in test/backup.test.ts.
+      dest.pragma("defer_foreign_keys = ON");
+      dest.transaction(() => {
+        insertRow("companies", company);
+        for (const table of SCOPED_TABLES) {
+          rowCounts[table] = tableRows[table].length;
+          for (const row of tableRows[table]) insertRow(table, row);
+        }
+      })();
+    } finally {
+      dest.close();
+    }
+
+    const problem = verifyBackup(dbPath, { companyId });
+    if (problem) {
+      throw new Error(`Company export failed verification: ${problem}`);
+    }
+
+    let uploadsCopied = 0;
+    let uploadsExpected = 0;
+    if (filesRoot) {
+      const docs = sourceDb
+        .prepare("SELECT image_path FROM documents WHERE company_id = @company_id")
+        .all({ company_id: companyId }) as { image_path: string }[];
+      uploadsExpected = docs.length;
+      if (docs.length > 0) {
+        const destUploads = path.join(dir, "uploads");
+        mkdirSync(destUploads, { recursive: true });
+        for (const { image_path } of docs) {
+          const src = path.join(filesRoot, image_path);
+          // Best-effort: an older/pruned upload should not fail the whole
+          // export — uploads_copied vs uploads_expected makes a gap visible
+          // rather than silent, which is the property that actually matters.
+          if (existsSync(src)) {
+            cpSync(src, path.join(destUploads, path.basename(image_path)));
+            uploadsCopied++;
+          }
+        }
+      }
+    }
+
+    return {
+      dir,
+      db_path: dbPath,
+      bytes: statSync(dbPath).size,
+      sha256: await sha256File(dbPath),
+      created_at: now,
+      company_id: companyId,
+      row_counts: rowCounts,
+      uploads_copied: uploadsCopied,
+      uploads_expected: uploadsExpected,
+    };
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+/**
  * Re-open a snapshot and prove it is a usable book. Returns null when good, or
  * a description of the problem.
  *
@@ -155,8 +312,18 @@ export async function createBackup(
  * structurally sound, not that it holds our schema. A zero-byte or foreign
  * database passes structural checks and would be a catastrophic thing to
  * restore, so the accounting tables are probed too.
+ *
+ * `opts.companyId` (RVOS-004 P5) turns on the per-company assertion a
+ * company EXPORT needs: not just "this file has rows", but "this file has
+ * ONLY this company's rows". A per-company export that leaked a second
+ * client's data into the file would still pass the plain checks above — the
+ * db is structurally fine and its journals still balance — which is exactly
+ * why this is a separate, additive check rather than a replacement.
  */
-export function verifyBackup(dbPath: string): string | null {
+export function verifyBackup(
+  dbPath: string,
+  opts?: { companyId?: number }
+): string | null {
   if (!existsSync(dbPath)) return "file does not exist";
   let db: Database.Database | null = null;
   try {
@@ -165,7 +332,21 @@ export function verifyBackup(dbPath: string): string | null {
     const verdict = check[0]?.integrity_check;
     if (verdict !== "ok") return `integrity_check said "${verdict}"`;
 
-    for (const table of ["journals", "journal_lines", "accounts", "settings"]) {
+    // The company-identity table is `companies` from migration 001 onward,
+    // but a backup can legitimately be taken of a database BEFORE that
+    // migration has ever run (every real install, right up until someone
+    // runs `npm run migrate`) — where it is still the old `settings`
+    // singleton. Hardcoding `companies` here would fail every pre-migration
+    // backup outright, which is the opposite of what a "back up first"
+    // precondition is for. Accept whichever one the schema actually has.
+    const hasTable = (name: string): boolean =>
+      db!.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name").get({
+        name,
+      }) !== undefined;
+    const identityTable = hasTable("companies") ? "companies" : hasTable("settings") ? "settings" : null;
+    if (!identityTable) return "neither companies nor settings table exists";
+
+    for (const table of ["journals", "journal_lines", "accounts", identityTable]) {
       db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
     }
     const lines = db.prepare("SELECT COUNT(*) AS n FROM journal_lines").get() as {
@@ -180,6 +361,25 @@ export function verifyBackup(dbPath: string): string | null {
     if (lines.n > 0 && sum.d !== 0) {
       return `restored journal lines do not balance (net ${sum.d} paise)`;
     }
+
+    if (opts?.companyId !== undefined) {
+      const companies = db.prepare("SELECT id FROM companies").all() as { id: number }[];
+      if (companies.length !== 1 || companies[0].id !== opts.companyId) {
+        return (
+          `expected exactly one company (id ${opts.companyId}) in a per-company ` +
+          `export, found: ${companies.map((c) => c.id).join(", ") || "none"}`
+        );
+      }
+      for (const table of SCOPED_TABLES) {
+        const leaked = db
+          .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE company_id != @id`)
+          .get({ id: opts.companyId }) as { n: number };
+        if (leaked.n > 0) {
+          return `${table} has ${leaked.n} row(s) belonging to a DIFFERENT company — export leaked`;
+        }
+      }
+    }
+
     return null;
   } catch (err) {
     return err instanceof Error ? err.message : String(err);

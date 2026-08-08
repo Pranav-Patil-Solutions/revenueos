@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDb } from "@/lib/db";
 import { deleteDocument, runExtraction } from "@/lib/actions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { LedgerImage } from "@/components/ledger-image";
@@ -8,7 +7,7 @@ import { ReviewTable } from "@/components/review-table";
 import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp } from "@/lib/format";
 import type { DocumentWithParty, StagedRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -17,37 +16,39 @@ export default async function DocumentReviewPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const { id } = await params;
-  const db = getDb();
-  const doc = db
-    .prepare(
-      `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
-       FROM documents d JOIN parties p ON p.id = d.party_id
-       WHERE d.id = ?`
-    )
-    .get(Number(id)) as DocumentWithParty | undefined;
+  const doc = book.get(
+    `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
+     FROM documents d
+     JOIN parties p ON p.id = d.party_id AND p.company_id = @company_id
+     WHERE d.id = @id AND d.company_id = @company_id`,
+    { id: Number(id) }
+  ) as DocumentWithParty | undefined;
   if (!doc) notFound();
 
-  const rows = db
-    .prepare("SELECT * FROM staged_rows WHERE document_id = ? ORDER BY row_no")
-    .all(doc.id) as StagedRow[];
+  const rows = book.all<StagedRow>(
+    "SELECT * FROM staged_rows WHERE document_id = @docId AND company_id = @company_id ORDER BY row_no",
+    { docId: doc.id }
+  );
   const isPhoto = doc.source_type === "photo";
   // Imports carry a party per row — the review grid shows who each row books to.
   const partyNames = isPhoto
     ? undefined
     : Object.fromEntries(
-        (db.prepare("SELECT id, name FROM parties").all() as {
-          id: number;
-          name: string;
-        }[]).map((p) => [p.id, p.name])
+        book
+          .all<{ id: number; name: string }>(
+            "SELECT id, name FROM parties WHERE company_id = @company_id"
+          )
+          .map((p) => [p.id, p.name])
       );
-  const duplicateOf = db
-    .prepare(
-      "SELECT id FROM documents WHERE image_sha256 = ? AND id < ? ORDER BY id LIMIT 1"
-    )
-    .get(doc.image_sha256, doc.id) as { id: number } | undefined;
+  const duplicateOf = book.get(
+    `SELECT id FROM documents
+     WHERE company_id = @company_id AND image_sha256 = @sha256 AND id < @docId
+     ORDER BY id LIMIT 1`,
+    { sha256: doc.image_sha256, docId: doc.id }
+  ) as { id: number } | undefined;
 
   const extractAction = runExtraction.bind(null, doc.id);
   const deleteAction = deleteDocument.bind(null, doc.id);

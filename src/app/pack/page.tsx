@@ -1,6 +1,6 @@
 import { FySelect } from "@/components/fy-select";
 import { PrintButton } from "@/components/print-button";
-import { getDb } from "@/lib/db";
+import { getCompany } from "@/lib/companies";
 import { formatDate, inr, monthLabel, todayIso } from "@/lib/format";
 import { currentFy, fyEnd, fyLabel, fyList, fyStart, monthsOfFy } from "@/lib/fy";
 import { balanceSheet, gstr3b, partyStatement, profitAndLoss } from "@/lib/reports";
@@ -12,13 +12,8 @@ import {
   postedDepreciation,
 } from "@/lib/tax/depreciation";
 import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
-import type {
-  FixedAssetRow,
-  PartyRow,
-  SettingsRow,
-  TdsChallanRow,
-} from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import type { FixedAssetRow, PartyRow, TdsChallanRow } from "@/lib/types";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -81,24 +76,21 @@ export default async function PackPage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const books = fyList(db);
+  const books = fyList(book);
   const fys = books.includes(currentFy()) ? books : [currentFy(), ...books];
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : fys[0];
   const end = fyEnd(fy);
-  const settings = db
-    .prepare("SELECT * FROM settings WHERE id = 1")
-    .get() as SettingsRow;
+  const settings = getCompany(book.db, book.companyId)!;
 
   // ---- compose everything from the existing engines ----
-  const bs = balanceSheet(db, end, settings);
-  const pnl = profitAndLoss(db, { from: fyStart(fy), to: end });
-  const comp = buildComputation(db, fy);
+  const bs = balanceSheet(book, end, settings);
+  const pnl = profitAndLoss(book, { from: fyStart(fy), to: end });
+  const comp = buildComputation(book, fy);
 
-  const gstMonths = monthsOfFy(fy).map((m) => gstr3b(db, m));
+  const gstMonths = monthsOfFy(fy).map((m) => gstr3b(book, m));
   const gstTotal = gstMonths.reduce(
     (t, g) => ({
       outward: t.outward + g.outward_taxable_paise,
@@ -115,20 +107,19 @@ export default async function PackPage({
     Object.values(gstTotal).some((v) => v !== 0);
 
   const tdsQuarters = ([1, 2, 3, 4] as const)
-    .flatMap((q) => [q26Summary(db, fy, q), q24Summary(db, fy, q)])
+    .flatMap((q) => [q26Summary(book, fy, q), q24Summary(book, fy, q)])
     .filter((s) => s.lines.length > 0);
-  const register = tdsRegister(db, fy);
+  const register = tdsRegister(book, fy);
   const undeposited = register
     .filter((r) => r.challan_id === null)
     .reduce((s, r) => s + r.tds_paise, 0);
-  const challans = db
-    .prepare(
-      "SELECT * FROM tds_challans WHERE fy = ? ORDER BY paid_on, id"
-    )
-    .all(fy) as TdsChallanRow[];
+  const challans = book.all<TdsChallanRow>(
+    "SELECT * FROM tds_challans WHERE company_id = @company_id AND fy = @fy ORDER BY paid_on, id",
+    { fy }
+  );
 
-  const schedule = depreciationSchedule(db, fy);
-  const posted = postedDepreciation(db, fy);
+  const schedule = depreciationSchedule(book, fy);
+  const posted = postedDepreciation(book, fy);
   const liveBlocks = schedule.blocks.filter(
     (b) =>
       b.opening_paise !== 0 ||
@@ -137,18 +128,18 @@ export default async function PackPage({
       b.disposals_paise !== 0 ||
       b.closing_paise !== 0
   );
-  const assets = db
-    .prepare("SELECT * FROM fixed_assets ORDER BY purchase_date, id")
-    .all() as FixedAssetRow[];
+  const assets = book.all<FixedAssetRow>(
+    "SELECT * FROM fixed_assets WHERE company_id = @company_id ORDER BY purchase_date, id"
+  );
 
   // Annexure: per-party positions on BOTH control accounts as at FY end —
   // partyStatement(…, end) dates its own ledger AND the cross ledger. A
   // customer's payable (or a supplier's receivable) is a cross-ledger row
   // shown on the side it actually sits; hiding it would break the
   // reconciliation to the BS control figures below (the RVOS-001 lesson).
-  const parties = db
-    .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
-    .all() as PartyRow[];
+  const parties = book.all<PartyRow>(
+    "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
+  );
   type AnnexureRow = {
     key: string;
     name: string;
@@ -159,7 +150,7 @@ export default async function PackPage({
   const debtors: AnnexureRow[] = [];
   const creditors: AnnexureRow[] = [];
   for (const p of parties) {
-    const st = partyStatement(db, p.id, end);
+    const st = partyStatement(book, p.id, end);
     if (!st) continue;
     const own: AnnexureRow = {
       key: `${p.id}-own`,

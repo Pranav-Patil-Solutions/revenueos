@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { migrate } from "./migrate";
+import { MIGRATIONS } from "./migrations";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
@@ -340,6 +342,31 @@ export function seedCoreData(db: Database.Database): void {
   tx();
 }
 
+/**
+ * Chart of accounts for ONE newly onboarded client — RVOS-004 P4.
+ *
+ * Deliberately NOT `seedCoreData`: that function is company-1-specific global
+ * bootstrap that runs on every boot and implicitly defaults `company_id` to 1
+ * (see the DDL's `DEFAULT 1`). Repurposing it for an arbitrary company would
+ * either silently keep landing accounts on company 1 or require threading a
+ * company id through a function every other caller expects to be
+ * boot-time/global. `accounts.code`'s UNIQUE is `(company_id, code)` since
+ * migration 001, so this is safe to call once per new company — and
+ * `INSERT OR IGNORE` keeps it idempotent if it is ever called twice.
+ */
+export function seedAccountsForCompany(db: Database.Database, companyId: number): void {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO accounts (company_id, code, name, type, group_code)
+     VALUES (@company_id, @code, @name, @type, @group_code)`
+  );
+  const tx = db.transaction(() => {
+    for (const a of SEED_ACCOUNTS) {
+      insert.run({ company_id: companyId, ...a });
+    }
+  });
+  tx();
+}
+
 /** Demo parties so DEMO_MODE works on a fresh db without any setup. */
 export function seedDemoParties(db: Database.Database): void {
   const count = db.prepare("SELECT COUNT(*) AS n FROM parties").get() as {
@@ -396,12 +423,37 @@ export function configureConnection(db: Database.Database): void {
   db.pragma("wal_autocheckpoint = 64");
 }
 
+/**
+ * Run pending migrations with NO pre-migration snapshot.
+ *
+ * This is what every ordinary app boot does — dev, test, and a normal
+ * `npm start`. It is still transactionally safe: `migrate()` runs each step
+ * in its own transaction, re-proves the books balance after every step, and
+ * rolls back on any failure (see migrate.ts). What it does NOT do is take an
+ * external, independently-verified backup first.
+ *
+ * `createBackup` (backup.ts) is genuinely async — it drives SQLite's online
+ * backup API — and `getDb()` is a synchronous singleton called from many
+ * places that cannot await it. Restructuring that is out of scope here.
+ *
+ * The real, once-ever cutover of an office's live database is NOT this path:
+ * it is `npm run migrate` (scripts/migrate.ts), which takes and verifies a
+ * real backup first and only then calls this same `migrate()` with that
+ * backup's path already in hand. Because migrations are idempotent, running
+ * that script before the app's first post-upgrade boot makes this call here
+ * a no-op — which is the intended order of operations, not a race.
+ */
+function migrateInProcess(db: Database.Database): void {
+  migrate(db, MIGRATIONS, { now: new Date().toISOString() });
+}
+
 function open(): Database.Database {
   mkdirSync(UPLOADS_DIR, { recursive: true });
   const db = new Database(path.join(DATA_DIR, "revenueos.db"));
   configureConnection(db);
   initSchema(db);
   seedCoreData(db);
+  migrateInProcess(db);
   if (process.env.DEMO_MODE === "1") seedDemoParties(db);
   return db;
 }

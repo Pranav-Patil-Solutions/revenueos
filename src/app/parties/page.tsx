@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { getDb } from "@/lib/db";
 import { createParty } from "@/lib/actions";
 import { formatDate } from "@/lib/format";
 import type { PartyRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -22,11 +21,11 @@ function KindPill({ kind }: { kind: string }) {
 }
 
 export default async function PartiesPage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const parties = getDb()
-    .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
-    .all() as PartyRow[];
+  const parties = book.all<PartyRow>(
+    "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
+  );
 
   return (
     <div>

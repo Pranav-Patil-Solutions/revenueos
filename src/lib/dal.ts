@@ -1,6 +1,8 @@
 // See the note in session.ts: `server-only` is not a dependency of this repo.
 import { cache } from "react";
 import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
+import { assertUsableCompany, book, type Book } from "./book";
 import { getDb } from "./db";
 import { lookupSession, type SessionUser } from "./auth";
 import { readSessionToken } from "./session";
@@ -57,4 +59,67 @@ export async function requireApiSession(): Promise<SessionUser | Response> {
   const user = await getSessionUser();
   if (!user) return new Response(null, { status: 401 });
   return user;
+}
+
+/**
+ * Assert a session AND an active, usable company — for pages and actions
+ * that read or write book data (RVOS-004 P3). Redirects to /companies when
+ * none is selected, or when the one on the session was archived or deleted
+ * out from under it since it was chosen — `assertUsableCompany` re-checks
+ * every call rather than trusting a value cached on the session row, so an
+ * archive mid-session self-heals to the picker instead of quietly reading a
+ * dead company's empty book.
+ *
+ * Returns a Book bound to `getDb()` fresh on every call (not memoised): the
+ * Next docs' `cache()` dedupe is per-REQUEST, and a company switch happens
+ * on its own request, so there is no stale-handle window to guard against —
+ * but a handle is cheap to construct and holding one across requests would
+ * be the mistake, so this deliberately does not use `cache()` itself.
+ */
+export async function requireBook(): Promise<{ user: SessionUser; book: Book }> {
+  const user = await requireSession();
+  if (user.companyId == null) redirect("/companies");
+  const db = getDb();
+  let usable = true;
+  try {
+    assertUsableCompany(db, user.companyId);
+  } catch {
+    usable = false;
+  }
+  if (!usable) redirect("/companies");
+  return { user, book: book(db, user.companyId) };
+}
+
+/**
+ * Assert a session AND an active, usable company for a ROUTE HANDLER —
+ * requireBook's counterpart for API callers (RVOS-004 P4), same reasoning as
+ * requireApiSession vs requireSession: an API caller (the import routes) wants
+ * a status code it can check with `res.ok`, never requireBook's HTML redirect
+ * to /companies, which would answer a `fetch()` with a 307 to a login-shaped
+ * page instead of the JSON error the client expects.
+ *
+ *   const gate = await requireApiBook();
+ *   if (gate instanceof Response) return gate;
+ */
+export async function requireApiBook(): Promise<
+  { user: SessionUser; book: Book } | Response
+> {
+  const gate = await requireApiSession();
+  if (gate instanceof Response) return gate;
+  if (gate.companyId == null) {
+    return NextResponse.json(
+      { error: "No company is active — choose one at /companies first." },
+      { status: 409 }
+    );
+  }
+  const db = getDb();
+  try {
+    assertUsableCompany(db, gate.companyId);
+  } catch {
+    return NextResponse.json(
+      { error: "The active company is no longer available — choose one at /companies." },
+      { status: 409 }
+    );
+  }
+  return { user: gate, book: book(db, gate.companyId) };
 }

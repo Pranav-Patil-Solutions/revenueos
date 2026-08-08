@@ -1,7 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { book } from "../src/lib/book";
 import { initSchema, seedCoreData } from "../src/lib/db";
+import { migrate } from "../src/lib/migrate";
+import { MIGRATIONS } from "../src/lib/migrations";
 import { validateExtraction } from "../src/lib/extraction-schema";
 import { DEMO_FIXTURE } from "../src/lib/extraction";
 import { assertBalanced, buildLegs, postDocument, type Leg } from "../src/lib/posting";
@@ -178,6 +181,7 @@ function setupDb(): Database.Database {
   const db = new Database(":memory:");
   initSchema(db);
   seedCoreData(db);
+  migrate(db, MIGRATIONS, { now: "2026-01-01T00:00:00.000Z" });
   db.prepare(
     `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
      VALUES ('Sharma Traders', 'customer', '', '27', '', '2026-07-01T00:00:00Z')`
@@ -222,7 +226,8 @@ function draftsFromStaged(db: Database.Database, excludeRowNos: number[] = []): 
 
 test("postDocument: demo fixture posts 9 journals, books balance, AR = ₹12,580.00", () => {
   const db = setupDb();
-  const { journals } = postDocument(db, 1, draftsFromStaged(db, [10]));
+  const b = book(db, 1);
+  const { journals } = postDocument(b, 1, draftsFromStaged(db, [10]));
   assert.equal(journals, 9);
 
   const sum = db
@@ -256,18 +261,20 @@ test("postDocument: demo fixture posts 9 journals, books balance, AR = ₹12,580
 
 test("postDocument: double-post throws (idempotency re-check inside the tx)", () => {
   const db = setupDb();
-  postDocument(db, 1, draftsFromStaged(db, [10]));
-  assert.throws(() => postDocument(db, 1, draftsFromStaged(db, [10])), /already posted/);
+  const b = book(db, 1);
+  postDocument(b, 1, draftsFromStaged(db, [10]));
+  assert.throws(() => postDocument(b, 1, draftsFromStaged(db, [10])), /already posted/);
 });
 
 test("postDocument: an included 'other' row aborts and rolls back everything", () => {
   const db = setupDb();
+  const b = book(db, 1);
   // Give the 'other' row an amount so it fails specifically as unpostable
   // (amountless rows are caught earlier by the one-non-zero-side check).
   const drafts = draftsFromStaged(db).map((d, i) =>
     i === 9 ? { ...d, debit_paise: 100_000 } : d
   );
-  assert.throws(() => postDocument(db, 1, drafts), /unpostable/);
+  assert.throws(() => postDocument(b, 1, drafts), /unpostable/);
   const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
   assert.equal(journals.n, 0);
   const doc = db.prepare("SELECT status FROM documents WHERE id = 1").get() as { status: string };
@@ -276,16 +283,18 @@ test("postDocument: an included 'other' row aborts and rolls back everything", (
 
 test("postDocument: a dateless included row aborts the whole post", () => {
   const db = setupDb();
+  const b = book(db, 1);
   const drafts = draftsFromStaged(db, [10]).map((d, i) =>
     i === 2 ? { ...d, entry_date: null } : d
   );
-  assert.throws(() => postDocument(db, 1, drafts), /needs a date/);
+  assert.throws(() => postDocument(b, 1, drafts), /needs a date/);
   const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
   assert.equal(journals.n, 0);
 });
 
 test("postDocument: staged party_id overrides the doc party per row; NULL falls back", () => {
   const db = setupDb();
+  const b = book(db, 1);
   db.prepare(
     `INSERT INTO parties (name, kind, gstin, state_code, phone, created_at)
      VALUES ('Gupta Suppliers', 'supplier', '', '07', '', '2026-07-01T00:00:00Z')`
@@ -319,7 +328,7 @@ test("postDocument: staged party_id overrides the doc party per row; NULL falls 
     settle_account: r.settle_account,
     include: true,
   }));
-  const { journals } = postDocument(db, 2, drafts);
+  const { journals } = postDocument(b, 2, drafts);
   assert.equal(journals, 2);
 
   const sum = db

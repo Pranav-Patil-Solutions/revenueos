@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import { Shortcuts } from "@/components/shortcuts";
 import { Sidebar } from "@/components/sidebar";
 import { Statusbar } from "@/components/statusbar";
@@ -56,10 +57,14 @@ export default async function RootLayout({
       className={`${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT }} />
+        <Script
+          id="sidebar-boot"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT }}
+        />
         <Sidebar />
         <div className="content-shell min-h-screen">
-          <Topbar username={user.username} />
+          <Topbar username={user.username} companyId={user.companyId} />
           <main className="mx-auto max-w-6xl px-8 pt-8 pb-16">{children}</main>
         </div>
         <Statusbar />

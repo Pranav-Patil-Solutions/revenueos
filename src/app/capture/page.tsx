@@ -1,17 +1,16 @@
 import Link from "next/link";
-import { getDb } from "@/lib/db";
 import { UploadCapture } from "@/components/upload-capture";
 import type { PartyRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
 export default async function CapturePage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const parties = getDb()
-    .prepare("SELECT * FROM parties ORDER BY name COLLATE NOCASE")
-    .all() as PartyRow[];
+  const parties = book.all<PartyRow>(
+    "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
+  );
 
   return (
     <div>

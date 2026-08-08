@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Book } from "../book";
 import { fyEnd, fyKey, fyStart, fyStartYear } from "../fy";
 import { roundHalfUp } from "./india-gst";
 import type { BlockCode, FixedAssetRow } from "../types";
@@ -168,19 +168,17 @@ function stepYear(
  * Rolled forward iteratively (not recursively) from the earliest FY that has
  * any asset or override, so the depth is the number of years of history.
  */
-export function blockWdv(
-  db: Database.Database,
-  fy: string,
-  block: ItBlock
-): BlockWdv {
-  const assets = db
-    .prepare("SELECT * FROM fixed_assets WHERE block = ? ORDER BY id")
-    .all(block.code) as FixedAssetRow[];
+export function blockWdv(book: Book, fy: string, block: ItBlock): BlockWdv {
+  const assets = book.all(
+    "SELECT * FROM fixed_assets WHERE company_id = @company_id AND block = @block ORDER BY id",
+    { block: block.code }
+  ) as FixedAssetRow[];
   const overrides = new Map(
     (
-      db
-        .prepare("SELECT fy, opening_paise FROM wdv_openings WHERE block = ?")
-        .all(block.code) as { fy: string; opening_paise: number }[]
+      book.all(
+        "SELECT fy, opening_paise FROM wdv_openings WHERE company_id = @company_id AND block = @block",
+        { block: block.code }
+      ) as { fy: string; opening_paise: number }[]
     ).map((o) => [o.fy, o.opening_paise])
   );
 
@@ -231,25 +229,23 @@ function fyKeyOf(iso: string): string {
  * is the rule; with post-only books a second would need a manual reversal to
  * undo, so both the page and the posting action gate on this. */
 export function postedDepreciation(
-  db: Database.Database,
+  book: Book,
   fy: string
 ): { id: number; entry_date: string; amount_paise: number } | undefined {
   // The amount comes off the 5800 charge itself, so the caller can tell when
   // the register has moved since the books were written.
-  return db
-    .prepare(
-      `SELECT j.id, j.entry_date,
-              COALESCE(SUM(jl.debit_paise), 0) AS amount_paise
-       FROM journals j
-       JOIN journal_lines jl ON jl.journal_id = j.id
-       JOIN accounts a ON a.id = jl.account_id AND a.code = '5800'
-       WHERE j.entry_type = 'depreciation' AND j.entry_date BETWEEN ? AND ?
-       GROUP BY j.id
-       ORDER BY j.id LIMIT 1`
-    )
-    .get(fyStart(fy), fyEnd(fy)) as
-    | { id: number; entry_date: string; amount_paise: number }
-    | undefined;
+  return book.get(
+    `SELECT j.id, j.entry_date,
+            COALESCE(SUM(jl.debit_paise), 0) AS amount_paise
+     FROM journals j
+     JOIN journal_lines jl ON jl.journal_id = j.id AND jl.company_id = @company_id
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id AND a.code = '5800'
+     WHERE j.company_id = @company_id
+       AND j.entry_type = 'depreciation' AND j.entry_date BETWEEN @from AND @to
+     GROUP BY j.id
+     ORDER BY j.id LIMIT 1`,
+    { from: fyStart(fy), to: fyEnd(fy) }
+  ) as { id: number; entry_date: string; amount_paise: number } | undefined;
 }
 
 export interface DepreciationSchedule {
@@ -261,10 +257,10 @@ export interface DepreciationSchedule {
 
 /** Every block's schedule for an FY, plus the totals the journal posts. */
 export function depreciationSchedule(
-  db: Database.Database,
+  book: Book,
   fy: string
 ): DepreciationSchedule {
-  const blocks = IT_BLOCKS.map((b) => blockWdv(db, fy, b));
+  const blocks = IT_BLOCKS.map((b) => blockWdv(book, fy, b));
   return {
     fy,
     blocks,

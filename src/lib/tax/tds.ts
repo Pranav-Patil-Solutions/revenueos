@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Book } from "../book";
 import { fyEnd, fyStart, quarterOf } from "../fy";
 import { roundHalfUp } from "./india-gst";
 import type { TdsEntryRow } from "../types";
@@ -206,22 +206,15 @@ export interface TdsRegisterRow extends TdsEntryRow {
 }
 
 /** Every deduction in an FY, newest first, with the payee attached. */
-export function tdsRegister(
-  db: Database.Database,
-  fy: string
-): TdsRegisterRow[] {
-  const rows = db
-    .prepare(
-      `SELECT t.*, p.name AS party_name, p.pan AS party_pan
-       FROM tds_entries t
-       JOIN parties p ON p.id = t.party_id
-       WHERE t.entry_date BETWEEN ? AND ?
-       ORDER BY t.entry_date DESC, t.id DESC`
-    )
-    .all(fyStart(fy), fyEnd(fy)) as (TdsEntryRow & {
-    party_name: string;
-    party_pan: string;
-  })[];
+export function tdsRegister(book: Book, fy: string): TdsRegisterRow[] {
+  const rows = book.all(
+    `SELECT t.*, p.name AS party_name, p.pan AS party_pan
+     FROM tds_entries t
+     JOIN parties p ON p.id = t.party_id AND p.company_id = @company_id
+     WHERE t.company_id = @company_id AND t.entry_date BETWEEN @from AND @to
+     ORDER BY t.entry_date DESC, t.id DESC`,
+    { from: fyStart(fy), to: fyEnd(fy) }
+  ) as (TdsEntryRow & { party_name: string; party_pan: string })[];
   return rows.map((r) => ({ ...r, quarter: quarterOf(r.entry_date) }));
 }
 
@@ -250,13 +243,13 @@ export interface TdsQuarterSummary {
 }
 
 function summarise(
-  db: Database.Database,
+  book: Book,
   fy: string,
   quarter: 1 | 2 | 3 | 4,
   form: "26Q" | "24Q",
   include: (section: string) => boolean
 ): TdsQuarterSummary {
-  const rows = tdsRegister(db, fy).filter(
+  const rows = tdsRegister(book, fy).filter(
     (r) => r.quarter === quarter && include(r.section)
   );
   const byKey = new Map<string, TdsQuarterLine>();
@@ -296,18 +289,18 @@ function summarise(
 
 /** 26Q — deductions other than salary. */
 export function q26Summary(
-  db: Database.Database,
+  book: Book,
   fy: string,
   quarter: 1 | 2 | 3 | 4
 ): TdsQuarterSummary {
-  return summarise(db, fy, quarter, "26Q", (s) => s !== "192B");
+  return summarise(book, fy, quarter, "26Q", (s) => s !== "192B");
 }
 
 /** 24Q — salary deductions. */
 export function q24Summary(
-  db: Database.Database,
+  book: Book,
   fy: string,
   quarter: 1 | 2 | 3 | 4
 ): TdsQuarterSummary {
-  return summarise(db, fy, quarter, "24Q", (s) => s === "192B");
+  return summarise(book, fy, quarter, "24Q", (s) => s === "192B");
 }

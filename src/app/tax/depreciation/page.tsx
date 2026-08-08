@@ -2,7 +2,6 @@ import { ExportLinks } from "@/components/report-tabs";
 import { FySelect } from "@/components/fy-select";
 import { TaxTabs } from "@/components/tax-tabs";
 import { createAsset, disposeAsset, postDepreciationEntry } from "@/lib/actions";
-import { getDb } from "@/lib/db";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyKey, fyLabel, fyList, fyStartYear } from "@/lib/fy";
 import {
@@ -13,7 +12,7 @@ import {
   postedDepreciation,
 } from "@/lib/tax/depreciation";
 import type { FixedAssetRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -42,18 +41,17 @@ export default async function DepreciationPage({
 }: {
   searchParams: Promise<{ fy?: string; posted?: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const sp = await searchParams;
-  const db = getDb();
-  const assets = db
-    .prepare("SELECT * FROM fixed_assets ORDER BY purchase_date, id")
-    .all() as FixedAssetRow[];
-  const fys = fyOptions(assets, fyList(db));
+  const assets = book.all(
+    "SELECT * FROM fixed_assets WHERE company_id = @company_id ORDER BY purchase_date, id"
+  ) as FixedAssetRow[];
+  const fys = fyOptions(assets, fyList(book));
   const fy = fys.includes(sp.fy ?? "") ? sp.fy! : fys[0];
 
-  const schedule = depreciationSchedule(db, fy);
-  const posted = postedDepreciation(db, fy);
+  const schedule = depreciationSchedule(book, fy);
+  const posted = postedDepreciation(book, fy);
   const live = schedule.blocks.filter(
     (b) =>
       b.opening_paise !== 0 ||

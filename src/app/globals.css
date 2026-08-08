@@ -156,6 +156,109 @@ body {
   color: var(--ink-2);
 }
 
+/* ---- Data-viz surfaces --------------------------------------------------- */
+
+/* Hover readout shared by the trend chart. Positioned by the component. */
+.viz-tip {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -132%);
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--surface);
+  padding: 5px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+/* Donut ↔ legend cross-highlight: the un-hovered slices recede rather than
+   the hovered one growing, so the ring never changes size. */
+.donut-seg {
+  transition: opacity 0.15s ease;
+}
+.donut-seg[data-dim="true"] {
+  opacity: 0.28;
+}
+.legend-row {
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.legend-row[data-hi="true"] {
+  background: var(--surface-2);
+}
+
+/* ---- Command palette (⌃K) ------------------------------------------------ */
+@keyframes palette-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.palette-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: start center;
+  padding-top: 14vh;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: palette-in 0.14s ease backwards;
+}
+.palette-card {
+  width: 520px;
+  max-width: calc(100vw - 3rem);
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+}
+.palette-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  padding: 14px 16px;
+  font-size: 14.5px;
+  color: var(--ink);
+  outline: none;
+}
+.palette-input::placeholder {
+  color: var(--ink-3);
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.palette-row[data-active="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .palette-scrim {
+    animation: none;
+  }
+  .donut-seg,
+  .legend-row {
+    transition: none;
+  }
+}
+
 /* ---- Sidebar collapse machinery (visuals are CSS-only, keyed off
        html[data-sidebar] so a pre-paint script prevents any flash) --------- */
 

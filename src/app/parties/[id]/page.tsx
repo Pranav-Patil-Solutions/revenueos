@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getDb } from "@/lib/db";
 import { ExportLinks } from "@/components/report-tabs";
 import { formatDate, inr } from "@/lib/format";
 import { partyStatement } from "@/lib/reports";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +12,10 @@ export default async function PartyPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireSession();
+  const { book } = await requireBook();
 
   const { id } = await params;
-  const statement = partyStatement(getDb(), Number(id));
+  const statement = partyStatement(book, Number(id));
   if (!statement) notFound();
   const { party, lines, closing_paise, cross_ledger_paise, net_position_paise } =
     statement;

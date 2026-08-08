@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { getDb } from "@/lib/db";
-import { requireApiSession } from "@/lib/dal";
+import { requireApiBook } from "@/lib/dal";
 
 const TYPES: Record<string, string> = {
   jpg: "image/jpeg",
@@ -15,12 +14,14 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const gate = await requireApiSession();
+  const gate = await requireApiBook();
   if (gate instanceof Response) return gate;
+  const { book } = gate;
   const { id } = await params;
-  const doc = getDb()
-    .prepare("SELECT image_path FROM documents WHERE id = ?")
-    .get(Number(id)) as { image_path: string } | undefined;
+  const doc = book.get(
+    "SELECT image_path FROM documents WHERE id = @id AND company_id = @company_id",
+    { id: Number(id) }
+  ) as { image_path: string } | undefined;
   if (!doc) return new Response("Not found", { status: 404 });
 
   let buf: Buffer;

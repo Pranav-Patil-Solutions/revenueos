@@ -1,3 +1,548 @@
+# RVOS-004/005 HANDOFF — ACTIVE (resume here)
+
+Task: **RVOS-FIX** — close RVOS-004 P3–P6, gate + merge RVOS-005, handover.
+Repo `~/revenueos`. Port 3322 only. `DEMO_MODE=1` for all tests/smoke. Never
+touch `data/revenueos.db` in QA.
+
+Branches: `feat/rvos-004-multi-client` (this one — do the P3–P6 work here) and
+`feat/rvos-005-dashboard-ux` (rebased onto 004's P2a tip already; needs
+ANOTHER rebase onto 004's final P6 commit once P6 lands — see GOTCHAS).
+`master` is untouched so far; origin has 1 commit not in this line (a
+proprietary LICENSE) — merge it, don't rebase over it, at MERGE time.
+
+## DONE (this session, all committed, tsc/lint/test/build green at each)
+
+1. `b2e79b7` — RVOS-004: the uncommitted `layout.tsx` Script-swap from the
+   RVOS-005 branch's working tree belongs to 004, not 005. Committed here;
+   005 was rebased cleanly on top (already done, do not redo).
+2. `bfe2ca4` — **RVOS-004 P3a**: `migrate()` existed since P1 but was never
+   called from `getDb()`/`open()` — on any real running instance the
+   `companies` table would never exist. Now every boot calls it
+   in-process (safe on its own — migrate() is transactionally
+   self-protecting). The REAL backed-up cutover for an office's live db is a
+   new script, `npm run migrate` (scripts/migrate.ts) — takes a verified
+   backup first, then hands migrate() that already-known-good path.
+   Also **migration 002**: `auth_sessions.company_id` (nullable — "no company
+   chosen" is a real state, not an error). `test/helpers.ts` now migrates its
+   in-memory dbs too. See EVOLUTION #26.
+3. `d2d0aa4` — **RVOS-004 P3**: session-bound company + switcher.
+   `SessionUser.companyId`, `setSessionCompany` (auth.ts — read its comment on
+   why a company id as a form-field argument here does NOT violate T2),
+   `requireBook()` (dal.ts — requireSession + a live assertUsableCompany
+   check, self-heals to /companies if the active company got archived
+   mid-session), `src/lib/companies.ts` (list/create/rename/archive,
+   archive-only, no delete), `/companies` page, `CompanySwitcher` component
+   wired into Topbar. 366 tests pass (was 354 before test additions).
+
+**P3's own gate is green.** P3 deliberately did NOT touch the 28-file
+tenancy ratchet baseline (still 0/28 ported) or the ~14 files reading the
+legacy `settings` singleton — that porting work is P4/P5/P6's job, done
+incrementally as those phases touch each area (see NEXT).
+
+4. `b47fd28` — **RVOS-004 P4**: client onboarding. `seedAccountsForCompany`
+   (db.ts, new — deliberately NOT a repurposed `seedCoreData`, see its
+   docstring) called from `createCompanyAction` right after `createCompany`,
+   so a new company gets its chart of accounts immediately instead of
+   starting postable-empty. `docs/DAY-ONE.md` §4 gained a callout pointing a
+   second-client onboarding at `/companies` + re-running the opening-balance
+   step per company. Tally/CSV import ported onto the Book handle:
+   `finalizeTallyImport` (import-tally.ts) and `stageExcelImport`
+   (import-csv.ts, new) each do mapping-upsert + staging + document-create in
+   ONE company-scoped transaction; `requireApiBook()` (dal.ts, new —
+   `requireApiSession`'s counterpart, 401/409 JSON not a redirect) gates both
+   `/api/import/*` routes, `requireBook()` gates `createTallyImport` (actions.ts)
+   and `/imports` page. Ratchet baseline **28 → 25** (struck: the two
+   `/api/import/*` routes, `imports/page.tsx`). New pinning test
+   `test/import-isolation.test.ts`: two companies, both import paths, proves
+   neither's `documents`/`staged_rows`/`ledger_mappings` ever cross — including
+   that a Book can't read a sibling company's row even by exact id/name.
+   **Found + fixed while verifying:** `scripts/smoke.ts`'s own hand-rolled
+   `ledger_mappings` insert had drifted from P1's schema change (still
+   `ON CONFLICT(ledger_name)`, not `(company_id, ledger_name)`) and broke the
+   moment smoke actually ran the Tally step post-migration — invisible to the
+   tenancy ratchet since that only walks `src/lib/`. See EVOLUTION #27. 368
+   tests pass (was 366 before test additions), lint/smoke/build all green.
+   `settings` is still the P6-scoped global-singleton gap noted below —
+   `createTallyImport`'s `tax_inclusive` read is left on it deliberately, with
+   a comment, not silently "fixed" out of this phase's scope.
+
+5. `1c2c511` — **RVOS-004 P5**: per-company backups. `exportCompany`
+   (backup.ts, new) writes ONE company's own data into a fresh, standalone
+   SQLite db at the current schema (`initSchema` + full migration chain, not
+   a copy of the live file) — that company's own `companies` row plus every
+   row it owns across `SCOPED_TABLES`, with ids preserved as-is (no FK
+   remapping needed: a company's own rows only ever reference its own rows).
+   Deliberately excluded: `auth_users`/`auth_sessions` (staff creds belong to
+   the installation, never a client handoff) and `settings` (still the P6
+   global-singleton gap — attaching it would misattribute one arbitrary
+   company's settings to whichever company got exported). `verifyBackup`
+   gained an opt-in `{ companyId }` mode: asserts `companies` holds EXACTLY
+   that one row, and every `SCOPED_TABLES` table has zero rows with a
+   different `company_id` — the direct mirror of P4's "worst failure" theme,
+   now on the export side. New CLI: `npm run export:company -- <id>` (or
+   `--list`). `npm run backup` is UNCHANGED (still whole-office, on purpose).
+   Only referenced ledger photos for that company are copied (best-effort:
+   `uploads_copied`/`uploads_expected` surfaces a gap instead of hiding it or
+   failing the whole export over one missing file). 373 tests pass (was 368),
+   lint/smoke/build all green.
+   **Verified, not rebuilt:** grepped `reports.ts` for `company_id` — zero
+   hits. `RVOS-004-SPEC.md`'s P5 bullet claims "the CA pack, exports and
+   every report already run per company via P2," which is NOT true yet (this
+   HANDOFF's own P6 section already knew that — the SPEC document is what's
+   stale). Per the instruction to "assert, don't rebuild if true," and since
+   it wasn't true, the per-company export was built as a raw-data export
+   independent of `reports.ts`/`pack/page.tsx`/`/api/export/[report]` rather
+   than layered on top of a porting job that hasn't happened — those three
+   are still exactly P6's job, unchanged. See EVOLUTION #28.
+   **Code-reviewed: 1 blocker, fixed.** Insertion followed `SCOPED_TABLES`
+   order, but `tds_entries.challan_id REFERENCES tds_challans(id)` and
+   `tds_entries` sits BEFORE `tds_challans` in that list — any company that
+   had ever deposited a TDS challan (routine, not an edge case) threw
+   `FOREIGN KEY constraint failed`, verified by reproduction. Fixed with
+   `dest.pragma("defer_foreign_keys = ON")` around the destination
+   transaction, so insertion order no longer has to match FK dependency
+   order (more robust than reordering `SCOPED_TABLES`, which other tables
+   could just as easily violate later). Also fixed a WARN: the per-table
+   reads off `sourceDb` weren't wrapped in one transaction, so a concurrent
+   write mid-export could produce a torn snapshot despite the CLI's "safe to
+   run while serving" claim — now wrapped in `sourceDb.transaction(...)` for
+   a single consistent read. New regression test pins the challan case.
+   374 tests pass (was 373 pre-fix, 368 before this phase's own additions).
+
+6. `8b0267f` — **RVOS-004 P6**: isolation ship gate. Ported the remaining 25
+   files on the tenancy ratchet baseline onto the Book handle —
+   `posting.ts`, `vouchers.ts`, `reports.ts`, `compliance.ts`, `tax/*.ts`,
+   and every unscoped report/tax/vouchers page view.
+   `test/tenancy-ratchet.test.ts` dropped the shrinking-baseline scaffolding
+   from P2 and is now a flat "offending set is empty" assertion — ratchet at
+   0/28.
+   Closed the ~14-file `settings`-singleton gap: every company now owns its
+   own GSTIN/PAN/lock-state/tax-identity fields on its `companies` row
+   (`updateCompanySettings`, `companies.ts`) instead of every company
+   silently reading company 1's row via `FROM settings WHERE id = 1`.
+   Migration 003 drops the retired `settings` table outright once nothing
+   reads it, so a stray old-style query fails loudly on next boot instead of
+   silently reading stale shared state.
+   `backup.ts`'s `exportCompany`/`verifyBackup` updated to copy/check
+   `companies` instead of skipping the old global `settings` table.
+   374 tests pass, tsc/lint/build all green. **Did not run smoke or touch
+   `data/revenueos.db`** — see GOTCHAS, the live :3322 dev server is against
+   the real office db and migration 003 has NOT been rehearsed against a
+   copy of it yet. Read-only-verified (via the sqlite3 CLI, not the app —
+   confirms `migrate()` never ran) that the real db still has its `settings`
+   table and no `companies` table at all, i.e. it's still on the pre-004
+   schema and untouched by any of this branch's migrations. See EVOLUTION
+   #29.
+   **Note:** this phase's work was found already complete but uncommitted
+   and undocumented at the start of this session (52 files staged, no
+   HANDOFF/EVOLUTION entry) — verified independently (tsc/test/lint/build,
+   plus the real-db check above) before trusting and committing it. See
+   EVOLUTION #29.
+
+**P6's ratchet + settings-singleton gate is green. `npm run smoke` is now
+green too** (`DEMO_MODE=1 npx tsx scripts/smoke.ts`, run directly from the
+repo root — see correction below, it needed no special isolation).
+`data/revenueos.db` confirmed untouched after the run (same file mtimes,
+`settings` table still present, no `companies` table — still pre-004
+schema). Still open from this phase: migration 003 rehearsed on a COPY of
+`data/revenueos.db` with a verified restore, and the qa-runner 2-live-company
+isolation drive called for by P6's own ship-gate spec below. RVOS-005 rebase,
+its own ship gate, the LICENSE merge, and final handover are all still open.
+
+**Correction to this HANDOFF's own earlier note:** `scripts/smoke.ts`
+already self-isolates — it `mkdtempSync`s a fresh OS tmpdir and `chdir`s
+into it BEFORE ever importing `db.ts` (see the script's own top-of-file
+comment), so `getDb()`'s `process.cwd()`-anchored path resolves inside the
+tmpdir no matter where the script is invoked from. It never touches
+`data/revenueos.db` and makes no HTTP calls, so it doesn't conflict with the
+live :3322 dev server either. The "use a separate worktree with its own
+`data/` dir" caution in GOTCHAS is real but applies to the qa-runner
+browser-drive and any manual script that does NOT do this chdir dance
+first — not to `npm run smoke`. Don't re-block on this again.
+
+7. `5e44a6f` — **RVOS-004 P6: the isolation suite itself**
+   (`test/isolation-suite.test.ts`). This is the ship gate's actual proof,
+   the piece #6 above landed the code for but not the evidence. Seeds
+   companies A, B (deliberately distinguishable: different parties, GSTINs,
+   PANs, asset blocks, amounts) and C (onboarded, never posted to — the "no
+   data" control), then for every report kind the export route ships —
+   read from the route's own source, not hand-copied, with a meta-test that
+   fails if a new kind is ever added here uncovered — proves B's arrival
+   changes nothing about A's or C's world (before/after snapshots), that
+   name-bearing reports (GSTR-1, TDS register, party statements) never leak
+   a foreign party/GSTIN/PAN string, and that a company's Book returns
+   `null`/nothing for another company's real row id, never the wrong row.
+   Also pins: settings (GSTIN/PAN/books-lock) are per company and the
+   compliance engine reflects that; `requireBook()` never wraps its Book
+   construction in `cache()` (grepped dal.ts, didn't assume). **Verified the
+   suite isn't vacuous**: deliberately broke `gstr1B2B`'s company_id filter,
+   confirmed the suite caught the leak (company C's GSTR-1 came back with
+   company A's invoice), then reverted. 376 tests pass (was 371).
+   **This commit was briefly, accidentally made on a DIFFERENT branch** —
+   see EVOLUTION #31 — and has been cherry-picked back here; no other work
+   was lost, see that entry for the full account.
+
+8. `2f95c7d` — **fix(backup): verifyBackup accepts pre-migration databases.**
+   Found by actually running the ship gate's migration-rehearsal step
+   against the real (still pre-migration) `data/revenueos.db`, not a
+   fixture — `npm run backup` failed outright with `no such table:
+   companies`, because #6 had made the sanity-check table list require
+   `companies` unconditionally. Every real install is pre-migration until
+   `npm run migrate` runs, including this office's. Fixed: checks whichever
+   of `companies`/`settings` the schema actually has. Regression test added
+   (pre-migration fixture, no `migrate()` call). See EVOLUTION #32.
+
+9. **Migration 003 rehearsed on a COPY of the real db, restore verified —
+   done, this session, 2026-08-08.** With the backup fix above in place:
+   took a fresh verified `npm run backup` of the real `data/revenueos.db`
+   (0.14 MB, sha256 `98fd2e65…`, 4 snapshots retained — this itself is the
+   "back up first" precondition R2 calls for), copied that snapshot into an
+   isolated scratch dir's own `data/`, then ran `scripts/migrate.ts`
+   against the copy from that dir (`REVENUEOS_BACKUP_DIR` also repointed
+   into the scratch dir — nothing this step did could reach the real
+   `data/`). Result: schema 0→3, all three migrations applied, integrity
+   check `ok`, and every pre-migration row count (17 journals / 59
+   journal_lines / 2 parties / 23 accounts) held EXACTLY after migration —
+   zero data loss, all landed on `company_id = 1`. Then restored
+   `migrate.ts`'s own pre-migration snapshot back over the migrated copy
+   and confirmed it reverts cleanly: `settings` back, `companies` gone,
+   same row counts, integrity `ok`, journal_lines still net to zero. The
+   real `data/revenueos.db` was confirmed untouched before and after (same
+   file mtimes both times) — this step ran entirely inside a scratch
+   directory outside the repo.
+   **This closes R2 and the migration-rehearsal line of the ship gate.**
+   The real migration has NOT been run yet — that is a deliberate, separate
+   decision for whenever the live :3322 dev server is stopped and Pranav is
+   ready, not something to do automatically off the back of a rehearsal.
+
+10. **code-reviewer full-branch diff — DONE, 2026-08-08, 0 blockers.**
+    Reviewed `git diff master...feat/rvos-004-multi-client` (81 files,
+    ~5756 insertions — the whole RVOS-004 feature, P1 through P6, as one
+    diff) with an explicit tenancy-leakage pass. Independently verified
+    (not just took on trust): `book.ts`'s runtime guard and
+    `test/tenancy-ratchet.test.ts` share the same `scopingProblem`/
+    `scopedTablesIn` logic, so there's no drift between what's enforced
+    and what's tested; `requireBook`/`requireApiBook` re-validate the
+    active company fresh on every call, never cached; `exportCompany`
+    reads inside one transaction and never touches `auth_users`/
+    `auth_sessions`; migration 001 reads `settings`' actual columns via
+    `PRAGMA table_info` rather than a hardcoded list; every multi-table
+    JOIN across `reports.ts`/`posting.ts`/`vouchers.ts`/`tax/*.ts`/
+    `compliance.ts` scopes `company_id` on each joined table, not just the
+    outer WHERE; and `test/isolation-suite.test.ts` itself isn't vacuous
+    (confirmed it posts real distinguishing data and does genuine
+    before/after diffing, not a comparison of two empty results). 377/377
+    tests passing.
+
+11. **qa-runner 2-live-company drive — DONE, 2026-08-08, 0 failures.**
+    Refreshed the `~/revenueos-preview` worktree to this branch's tip
+    (`240adbc`) with a wiped `data/` dir (it had been left on a stale
+    commit from earlier in this session), confirmed a real `npm install`
+    (not the symlinked `node_modules` Turbopack rejects), booted `next dev
+    -p 3323`, and drove it via raw HTTP (curl + cookie jar — no browser
+    tool available) through first-run signup, two real companies ("QA
+    Company Alpha" id 2, "QA Company Beta" id 3, alongside the pre-existing
+    seeded company 1, untouched), each posted a party + a sale voucher at
+    a distinct, identifiable amount (₹57,321.00 / ₹83,109.00). Checked
+    all 11 export-route report kinds plus every reports/vouchers/parties/
+    pack page, in both switch directions, at the LIVE server/HTTP level —
+    a different layer than the unit-level isolation suite, catching stale
+    -session/wrong-company-picked-up bugs the unit tests structurally
+    can't. Zero cross-company leaks in any HTML page or JSON/CSV body.
+    Also directly confirmed per-RECORD scoping, not just list filtering:
+    `/parties/3` (Alpha's own party) 404s while Beta is active, and the
+    reverse. Confirmed the topbar's company-switcher `<select>` genuinely
+    reflects the active company in rendered HTML, and that `/companies`
+    correctly lists ALL companies regardless of which is active (per spec
+    R3 — staff see every company; only the DATA is scoped, not the list).
+    The real `data/revenueos.db` behind :3322 was never touched — this
+    ran entirely against the isolated worktree.
+
+**RVOS-004's ship gate is now fully closed**: tests/smoke/lint/build green,
+code-reviewer 0 blockers with an explicit tenancy-leakage pass, qa-runner
+0 failures across 2 live companies, migration rehearsed with a verified
+restore, EVOLUTION current through #32. What's left is RVOS-005's own
+work, the merge, and handover — see below.
+
+## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
+
+**PORT + REBASE — DONE, 2026-08-08.** Rebased `feat/rvos-005-dashboard-ux`
+onto this branch's tip (`bc66a61`) in the `~/revenueos-preview` worktree
+(kept separate from this checkout on purpose — see the standing GOTCHAS
+entry on concurrent-session branch safety). Resolved conflicts in
+`EVOLUTION.md`/`HANDOFF.md` (005's own local `## 26.` renumbered to `## 34.`,
+following this branch's #33 — see that branch's EVOLUTION for the full
+account, entries #34/#35), `src/lib/reports.ts` and `src/app/page.tsx`.
+`receivablesTrend`/`documentStatusBreakdown` now take a `Book` and scope
+every JOIN by `company_id`, matching the rest of `reports.ts` — the exact
+port this note used to call out as "the ratchet will NOT flag this, easy to
+miss." `test/reports.test.ts`'s trend/breakdown tests updated to build a
+`Book` alongside the raw db (raw insert helpers like `postAr` needed no
+change — `ADD_COLUMN_TABLES` default to company 1). Full gate re-run on the
+rebased tree: 391 tests pass, tsc/lint/build/smoke all green.
+`feat/rvos-005-dashboard-ux` now points at `10238ab`, a clean single commit
+on top of this branch's tip — confirmed via `git merge-base` that its
+ancestor is this branch's `bc66a61`, not the old stale P2a point.
+
+**code-reviewer full-branch diff — DONE, 2026-08-08, 0 blockers, 2 warnings
+fixed.** Reviewed `feat/rvos-004-multi-client...feat/rvos-005-dashboard-ux`
+(005's own diff only — 004's side already went through its own review, not
+re-litigated here), with priority attention on the tenancy port from the
+rebase and the ⌃A/palette keyboard-hijack fix. Verified clean:
+`receivablesTrend`/`documentStatusBreakdown` scope every JOIN by
+`company_id` correctly (would trip `book.ts`'s guard if that were ever
+removed); `page.tsx` sources both through the one `requireBook()`-derived
+`book`, no second raw `getDb()`; `actionSurvivesModal()` is present,
+GENERAL (blocks every action, not a narrow ⌃A-only patch), and exhaustively
+tested. Two warnings, both fixed (`d6fa2c6` on `feat/rvos-005-dashboard-ux`):
+1. `test/isolation-suite.test.ts`'s `snapshot()` didn't cover the two newly
+   ported functions at all — the ship gate's own isolation proof never
+   actually extended to them, despite the SQL being structurally correct.
+   Fixing this surfaced a SECOND gap: neither test company had ever posted
+   a `documents` row, so `documentStatusBreakdown` was vacuously `[]`
+   regardless of scoping — the field addition alone would have proven
+   nothing. Added `insertDocument()` + a distinguishing status per company
+   to the fixture, then verified the fix has teeth: deliberately broke the
+   function's WHERE clause in a way that keeps the literal substring
+   `"company_id"` present (so the structural guard doesn't fire), confirmed
+   the suite caught it (company C's empty control came back with company
+   A's document), reverted.
+2. The command-palette's Escape handler didn't `stopPropagation()`, so the
+   same keystroke also bubbled to the window-level Shortcuts listener and
+   dismissed the palette a second time — harmless only by coincidence.
+   Added `stopPropagation()`.
+391 tests pass, tsc/lint/build/smoke all green on `feat/rvos-005-dashboard-ux`
+@ `d6fa2c6`.
+
+**qa-runner over changed modules — DONE, 2026-08-08, 0 failures.** Full gate
+re-confirmed green (tsc/lint/build/smoke/391 tests). Correctly declined to
+force component-test infra onto `command-palette.tsx`/`trend-chart.tsx`/
+`donut-chart.tsx` — this project has no jsdom/RTL/vitest, and no existing
+`src/components/*` file has a dedicated unit test; that's this codebase's
+established convention, not a gap to paper over. Did flag one real,
+actionable finding: `command-palette.tsx`'s `matches()` — the subsequence/
+substring search over every route — was a non-trivial pure function,
+inlined and unexported, untestable in place. Fixed (`1ebb939` on
+`feat/rvos-005-dashboard-ux`): exported `matches`/`DESTINATIONS` (no
+structural change — both were already plain top-level declarations), added
+`test/command-palette.test.ts` (order-sensitivity via a synthetic fixture,
+since real `DESTINATIONS` group names can accidentally satisfy the
+substring fallback either direction; case/whitespace handling; every
+destination matches its own label; no duplicate hrefs). Worth doing
+specifically because this is the same feature that already caused one real
+incident this build (the ⌃A voucher-hijack) — its correctness isn't
+hypothetical. 400 tests pass (was 391), tsc/lint/build all green.
+
+**Still open — the one item that cannot be skipped as "already verified"**:
+re-drive the ⌃K/⌃A voucher-posting regression (EVOLUTION #34 on that
+branch) in an actual browser, on THIS rebased-and-fixed diff specifically
+(`feat/rvos-005-dashboard-ux` @ `1ebb939`), since the composition around it
+changed during the rebase even though the test suite passing doesn't prove
+the live browser interaction still holds.
+
+**MERGE** (after the browser drive is green): fast-forward or merge
+`feat/rvos-005-dashboard-ux` (`1ebb939`) into `feat/rvos-004-multi-client`
+→ `git fetch origin && git merge origin/master` (the LICENSE commit,
+trivial) → push master.
+
+**HANDOVER** (final step): update this file (mark RVOS-004+005 SHIPPED,
+delete this NEXT section), EVOLUTION.md (every P4–P6+port+gate delta),
+confirm `data/` untouched, `git status` clean + both directions in sync with
+origin/master, note RVOS-003's Windows acceptance run as standing-open
+(not closable here).
+
+## GOTCHAS
+
+- **This machine runs multiple concurrent Claude Code sessions, any of which
+  can `git checkout` this repo out from under another.** Confirmed live
+  2026-08-08 (see EVOLUTION #31): the branch this HANDOFF was written
+  against changed to an unrelated `feat/companies-page-redesign` between
+  one turn and the next, mid-task, with no warning — a commit almost landed
+  on the wrong branch. Before trusting `git status`/`git branch
+  --show-current` after any gap in a session (a resume, a long tool call,
+  picking this HANDOFF back up fresh), re-check both — don't assume the
+  branch you left checked out is still checked out. If it changed and you
+  don't know why, that's likely another session's doing, not corruption —
+  investigate (`pgrep -fl claude`, `git reflog`) before acting, and ask
+  before rewriting anything on a branch you don't have context for.
+- **A live dev server is already running on :3322** (`next dev`, long-running,
+  PID varies — check `ps aux | grep "next dev"`), almost certainly Pranav's
+  own session against his REAL `data/revenueos.db`. Do not kill it, do not
+  interact with it. For any isolated smoke-test/browser-drive (P6's
+  qa-runner, RVOS-005's ⌃K regression), use a separate worktree/copy with its
+  own `data/` dir — `getDb()` hardcodes `path.join(process.cwd(), "data")`,
+  not overridable by env, so same-cwd = same real database. Next also refuses
+  a second `next dev` in the same project directory outright regardless of
+  port, which is how this was discovered.
+- **RESOLVED (P6, `8b0267f`): the settings singleton gap.** Every company
+  now owns its own GSTIN/PAN/lock-state fields on `companies`; `settings` is
+  dropped by migration 003. Left here as a marker in case any branch still
+  carries a stale `FROM settings WHERE id = 1` — that pattern should not
+  exist anywhere in `src/` anymore (verify with
+  `grep -rn "FROM settings" src/` before trusting this note).
+- **Migration 003 (drops `settings`) has NOT been run against the real
+  `data/revenueos.db` yet** — verified via a read-only `sqlite3` query
+  (not the app, to avoid triggering `migrate()`): the real db still has a
+  `settings` table and no `companies` table at all, so it's still on the
+  pre-RVOS-004 schema entirely. The live :3322 dev server above is running
+  against it. Before this branch's migrations ever touch that file for
+  real: take a verified backup, rehearse the full migration chain
+  (001→003) on a COPY, verify a restore from that COPY, THEN run it for
+  real — this is P6's own stated ship-gate requirement, not new caution.
+  Committing this branch's code does not run the migration; only a boot
+  against that file does.
+- The migrate()/backup async-vs-sync resolution (EVOLUTION #26 on this
+  branch) is the pattern to reuse for anything else needing an async
+  prerequisite inside a sync boundary: do the async part BEFORE, hand the
+  sync side an already-satisfied result.
+- `test/tenancy-ratchet.test.ts`'s offender check matches raw file TEXT
+  (comments included), not just SQL — a new file mentioning a scoped-table
+  NAME in prose (e.g. "chart of **accounts**") will false-positive. Exempt
+  with a reason (see `src/lib/companies.ts`'s entry), don't reword working
+  docs to dodge it.
+- RVOS-005's branch-local EVOLUTION.md has its OWN "## 26." entry (the ⌃K
+  overlay incident) that does not exist on this (004) branch's EVOLUTION.md —
+  they diverged before 005's entry was written. When 005 is rebased onto
+  004's final tip at MERGE time, its #26 will collide with whatever number
+  004 is at by then (currently #26 here too, coincidentally) — renumber
+  005's entry to follow, don't let two different "## 26."s survive the merge.
+- `switchCompany`/`renameCompanyAction`/`archiveCompanyAction` all take a
+  `company_id` FORM FIELD by necessity — this is documented as the one
+  deliberate T2 exception (see the comment on `setSessionCompany` in
+  auth.ts). Do not "fix" this by trying to remove it; do flag it immediately
+  if any NEW action starts doing the same for anything other than
+  switch/rename/archive.
+- **RESOLVED (P6, `8b0267f`):** root `page.tsx` and every report page now use
+  `requireBook()`; `test/route-guards.test.ts` already accepts either
+  `requireSession()` or `requireBook()` (was updated the same phase the
+  first page switched over, per the plan below).
+
+## Files touched this session (RVOS-004 P6)
+src/lib/{posting,vouchers,reports,compliance,companies,migrations,backup,
+actions}.ts · src/lib/tax/{computation,depreciation,tds}.ts ·
+src/app/{page,capture/page,compliance/page,vouchers/page,pack/page}.tsx ·
+src/app/documents/{page,[id]/page}.tsx · src/app/parties/{page,[id]/page}.tsx
+· src/app/reports/{balance-sheet,day-book,gst,pnl,trial-balance}/page.tsx ·
+src/app/settings/{page,accounts/page}.tsx ·
+src/app/tax/{computation,depreciation,tds}/page.tsx ·
+src/app/api/{documents/[id]/extract,export/[report],upload,uploads/[id]}/route.ts
+· src/components/topbar.tsx · scripts/smoke.ts ·
+test/{backup,balance-sheet,compliance,computation,depreciation,fy,helpers,
+import-csv,import-tally,posting,reports,tds,tenancy-ratchet,vouchers}.test.ts
+· EVOLUTION.md · HANDOFF.md
+
+## Files touched this session (RVOS-004 P3a + P3)
+scripts/migrate.ts (new) · package.json · src/lib/{db,migrations,types,auth,
+dal,companies(new)}.ts · src/lib/actions.ts · src/app/companies/page.tsx (new)
+· src/app/layout.tsx · src/components/{topbar,sidebar,company-switcher(new)}.tsx
+· test/{helpers,migrations,auth,tenancy-ratchet,companies(new)}.test.ts ·
+EVOLUTION.md · HANDOFF.md
+
+## Files touched this session (RVOS-004 P4)
+src/lib/{db,dal,actions,import-csv,import-tally}.ts ·
+src/app/api/import/{excel,tally/preview}/route.ts · src/app/{companies,imports}/page.tsx
+· docs/DAY-ONE.md · scripts/smoke.ts (schema-drift fix, see EVOLUTION #27) ·
+test/{route-guards,tenancy-ratchet}.test.ts · test/import-isolation.test.ts (new)
+· EVOLUTION.md · HANDOFF.md
+
+## Files touched this session (RVOS-004 P5)
+src/lib/backup.ts (exportCompany + verifyBackup's companyId mode) ·
+scripts/export-company.ts (new) · package.json (export:company script) ·
+test/backup.test.ts · EVOLUTION.md · HANDOFF.md
+
+---
+
+# RVOS-005 HANDOFF (Overview dashboard) — rebased onto 004's final tip 2026-08-08
+
+Branch `feat/rvos-005-dashboard-ux`, originally cut from `0bfd9ad` (RVOS-004
+P2a), **rebased onto `feat/rvos-004-multi-client`'s final tip (`bc66a61`,
+post-ship-gate) on 2026-08-08** — see EVOLUTION #35. Spec: `RVOS-005-SPEC.md`.
+Local only, unpushed.
+
+## DONE
+Overview page gains three things, all additive to the approved
+"Accountant Edition Light" tokens — no page outside `/` changes appearance:
+- **Receivables trend** — AR closing balance at each of the last 4 month ends,
+  hover readout. `receivablesTrend(db, month, count)` in reports.ts.
+- **Document status** — capture pipeline census, donut + legend, hover
+  cross-highlight. `documentStatusBreakdown(db)`.
+- **⌃K command palette** — subsequence search over every route ("tb" → Trial
+  balance). Wired through the EXISTING Tally key layer, not a second listener.
+
+Cut before shipping, deliberately: count-up figures, entrance animation,
+quick-actions card, insights rail. All were built, none earned its place —
+see EVOLUTION #26. `StatTile` was re-implemented inline during that work; it
+is now reused, and its long-dead `Sparkline`/`delta`/`trend` deleted.
+
+## THE ONE THAT MATTERED
+The ⌃K palette opens OVER /vouchers without changing the route. The Tally layer
+decides from the PATHNAME, so `onVoucherScreen` stayed true, ⌃A still mapped to
+`submit-voucher`, and the voucher form answers that with `requestSubmit()` —
+which ignores the React `disabled={!balanced}` guard. **Pressing ⌃A to select
+text in the palette's search box could post a voucher to the books.**
+
+Fixed with `actionSurvivesModal(action, modal)` in keymap.ts — a pure rule, in
+the module that already owns every key decision, so it is unit-testable.
+Verified in a browser against a genuinely VALID voucher: journals 4 → 4 with
+the palette up, F8 inert, Esc closes, and ⌃A posts again once closed.
+
+Neither the unit tests nor the build could see it: every module was correct
+alone, and the defect lived only in the composition. The zero-context reviewer
+found it. EVOLUTION #34 (renumbered from this branch's own local #26 at the
+2026-08-08 rebase — 004's line already had entries up to #33 by then; see
+EVOLUTION #35 for the rebase itself).
+
+## NEXT (in this order)
+1. ~~Port the two new read models to the Book handle~~ **DONE at the
+   2026-08-08 rebase** — `receivablesTrend`/`documentStatusBreakdown` now
+   take a `Book` and scope every JOIN by `company_id`, same as the rest of
+   `reports.ts`. See EVOLUTION #35.
+2. Run RVOS-005's own ship gate FRESH on this rebased tree — tsc/lint/test/
+   build/smoke, zero-context code-reviewer full diff, qa-runner over the
+   changed modules, and re-drive the ⌃K/⌃A voucher-posting regression above
+   in a browser on THIS diff specifically (don't skip as "already fixed" —
+   the composition changed underneath it during the rebase).
+3. Merge only after that gate is green: rebase is done, this is the
+   remaining step. `git fetch origin && git merge origin/master` (the
+   LICENSE commit, trivial) → push master.
+
+## GOTCHAS
+- `receivablesTrend` is a BALANCE, not a flow: each point carries every entry
+  ever posted up to that month end, via an opening-balance query before the
+  window plus per-month deltas. It ties to account 1200 — the same account
+  `dashboardStats` reads — at every point. It can legitimately sit BELOW the
+  Receivables tile when the books carry future-dated entries (the tile is
+  all-time), which is why the chart caption names its cut-off. Do not "fix"
+  that divergence by bounding the tile without deciding that deliberately.
+- `stepMonth` is pure string math per the fy.ts convention. Keep it that way.
+- The trend chart scales across zero (`min(0,…)`…`max(0,…)`). A net CREDIT on
+  AR — a customer advance — is a real position; the earlier zero-floor scale
+  pushed those points outside the viewBox, where SVG clips silently and the
+  line vanished while the tooltip still read correctly.
+- ⌃K, not ⌘K: `actionFor` returns null for `metaKey` on purpose (Cmd belongs to
+  the browser), and ⌃ is this app's modifier — ⌃A post, ⌃B sidebar.
+- Adding any NEW overlay means revisiting `actionSurvivesModal`. An overlay
+  inherits the global key layer whether or not you think about it.
+- The app-wide ~425px horizontal overflow below 1180px is PRE-EXISTING on every
+  page, not from this build. RevenueOS has no mobile layout; the target is an
+  office Windows machine. Out of scope by decision, not oversight.
+- Browser verification runs against an isolated worktree with its own
+  `data/` dir, never `data/revenueos.db` and never port 3322 (the office
+  instance may be up) — `~/revenueos-preview` on port 3323 is this
+  repo's established convention as of the 2026-08-08 rebase (needs a real
+  `npm install`, not a symlinked `node_modules` — Turbopack rejects that).
+- Files touched by the rebase itself (2026-08-08, beyond RVOS-005's own
+  list below): `src/lib/reports.ts` (`receivablesTrend`/
+  `documentStatusBreakdown` ported onto `Book`), `src/app/page.tsx`
+  (sources both from the page's existing `requireBook()` call instead of a
+  second raw `getDb()`), `EVOLUTION.md` (#35).
+
+## Files touched (RVOS-005)
+src/components/{trend-chart,donut-chart,command-palette}.tsx (new) ·
+src/lib/{reports,keymap}.ts · src/components/{shortcuts,stat-tile}.tsx ·
+src/app/{page.tsx,globals.css} · test/{reports,keymap}.test.ts ·
+RVOS-005-SPEC.md · EVOLUTION.md · HANDOFF.md
+
 # RVOS-003 HANDOFF (client delivery) — ACTIVE
 
 Branch `feat/rvos-003-client-delivery`, off master `76f023a`. Spec:

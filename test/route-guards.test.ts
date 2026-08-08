@@ -54,7 +54,12 @@ test("EVERY page requires a session, except the declared public ones", () => {
   for (const file of pages) {
     const name = rel(file);
     const src = readFileSync(file, "utf8");
-    const guarded = src.includes("requireSession()");
+    // requireBook() (RVOS-004 P3) internally calls requireSession() but a
+    // page that switched to it ONLY won't say "requireSession()" in its own
+    // source — see HANDOFF.md's gotcha on this exact test. Either guard
+    // proves a session is required; requireBook() additionally requires an
+    // active company.
+    const guarded = src.includes("requireSession()") || src.includes("requireBook()");
     if (PUBLIC_PAGES.has(name)) {
       assert.equal(
         guarded,
@@ -72,13 +77,18 @@ test("EVERY route handler returns 401 rather than redirecting", () => {
   const unguarded: string[] = [];
   for (const file of handlers) {
     const src = readFileSync(file, "utf8");
-    if (!src.includes("requireApiSession()")) unguarded.push(rel(file));
+    // requireApiBook() (RVOS-004 P4) is requireApiSession()'s counterpart for
+    // handlers that also need an active company — it still answers with a
+    // Response (401/409), never a redirect. See requireApiSession() below.
+    if (!src.includes("requireApiSession()") && !src.includes("requireApiBook()")) {
+      unguarded.push(rel(file));
+    }
   }
   assert.deepEqual(
     unguarded,
     [],
     `these API routes are open: ${unguarded}. An API caller needs a status code, ` +
-      `not an HTML redirect — use requireApiSession(), not requireSession().`
+      `not an HTML redirect — use requireApiSession() or requireApiBook(), not requireSession()/requireBook().`
   );
 });
 
@@ -94,7 +104,7 @@ test("no page is statically rendered — a DAL cannot protect build-time data", 
   assert.deepEqual(staticPages, [], `these pages render statically: ${staticPages}`);
 });
 
-test("pages do not use requireApiSession, and handlers do not use requireSession", () => {
+test("pages do not use the Api guards, and handlers do not use the page guards", () => {
   // Crossing these over fails quietly in opposite directions: a page returning
   // a bare 401 Response renders nothing useful, and an API route throwing a
   // redirect answers a fetch() with an HTML login page and a 200-shaped hop.
@@ -102,17 +112,17 @@ test("pages do not use requireApiSession, and handlers do not use requireSession
     if (PUBLIC_PAGES.has(rel(file))) continue;
     const src = readFileSync(file, "utf8");
     assert.equal(
-      src.includes("requireApiSession"),
+      src.includes("requireApiSession") || src.includes("requireApiBook"),
       false,
-      `${rel(file)} is a page and must use requireSession()`
+      `${rel(file)} is a page and must use requireSession() or requireBook()`
     );
   }
   for (const file of handlers) {
     const src = readFileSync(file, "utf8");
     assert.equal(
-      src.includes("requireSession()"),
+      src.includes("requireSession()") || src.includes("requireBook()"),
       false,
-      `${rel(file)} is a route handler and must use requireApiSession()`
+      `${rel(file)} is a route handler and must use requireApiSession() or requireApiBook()`
     );
   }
 });
@@ -138,8 +148,10 @@ test("every server action in actions.ts is guarded", () => {
   assert.ok(exported.length >= 20, `expected >= 20 actions, found ${exported.length}`);
 
   // Server Functions are POSTs to whatever route uses them, so the proxy never
-  // dependably covers them: each one is its own boundary.
-  const guards = [...src.matchAll(/await requireSession\(\)/g)].length;
+  // dependably covers them: each one is its own boundary. requireBook()
+  // (RVOS-004 P3) is also a valid guard — it requires a session AND an
+  // active company, a strict superset of requireSession() alone.
+  const guards = [...src.matchAll(/await require(?:Session|Book)\(\)/g)].length;
   assert.equal(
     guards,
     exported.length,

@@ -128,6 +128,16 @@ const NAV_GROUPS: NavGroup[] = [
     header: null,
     items: [
       {
+        href: "/companies",
+        label: "Companies",
+        icon: (
+          <>
+            <path d="M4 21V4h8v17M12 10h8v11" />
+            <path d="M7 8h1M7 12h1M7 16h1M16 14h1M16 17h1" />
+          </>
+        ),
+      },
+      {
         href: "/settings",
         label: "Settings",
         icon: (

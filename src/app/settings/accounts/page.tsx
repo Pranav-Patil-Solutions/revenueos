@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { createAccount, renameAccount } from "@/lib/actions";
 import { ACCOUNT_GROUPS, DEFAULT_GROUP_BY_TYPE } from "@/lib/coa";
-import { getDb } from "@/lib/db";
 import type { AccountRow } from "@/lib/types";
-import { requireSession } from "@/lib/dal";
+import { requireBook } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -12,11 +11,11 @@ const label = "mb-1.5 block text-[12.5px] font-medium text-ink-3";
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
-  await requireSession();
+  const { book } = await requireBook();
 
-  const accounts = getDb()
-    .prepare("SELECT * FROM accounts ORDER BY code")
-    .all() as AccountRow[];
+  const accounts = book.all<AccountRow>(
+    "SELECT * FROM accounts WHERE company_id = @company_id ORDER BY code"
+  );
 
   const byGroup = new Map<string, AccountRow[]>();
   for (const a of accounts) {

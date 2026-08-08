@@ -1,8 +1,9 @@
-import type Database from "better-sqlite3";
+import type { Book } from "./book";
 import { ACCOUNT_GROUPS, DEFAULT_GROUP_BY_TYPE, groupFor, labelForEntity } from "./coa";
 import { fyOf, fyStart } from "./fy";
 import type {
   AccountType,
+  DocumentStatus,
   EntryType,
   PartyKind,
   PartyRow,
@@ -10,7 +11,10 @@ import type {
 } from "./types";
 
 /** Read-model queries for statements, trial balance, P&L, day book, GST
- * filing prep, and the dashboard. All amounts INTEGER paise. */
+ * filing prep, and the dashboard. All amounts INTEGER paise. Every query is
+ * scoped to one company via the Book handle (RVOS-004 P2/P6) — joins are
+ * scoped on EVERY table they touch, not just one, so a stray cross-company
+ * row can never slip through even if an upstream write ever mis-tagged it. */
 
 export interface TrialBalanceLine {
   code: string;
@@ -30,22 +34,19 @@ export interface TrialBalance {
 /** Net balance per account on its natural side, optionally as of a date
  * (inclusive). Throws if the books don't sum to zero — the last of the three
  * balance-invariant layers. */
-export function trialBalance(
-  db: Database.Database,
-  asOf?: string
-): TrialBalance {
-  const rows = db
-    .prepare(
-      `SELECT a.code, a.name, a.type,
-              COALESCE(SUM(CASE WHEN @asOf IS NULL OR j.entry_date <= @asOf
-                THEN jl.debit_paise - jl.credit_paise END), 0) AS net
-       FROM accounts a
-       LEFT JOIN journal_lines jl ON jl.account_id = a.id
-       LEFT JOIN journals j ON j.id = jl.journal_id
-       GROUP BY a.id
-       ORDER BY a.code`
-    )
-    .all({ asOf: asOf ?? null }) as {
+export function trialBalance(book: Book, asOf?: string): TrialBalance {
+  const rows = book.all(
+    `SELECT a.code, a.name, a.type,
+            COALESCE(SUM(CASE WHEN @asOf IS NULL OR j.entry_date <= @asOf
+              THEN jl.debit_paise - jl.credit_paise END), 0) AS net
+     FROM accounts a
+     LEFT JOIN journal_lines jl ON jl.account_id = a.id AND jl.company_id = @company_id
+     LEFT JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE a.company_id = @company_id
+     GROUP BY a.id
+     ORDER BY a.code`,
+    { asOf: asOf ?? null }
+  ) as {
     code: string;
     name: string;
     type: AccountType;
@@ -104,31 +105,29 @@ export interface PartyStatement {
  * the CA pack's annexure reads FY-end positions this way. Omitted = full
  * history, byte-identical to the pre-asOf behaviour. */
 export function partyStatement(
-  db: Database.Database,
+  book: Book,
   partyId: number,
   asOf?: string
 ): PartyStatement | null {
-  const party = db
-    .prepare("SELECT * FROM parties WHERE id = ?")
-    .get(partyId) as PartyRow | undefined;
+  const party = book.get(
+    "SELECT * FROM parties WHERE id = @partyId AND company_id = @company_id",
+    { partyId }
+  ) as PartyRow | undefined;
   if (!party) return null;
   const control = party.kind === "customer" ? "1200" : "2100";
   const other = party.kind === "customer" ? "2100" : "1200";
-  const rows = db
-    .prepare(
-      `SELECT j.id AS journal_id, j.entry_date, j.entry_type, j.memo, j.ref_no,
-              jl.debit_paise, jl.credit_paise
-       FROM journal_lines jl
-       JOIN journals j ON j.id = jl.journal_id
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = @partyId AND a.code = @code
-         AND (@asOf IS NULL OR j.entry_date <= @asOf)
-       ORDER BY j.entry_date, j.id`
-    )
-    .all({ partyId, code: control, asOf: asOf ?? null }) as Omit<
-    StatementLine,
-    "balance_paise"
-  >[];
+  const rows = book.all(
+    `SELECT j.id AS journal_id, j.entry_date, j.entry_type, j.memo, j.ref_no,
+            jl.debit_paise, jl.credit_paise
+     FROM journal_lines jl
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id
+       AND jl.party_id = @partyId AND a.code = @code
+       AND (@asOf IS NULL OR j.entry_date <= @asOf)
+     ORDER BY j.entry_date, j.id`,
+    { partyId, code: control, asOf: asOf ?? null }
+  ) as Omit<StatementLine, "balance_paise">[];
 
   let balance = 0;
   const lines = rows.map((r) => {
@@ -140,18 +139,18 @@ export function partyStatement(
   });
 
   // AP runs credit-positive, AR debit-positive — sign by the account itself.
-  const cross = db
-    .prepare(
-      `SELECT COALESCE(SUM(CASE WHEN a.code = '2100'
-                THEN jl.credit_paise - jl.debit_paise
-                ELSE jl.debit_paise - jl.credit_paise END), 0) AS net
-       FROM journal_lines jl
-       JOIN journals j ON j.id = jl.journal_id
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE jl.party_id = @partyId AND a.code = @code
-         AND (@asOf IS NULL OR j.entry_date <= @asOf)`
-    )
-    .get({ partyId, code: other, asOf: asOf ?? null }) as { net: number };
+  const cross = book.get(
+    `SELECT COALESCE(SUM(CASE WHEN a.code = '2100'
+              THEN jl.credit_paise - jl.debit_paise
+              ELSE jl.debit_paise - jl.credit_paise END), 0) AS net
+     FROM journal_lines jl
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id
+       AND jl.party_id = @partyId AND a.code = @code
+       AND (@asOf IS NULL OR j.entry_date <= @asOf)`,
+    { partyId, code: other, asOf: asOf ?? null }
+  ) as { net: number };
 
   return {
     party,
@@ -181,29 +180,32 @@ export interface DayBookEntry {
 }
 
 /** Every journal in date order with its legs. Month filter optional. */
-export function dayBook(
-  db: Database.Database,
-  month?: string
-): DayBookEntry[] {
+export function dayBook(book: Book, month?: string): DayBookEntry[] {
   const journals = (
     month
-      ? db
-          .prepare(
-            `SELECT * FROM journals WHERE substr(entry_date, 1, 7) = ? ORDER BY entry_date, id`
-          )
-          .all(month)
-      : db.prepare(`SELECT * FROM journals ORDER BY entry_date, id`).all()
+      ? book.all(
+          `SELECT * FROM journals
+           WHERE company_id = @company_id AND substr(entry_date, 1, 7) = @month
+           ORDER BY entry_date, id`,
+          { month }
+        )
+      : book.all(
+          `SELECT * FROM journals WHERE company_id = @company_id ORDER BY entry_date, id`
+        )
   ) as DayBookEntry[];
-  const legsFor = db.prepare(
-    `SELECT a.code AS account_code, a.name AS account_name,
-            jl.debit_paise, jl.credit_paise, p.name AS party_name
-     FROM journal_lines jl
-     JOIN accounts a ON a.id = jl.account_id
-     LEFT JOIN parties p ON p.id = jl.party_id
-     WHERE jl.journal_id = ?
-     ORDER BY jl.line_no`
-  );
-  return journals.map((j) => ({ ...j, legs: legsFor.all(j.id) as DayBookLeg[] }));
+  return journals.map((j) => ({
+    ...j,
+    legs: book.all(
+      `SELECT a.code AS account_code, a.name AS account_name,
+              jl.debit_paise, jl.credit_paise, p.name AS party_name
+       FROM journal_lines jl
+       JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+       LEFT JOIN parties p ON p.id = jl.party_id AND p.company_id = @company_id
+       WHERE jl.company_id = @company_id AND jl.journal_id = @journalId
+       ORDER BY jl.line_no`,
+      { journalId: j.id }
+    ) as DayBookLeg[],
+  }));
 }
 
 export interface PnlReport {
@@ -219,27 +221,24 @@ export interface PnlReport {
 export type PnlPeriod = string | { from: string; to: string };
 
 /** Income (net credit) vs expenses (net debit) over an optional period. */
-export function profitAndLoss(
-  db: Database.Database,
-  period?: PnlPeriod
-): PnlReport {
+export function profitAndLoss(book: Book, period?: PnlPeriod): PnlReport {
   const month = typeof period === "string" ? period : null;
   const from = typeof period === "object" ? period.from : null;
   const to = typeof period === "object" ? period.to : null;
-  const rows = db
-    .prepare(
-      `SELECT a.code, a.name, a.type,
-              COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net_credit
-       FROM accounts a
-       LEFT JOIN journal_lines jl ON jl.account_id = a.id
-       LEFT JOIN journals j ON j.id = jl.journal_id
-       WHERE a.type IN ('income', 'expense')
-         AND (@month IS NULL OR substr(j.entry_date, 1, 7) = @month)
-         AND (@from IS NULL OR (j.entry_date >= @from AND j.entry_date <= @to))
-       GROUP BY a.id
-       ORDER BY a.code`
-    )
-    .all({ month, from, to }) as {
+  const rows = book.all(
+    `SELECT a.code, a.name, a.type,
+            COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net_credit
+     FROM accounts a
+     LEFT JOIN journal_lines jl ON jl.account_id = a.id AND jl.company_id = @company_id
+     LEFT JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE a.company_id = @company_id
+       AND a.type IN ('income', 'expense')
+       AND (@month IS NULL OR substr(j.entry_date, 1, 7) = @month)
+       AND (@from IS NULL OR (j.entry_date >= @from AND j.entry_date <= @to))
+     GROUP BY a.id
+     ORDER BY a.code`,
+    { month, from, to }
+  ) as {
     code: string;
     name: string;
     type: AccountType;
@@ -291,23 +290,23 @@ export interface BalanceSheetReport {
 
 /** Net P&L (income − expense) for an inclusive entry-date window. */
 function netProfitBetween(
-  db: Database.Database,
+  book: Book,
   from: string | null,
   toExclusive: string | null,
   toInclusive: string | null
 ): number {
-  const r = db
-    .prepare(
-      `SELECT COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net
-       FROM journal_lines jl
-       JOIN journals j ON j.id = jl.journal_id
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE a.type IN ('income', 'expense')
-         AND (@from IS NULL OR j.entry_date >= @from)
-         AND (@toExclusive IS NULL OR j.entry_date < @toExclusive)
-         AND (@toInclusive IS NULL OR j.entry_date <= @toInclusive)`
-    )
-    .get({ from, toExclusive, toInclusive }) as { net: number };
+  const r = book.get(
+    `SELECT COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id
+       AND a.type IN ('income', 'expense')
+       AND (@from IS NULL OR j.entry_date >= @from)
+       AND (@toExclusive IS NULL OR j.entry_date < @toExclusive)
+       AND (@toInclusive IS NULL OR j.entry_date <= @toInclusive)`,
+    { from, toExclusive, toInclusive }
+  ) as { net: number };
   return r.net;
 }
 
@@ -316,25 +315,24 @@ function netProfitBetween(
  * injected as derived lines in the capital group (post-only books preserved).
  * Throws unless assets = liabilities + equity — the fourth balance guard. */
 export function balanceSheet(
-  db: Database.Database,
+  book: Book,
   asOf: string,
   settings: SettingsRow
 ): BalanceSheetReport {
   const fy = fyOf(asOf);
   const yearStart = fyStart(fy);
 
-  const rows = db
-    .prepare(
-      `SELECT a.code, a.name, a.type, a.group_code,
-              COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
-       FROM accounts a
-       JOIN journal_lines jl ON jl.account_id = a.id
-       JOIN journals j ON j.id = jl.journal_id
-       WHERE j.entry_date <= ?
-       GROUP BY a.id
-       ORDER BY a.code`
-    )
-    .all(asOf) as {
+  const rows = book.all(
+    `SELECT a.code, a.name, a.type, a.group_code,
+            COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM accounts a
+     JOIN journal_lines jl ON jl.account_id = a.id AND jl.company_id = @company_id
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE a.company_id = @company_id AND j.entry_date <= @asOf
+     GROUP BY a.id
+     ORDER BY a.code`,
+    { asOf }
+  ) as {
     code: string;
     name: string;
     type: AccountType;
@@ -373,8 +371,8 @@ export function balanceSheet(
   }
 
   // Derived equity: cumulative P&L through FY start, then FY-to-asOf.
-  const retained_prior_paise = netProfitBetween(db, null, yearStart, null);
-  const current_year_profit_paise = netProfitBetween(db, yearStart, null, asOf);
+  const retained_prior_paise = netProfitBetween(book, null, yearStart, null);
+  const current_year_profit_paise = netProfitBetween(book, yearStart, null, asOf);
   if (retained_prior_paise !== 0 || current_year_profit_paise !== 0) {
     const capital = groupOf("capital");
     if (retained_prior_paise !== 0) {
@@ -438,19 +436,21 @@ export interface Gstr3bSummary {
 
 /** GSTR-3B table 3.1-style summary: outward supplies net of credit notes,
  * ITC net of debit notes, and the resulting cash payable. */
-export function gstr3b(db: Database.Database, month: string): Gstr3bSummary {
+export function gstr3b(book: Book, month: string): Gstr3bSummary {
   const acc = (codes: string[], types: EntryType[]): number => {
-    const r = db
-      .prepare(
-        `SELECT COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net
-         FROM journal_lines jl
-         JOIN journals j ON j.id = jl.journal_id
-         JOIN accounts a ON a.id = jl.account_id
-         WHERE substr(j.entry_date, 1, 7) = ?
-           AND a.code IN (${codes.map(() => "?").join(",")})
-           AND j.entry_type IN (${types.map(() => "?").join(",")})`
-      )
-      .get(month, ...codes, ...types) as { net: number };
+    const codeParams = Object.fromEntries(codes.map((c, i) => [`code${i}`, c]));
+    const typeParams = Object.fromEntries(types.map((t, i) => [`type${i}`, t]));
+    const r = book.get(
+      `SELECT COALESCE(SUM(jl.credit_paise), 0) - COALESCE(SUM(jl.debit_paise), 0) AS net
+       FROM journal_lines jl
+       JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+       JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+       WHERE jl.company_id = @company_id
+         AND substr(j.entry_date, 1, 7) = @month
+         AND a.code IN (${codes.map((_, i) => `@code${i}`).join(",")})
+         AND j.entry_type IN (${types.map((_, i) => `@type${i}`).join(",")})`,
+      { month, ...codeParams, ...typeParams }
+    ) as { net: number };
     return r.net;
   };
 
@@ -463,8 +463,7 @@ export function gstr3b(db: Database.Database, month: string): Gstr3bSummary {
   // ITC is an asset — net debit. `|| 0` normalises the -0 the negation
   // produces on an empty month, which would otherwise print as "-₹0.00".
   const itc_paise = -acc(["1300"], inward) || 0;
-  const net_payable_paise =
-    cgst_paise + sgst_paise + igst_paise - itc_paise;
+  const net_payable_paise = cgst_paise + sgst_paise + igst_paise - itc_paise;
   return {
     month,
     outward_taxable_paise,
@@ -494,14 +493,14 @@ export interface Gstr1B2bRow {
 
 /** GSTR-1 B2B-style rows: one line per outward document (sale or credit
  * note) in the month, with its taxable value and tax split. */
-export function gstr1B2B(db: Database.Database, month: string): Gstr1B2bRow[] {
-  const journals = db
-    .prepare(
-      `SELECT id, entry_date, entry_type, ref_no, memo FROM journals
-       WHERE entry_type IN ('sale', 'credit_note') AND substr(entry_date, 1, 7) = ?
-       ORDER BY entry_date, id`
-    )
-    .all(month) as {
+export function gstr1B2B(book: Book, month: string): Gstr1B2bRow[] {
+  const journals = book.all(
+    `SELECT id, entry_date, entry_type, ref_no, memo FROM journals
+     WHERE company_id = @company_id
+       AND entry_type IN ('sale', 'credit_note') AND substr(entry_date, 1, 7) = @month
+     ORDER BY entry_date, id`,
+    { month }
+  ) as {
     id: number;
     entry_date: string;
     entry_type: EntryType;
@@ -509,17 +508,14 @@ export function gstr1B2B(db: Database.Database, month: string): Gstr1B2bRow[] {
     memo: string;
   }[];
 
-  const legFor = db.prepare(
-    `SELECT a.code, jl.debit_paise, jl.credit_paise, jl.party_id
-     FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
-     WHERE jl.journal_id = ?`
-  );
-  const partyFor = db.prepare(
-    "SELECT name, gstin, state_code, kind FROM parties WHERE id = ?"
-  );
-
   return journals.map((j) => {
-    const legs = legFor.all(j.id) as {
+    const legs = book.all(
+      `SELECT a.code, jl.debit_paise, jl.credit_paise, jl.party_id
+       FROM journal_lines jl
+       JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+       WHERE jl.company_id = @company_id AND jl.journal_id = @journalId`,
+      { journalId: j.id }
+    ) as {
       code: string;
       debit_paise: number;
       credit_paise: number;
@@ -533,12 +529,10 @@ export function gstr1B2B(db: Database.Database, month: string): Gstr1B2bRow[] {
     };
     const control = legs.find((x) => x.code === "1200" && x.party_id !== null);
     const party = control?.party_id
-      ? (partyFor.get(control.party_id) as {
-          name: string;
-          gstin: string;
-          state_code: string;
-          kind: PartyKind;
-        })
+      ? (book.get(
+          "SELECT name, gstin, state_code, kind FROM parties WHERE id = @partyId AND company_id = @company_id",
+          { partyId: control.party_id }
+        ) as { name: string; gstin: string; state_code: string; kind: PartyKind } | undefined)
       : null;
     return {
       journal_id: j.id,
@@ -565,28 +559,120 @@ export interface DashboardStats {
   journals_this_month: number;
 }
 
-export function dashboardStats(
-  db: Database.Database,
-  month: string
-): DashboardStats {
-  const ar = db
-    .prepare(
-      `SELECT COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
-       FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
-       WHERE a.code = '1200'`
-    )
-    .get() as { net: number };
-  const pending = db
-    .prepare("SELECT COUNT(*) AS n FROM documents WHERE status = 'extracted'")
-    .get() as { n: number };
-  const journals = db
-    .prepare(
-      "SELECT COUNT(*) AS n FROM journals WHERE substr(entry_date, 1, 7) = ?"
-    )
-    .get(month) as { n: number };
+/** "YYYY-MM" ± n months, as pure string math (fy.ts convention — no Date). */
+function stepMonth(month: string, delta: number): string {
+  const m = month.match(/^(\d{4})-(\d{2})$/);
+  if (!m) throw new Error(`Bad month "${month}" — expected "YYYY-MM"`);
+  const mm = Number(m[2]);
+  if (mm < 1 || mm > 12) throw new Error(`Bad month "${month}"`);
+  const total = Number(m[1]) * 12 + (mm - 1) + delta;
+  const year = Math.floor(total / 12);
+  const idx = ((total % 12) + 12) % 12;
+  return `${year}-${String(idx + 1).padStart(2, "0")}`;
+}
+
+export interface TrendPoint {
+  month: string;
+  closing_paise: number;
+}
+
+/** Receivables CLOSING BALANCE at the end of each of the last `count` months
+ * ending at `month`. A balance, not a flow: each point carries every entry
+ * ever posted up to that month end, so the series ties to the AR control
+ * account at every step and its final point is the control total as at
+ * `month` end. (The Receivables tile is all-time, so a book carrying
+ * future-dated entries will show a tile above the last point — a real
+ * difference, deliberately not smoothed away.)
+ *
+ * Ported onto the Book handle at the RVOS-004/005 merge (RVOS-004 P6's
+ * ratchet doesn't see this file — it landed after the ratchet's last scan —
+ * so this was scoped by hand, the same way P4/P5 scoped their own new code
+ * as they went, rather than left for a ratchet run that would never catch it. */
+export function receivablesTrend(
+  book: Book,
+  month: string,
+  count = 4
+): TrendPoint[] {
+  if (count < 1) throw new Error("receivablesTrend needs count >= 1");
+  const months: string[] = [];
+  for (let i = count - 1; i >= 0; i--) months.push(stepMonth(month, -i));
+  const first = months[0];
+  const last = months[months.length - 1];
+
+  const opening = book.get(
+    `SELECT COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE jl.company_id = @company_id AND a.code = '1200'
+       AND substr(j.entry_date, 1, 7) < @first`,
+    { first }
+  ) as { net: number };
+
+  const rows = book.all(
+    `SELECT substr(j.entry_date, 1, 7) AS m,
+            COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     JOIN journals j ON j.id = jl.journal_id AND j.company_id = @company_id
+     WHERE jl.company_id = @company_id AND a.code = '1200'
+       AND substr(j.entry_date, 1, 7) >= @first
+       AND substr(j.entry_date, 1, 7) <= @last
+     GROUP BY m`,
+    { first, last }
+  ) as { m: string; net: number }[];
+
+  const delta = new Map(rows.map((r) => [r.m, r.net]));
+  let running = opening.net;
+  return months.map((m) => {
+    running += delta.get(m) ?? 0;
+    return { month: m, closing_paise: running };
+  });
+}
+
+export interface DocumentStatusSlice {
+  status: DocumentStatus;
+  count: number;
+}
+
+/** Document pipeline census, ordered by pipeline stage rather than count, so
+ * the legend reads as the workflow does. Statuses with no documents are
+ * omitted — an empty slice is noise, not information. Ported onto the Book
+ * handle at the RVOS-004/005 merge — see receivablesTrend's comment above. */
+export function documentStatusBreakdown(book: Book): DocumentStatusSlice[] {
+  const rows = book.all(
+    "SELECT status, COUNT(*) AS n FROM documents WHERE company_id = @company_id GROUP BY status"
+  ) as { status: DocumentStatus; n: number }[];
+  const order: DocumentStatus[] = [
+    "posted",
+    "extracted",
+    "uploaded",
+    "extracting",
+    "failed",
+  ];
+  const byStatus = new Map(rows.map((r) => [r.status, r.n]));
+  return order
+    .filter((s) => (byStatus.get(s) ?? 0) > 0)
+    .map((s) => ({ status: s, count: byStatus.get(s) as number }));
+}
+
+export function dashboardStats(book: Book, month: string): DashboardStats {
+  const ar = book.get(
+    `SELECT COALESCE(SUM(jl.debit_paise), 0) - COALESCE(SUM(jl.credit_paise), 0) AS net
+     FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id AND a.code = '1200'`
+  ) as { net: number };
+  const pending = book.get(
+    "SELECT COUNT(*) AS n FROM documents WHERE company_id = @company_id AND status = 'extracted'"
+  ) as { n: number };
+  const journals = book.get(
+    "SELECT COUNT(*) AS n FROM journals WHERE company_id = @company_id AND substr(entry_date, 1, 7) = @month",
+    { month }
+  ) as { n: number };
   return {
     receivables_paise: ar.net,
-    gst_payable_paise: gstr3b(db, month).net_payable_paise,
+    gst_payable_paise: gstr3b(book, month).net_payable_paise,
     pending_review: pending.n,
     journals_this_month: journals.n,
   };

@@ -1,6 +1,6 @@
 import path from "node:path";
-import type Database from "better-sqlite3";
-import { getDb } from "./db";
+import type { Book } from "./book";
+import { getCompany } from "./companies";
 import { claudeVision } from "./llm-cli";
 import {
   extractJsonObject,
@@ -94,41 +94,45 @@ Respond with ONLY a raw JSON object — no markdown fences, no prose —
 }
 
 function persistExtraction(
-  db: Database.Database,
+  book: Book,
   docId: number,
   result: ExtractionResult,
   model: string
 ): void {
-  const insert = db.prepare(
-    `INSERT INTO staged_rows
-       (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  const tx = db.transaction(() => {
-    db.prepare("DELETE FROM staged_rows WHERE document_id = ?").run(docId);
+  book.tx((b) => {
+    b.run("DELETE FROM staged_rows WHERE document_id = @docId AND company_id = @company_id", {
+      docId,
+    });
     for (const r of result.rows) {
-      insert.run(
-        docId,
-        r.row_no,
-        r.entry_date,
-        r.particulars,
-        r.ref_no,
-        r.debit_paise,
-        r.credit_paise,
-        r.entry_type,
-        r.gst_rate,
-        r.settle_account,
-        r.confidence,
-        r.is_balance_row ? 1 : 0,
-        r.include ? 1 : 0
+      b.run(
+        `INSERT INTO staged_rows
+           (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
+            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, company_id)
+         VALUES (@docId, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
+                 @entry_type, @gst_rate, @settle_account, @confidence, @is_balance_row, @include, @company_id)`,
+        {
+          docId,
+          row_no: r.row_no,
+          entry_date: r.entry_date,
+          particulars: r.particulars,
+          ref_no: r.ref_no,
+          debit_paise: r.debit_paise,
+          credit_paise: r.credit_paise,
+          entry_type: r.entry_type,
+          gst_rate: r.gst_rate,
+          settle_account: r.settle_account,
+          confidence: r.confidence,
+          is_balance_row: r.is_balance_row ? 1 : 0,
+          include: r.include ? 1 : 0,
+        }
       );
     }
-    db.prepare(
-      "UPDATE documents SET status = 'extracted', error = '', model = ?, extracted_at = ? WHERE id = ?"
-    ).run(model, new Date().toISOString(), docId);
+    b.run(
+      `UPDATE documents SET status = 'extracted', error = '', model = @model, extracted_at = @now
+       WHERE id = @docId AND company_id = @company_id`,
+      { model, now: new Date().toISOString(), docId }
+    );
   });
-  tx();
 }
 
 function humanizeExtractionError(e: unknown): string {
@@ -140,37 +144,39 @@ function humanizeExtractionError(e: unknown): string {
 }
 
 /** uploaded/failed/extracted → extracting → extracted (or failed). Re-extract
- * is allowed any number of times until the document is posted. */
+ * is allowed any number of times until the document is posted. Every query is
+ * scoped to `book`'s active company — RVOS-004 P6. */
 export async function extractDocument(
+  book: Book,
   docId: number
 ): Promise<{ rows: number }> {
-  const db = getDb();
-  const doc = db
-    .prepare(
-      `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
-       FROM documents d JOIN parties p ON p.id = d.party_id WHERE d.id = ?`
-    )
-    .get(docId) as DocumentWithParty | undefined;
+  const doc = book.get(
+    `SELECT d.*, p.name AS party_name, p.kind AS party_kind, p.state_code AS party_state_code
+     FROM documents d
+     JOIN parties p ON p.id = d.party_id AND p.company_id = @company_id
+     WHERE d.id = @docId AND d.company_id = @company_id`,
+    { docId }
+  ) as DocumentWithParty | undefined;
   if (!doc) throw new Error("Document not found.");
   if (doc.status === "posted") {
     throw new Error("Document is posted — its rows are locked.");
   }
 
-  db.prepare(
-    "UPDATE documents SET status = 'extracting', error = '' WHERE id = ?"
-  ).run(docId);
+  book.run(
+    "UPDATE documents SET status = 'extracting', error = '' WHERE id = @docId AND company_id = @company_id",
+    { docId }
+  );
 
   try {
     if (process.env.DEMO_MODE === "1") {
       await new Promise((r) => setTimeout(r, 800));
       const result = validateExtraction(DEMO_FIXTURE);
-      persistExtraction(db, docId, result, "demo-fixture");
+      persistExtraction(book, docId, result, "demo-fixture");
       return { rows: result.rows.length };
     }
 
-    const settings = db
-      .prepare("SELECT * FROM settings WHERE id = 1")
-      .get() as SettingsRow;
+    // requireBook() already asserted this company exists and is active.
+    const settings = getCompany(book.db, book.companyId)!;
     const model = extractModel();
     const prompt = buildExtractionPrompt(doc, settings);
 
@@ -191,7 +197,7 @@ export async function extractDocument(
         const result = validateExtraction(
           JSON.parse(extractJsonObject(reply))
         );
-        persistExtraction(db, docId, result, model);
+        persistExtraction(book, docId, result, model);
         return { rows: result.rows.length };
       } catch (e) {
         lastError = e instanceof Error ? e.message : String(e);
@@ -200,9 +206,10 @@ export async function extractDocument(
     throw new Error(lastError || "extraction failed");
   } catch (e) {
     const message = humanizeExtractionError(e);
-    db.prepare(
-      "UPDATE documents SET status = 'failed', error = ? WHERE id = ?"
-    ).run(message, docId);
+    book.run(
+      "UPDATE documents SET status = 'failed', error = @message WHERE id = @docId AND company_id = @company_id",
+      { message, docId }
+    );
     throw new Error(message);
   }
 }
