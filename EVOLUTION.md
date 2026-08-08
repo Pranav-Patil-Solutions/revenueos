@@ -1031,3 +1031,51 @@ EVOLUTION.md at merge time (see #31's GOTCHAS note). Any branch cut before
 a schema-shaping migration lands, and rebased onto it afterward, should
 expect this — not as a surprise each time, but as a standing property of
 working two branches off the same point in a fast-moving schema history.
+
+## 35. RVOS-005 code review (2026-08-08): the isolation suite's own coverage lagged the port it was supposed to be proving
+
+**What happened:** The zero-context code-reviewer pass over RVOS-005's own
+diff flagged that `test/isolation-suite.test.ts`'s `snapshot()` function —
+the ship gate's central proof that no report leaks across companies — had
+never been updated to include `receivablesTrend`/`documentStatusBreakdown`,
+even though those two functions had JUST been ported onto the `Book` handle
+in this same session's rebase (#34). The SQL itself was correct (verified
+independently, and would trip `book.ts`'s structural guard if it weren't),
+but nothing in the automated suite actually EXERCISED that correctness for
+these two functions — the isolation proof's own coverage had quietly
+stopped growing at exactly the point new report functions stopped being
+report-route exports.
+
+Fixing it surfaced a second, deeper gap while fixing the first: adding the
+two fields to `snapshot()` didn't actually prove anything, because neither
+test company (A, B, or the empty control C) had ever posted a single
+`documents` row in the whole fixture — only vouchers. `documentStatusBreakdown`
+was `[]` for every company regardless of whether its scoping was correct or
+broken, which would have made the "fix" pure theater: a field present in
+the snapshot object, contributing zero actual assertions.
+
+**Resolution:** Added `insertDocument()` and a distinguishing status per
+company (A: `posted`, B: `extracted`) to the isolation fixture, then
+verified the fix has real teeth rather than trusting the green run:
+deliberately broke `documentStatusBreakdown`'s WHERE clause in a way that
+keeps the literal substring `"company_id"` present in the SQL text (so
+`book.ts`'s text-matching guard does NOT fire — the realistic "looks scoped,
+isn't" case, not the easy "obviously missing" case caught by #29-style
+mutation tests earlier this build). Confirmed the suite now catches it —
+company C's empty control came back holding company A's document — then
+reverted.
+
+**Delta (rule):** A ship-gate test suite is itself code with its own
+coverage, and coverage of a GENERIC gate ("every report function") silently
+lags any new function added after the gate was last touched — exactly the
+same shape of gap as #34's ratchet-can't-see-new-files finding, one layer
+up. Adding a field to an isolation snapshot is not evidence the isolation
+snapshot now proves anything about that field; the fixture has to actually
+exercise the code path (real data, not vacuous emptiness) AND the assertion
+has to be confirmed to fail on a realistic broken version — specifically
+one that would survive whatever cheaper structural guard exists (here:
+keeping the text-matched keyword present), since that is the actual bug
+class a behavioral test earns its keep by catching. A code review that
+merely confirms "the new code is correct" without asking "does the thing
+that's supposed to CATCH new code actually see this new code" would have
+missed both gaps here.

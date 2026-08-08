@@ -284,17 +284,45 @@ rebased tree: 391 tests pass, tsc/lint/build/smoke all green.
 on top of this branch's tip — confirmed via `git merge-base` that its
 ancestor is this branch's `bc66a61`, not the old stale P2a point.
 
-**RVOS-005's OWN ship gate is still open** (run fresh on the REBASED tree,
-`feat/rvos-005-dashboard-ux` @ `10238ab`): zero-context code-reviewer full
-diff over `master...feat/rvos-005-dashboard-ux`; qa-runner over the changed
-modules; and — the one item that cannot be skipped as "already verified" —
-re-drive the ⌃K/⌃A voucher-posting regression (EVOLUTION #34 on that
-branch) in an actual browser, on THIS rebased diff specifically, since the
-composition around it changed during the rebase even though the test suite
-passing doesn't prove the live browser interaction still holds.
+**code-reviewer full-branch diff — DONE, 2026-08-08, 0 blockers, 2 warnings
+fixed.** Reviewed `feat/rvos-004-multi-client...feat/rvos-005-dashboard-ux`
+(005's own diff only — 004's side already went through its own review, not
+re-litigated here), with priority attention on the tenancy port from the
+rebase and the ⌃A/palette keyboard-hijack fix. Verified clean:
+`receivablesTrend`/`documentStatusBreakdown` scope every JOIN by
+`company_id` correctly (would trip `book.ts`'s guard if that were ever
+removed); `page.tsx` sources both through the one `requireBook()`-derived
+`book`, no second raw `getDb()`; `actionSurvivesModal()` is present,
+GENERAL (blocks every action, not a narrow ⌃A-only patch), and exhaustively
+tested. Two warnings, both fixed (`d6fa2c6` on `feat/rvos-005-dashboard-ux`):
+1. `test/isolation-suite.test.ts`'s `snapshot()` didn't cover the two newly
+   ported functions at all — the ship gate's own isolation proof never
+   actually extended to them, despite the SQL being structurally correct.
+   Fixing this surfaced a SECOND gap: neither test company had ever posted
+   a `documents` row, so `documentStatusBreakdown` was vacuously `[]`
+   regardless of scoping — the field addition alone would have proven
+   nothing. Added `insertDocument()` + a distinguishing status per company
+   to the fixture, then verified the fix has teeth: deliberately broke the
+   function's WHERE clause in a way that keeps the literal substring
+   `"company_id"` present (so the structural guard doesn't fire), confirmed
+   the suite caught it (company C's empty control came back with company
+   A's document), reverted.
+2. The command-palette's Escape handler didn't `stopPropagation()`, so the
+   same keystroke also bubbled to the window-level Shortcuts listener and
+   dismissed the palette a second time — harmless only by coincidence.
+   Added `stopPropagation()`.
+391 tests pass, tsc/lint/build/smoke all green on `feat/rvos-005-dashboard-ux`
+@ `d6fa2c6`.
+
+**Still open**: qa-runner over the changed modules, and — the one item that
+cannot be skipped as "already verified" — re-drive the ⌃K/⌃A
+voucher-posting regression (EVOLUTION #34 on that branch) in an actual
+browser, on THIS rebased-and-fixed diff specifically, since the composition
+around it changed during the rebase even though the test suite passing
+doesn't prove the live browser interaction still holds.
 
 **MERGE** (after RVOS-005's own gate is green): fast-forward or merge
-`feat/rvos-005-dashboard-ux` (`10238ab`) into `feat/rvos-004-multi-client`
+`feat/rvos-005-dashboard-ux` (`d6fa2c6`) into `feat/rvos-004-multi-client`
 → `git fetch origin && git merge origin/master` (the LICENSE commit,
 trivial) → push master.
 
