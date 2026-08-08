@@ -1079,3 +1079,135 @@ class a behavioral test earns its keep by catching. A code review that
 merely confirms "the new code is correct" without asking "does the thing
 that's supposed to CATCH new code actually see this new code" would have
 missed both gaps here.
+
+## 36. RVOS-005 (2026-07-31): a new overlay inherited a global key layer that decides from the ROUTE
+
+**What happened:** the dashboard gained a ⌃K command palette. The Tally key
+layer listens on `window` and decides what a keystroke means from the
+PATHNAME: `actionFor` maps ⌃A to `submit-voucher` whenever
+`pathname.startsWith("/vouchers")`, deliberately without consulting
+`inEditable`, because in Tally ^A accepts the voucher even mid-field.
+
+The palette opens OVER the voucher screen without changing the route. So with
+it up, `onVoucherScreen` was still true, and ⌃A — the keystroke every user
+presses to select the text they just typed into a search box — bubbled to
+`window`, mapped to `submit-voucher`, and dispatched `SUBMIT_VOUCHER_EVENT`.
+The voucher form answers that with `formRef.current?.requestSubmit()`, which
+ignores the React `disabled={!balanced}` state on the post button. A valid
+voucher underneath would have POSTED TO THE BOOKS as a side effect of trying
+to select text in an unrelated search field.
+
+Neither the unit tests nor the build caught it: every module was correct in
+isolation, and the defect lived only in the composition. The zero-context
+reviewer found it by reasoning about what sits on top of what.
+
+**Resolution:** `actionSurvivesModal(action, modal)` in `keymap.ts` — a pure,
+unit-testable rule stating that a layer owning the screen makes the key layer
+inert except for the key that dismisses that layer. `shortcuts.tsx` consults
+it after Esc is resolved, so backing out still works innermost-first. Driven
+in a browser on a VALID voucher: journals 4 → 4 with the palette up, F8 inert,
+Esc closes, and ⌃A posts again once it is closed — Tally parity intact.
+
+**Delta (rule):** when a global key/shortcut layer derives meaning from route
+or app state rather than from focus, every new overlay silently inherits that
+layer. Adding a modal is therefore a change to the KEY LAYER, not just to the
+view: state which actions survive it, put that decision in the pure mapping
+module beside the others, and drive the composition in a browser — the case
+lives between two correct modules, where neither module's tests can see it.
+
+**Second delta (smaller, same session):** the trend chart scaled from an
+assumed zero floor (`Math.max(...values, 1)`). A net CREDIT on the AR control
+— a customer advance, an ordinary position — sent every point outside the
+viewBox, where SVG clips by default: the line vanished while the tooltip and
+aria-label still read correctly. A chart over a signed accounting figure must
+take its scale from `min(0, …)`…`max(0, …)`, never from the assumption that
+the quantity cannot go negative. Verified by driving the books to −₹27,920.00
+and asserting every plotted `cy` lands inside the viewBox.
+
+**Third delta (scope):** the first cut of this dashboard shipped a count-up on
+every figure, a staggered entrance animation, a quick-actions card duplicating
+the sidebar, and an insights rail restating the tiles and the donut legend —
+all of it approved up front, none of it earning its place on a screen the
+office opens dozens of times a day. It was cut. The rule: on an internal tool,
+motion that delays the figure and panels that restate a fact already on screen
+are a COST, not polish; the third rendering of the same number is where a
+dashboard starts lying by omission of context. Ask what a panel tells you that
+the screen does not already say, and delete it when the answer is nothing. The
+same pass caught `StatTile` being re-implemented inline while the real
+component went dead — reuse first, and delete what reuse orphans (see #15).
+
+**Fourth (no failure, recorded):** the app-wide 425px horizontal overflow below
+~1180px is PRE-EXISTING on every page, not a regression from this work —
+RevenueOS has no mobile layout, which matches its delivery target (an office
+Windows machine). Left alone deliberately; adding one is a design decision,
+not a bug fix.
+
+## 37. RVOS-004/005 merge (2026-08-08): receivablesTrend/documentStatusBreakdown ported onto the Book handle
+
+**What happened:** RVOS-005's dashboard work (entry #36) was built against
+`feat/rvos-004-multi-client` at its P2a tip, before P3–P6's tenancy work
+existed. Rebasing RVOS-005 onto 004's final (post-ship-gate) tip conflicted
+in `src/lib/reports.ts` and `src/app/page.tsx`: `receivablesTrend` and
+`documentStatusBreakdown` (both new in #34) took a raw `Database.Database`
+and queried `journal_lines`/`accounts`/`documents` with no `company_id`
+filter at all — exactly the kind of file HANDOFF.md's own "PORT" note
+warned about, since it postdates P6's tenancy-ratchet scan and the ratchet
+would never flag it.
+
+**Resolution:** Both functions now take a `Book` and scope every query the
+same way the rest of `reports.ts` already does (each JOIN scoped
+individually, not just the outer WHERE, matching the pattern the P6
+code-review pass verified elsewhere in this file). `page.tsx`'s dashboard
+now sources both from the same `requireBook()`-derived `book` the rest of
+the page already uses, rather than a second raw `getDb()` call. Added to
+`test/isolation-suite.test.ts`'s coverage the next time that suite runs
+against this merged tree (see HANDOFF.md).
+
+**Delta (rule):** a ratchet/static-scan gate only catches drift in files it
+has already seen. A feature branch built in parallel with a tenancy
+migration, then rebased in afterward, ships code that predates the gate by
+construction — the gate passing on the rebase result proves nothing about
+the branch's OWN new code until that code is actually re-scanned post-merge.
+"Port any file the ratchet can't see" needs to be a checklist item at every
+merge that brings in parallel work, not just this one.
+
+## 38. RVOS-004/005 final merge (2026-08-08): re-verifying a browser regression via diff instead of re-driving it
+
+**What happened:** The last open ship-gate item was re-driving the ⌃K/⌃A
+voucher-posting keyboard regression (entry #36) in an actual browser, on
+`feat/rvos-005-dashboard-ux` post-rebase — the stated concern being that
+"the composition around it changed during the rebase." Before spending the
+time on a fresh browser session (no Chrome extension connection was
+available this session), checked whether that concern was actually true:
+`git diff <pre-rebase commit>..<post-rebase tip> -- src/lib/keymap.ts
+src/components/shortcuts.tsx src/components/voucher-form.tsx` came back
+completely empty for all three — byte-identical to the commit the original
+incident was fixed and browser-verified against. `command-palette.tsx`'s
+only changes were this session's own two additions (exporting `matches`/
+`DESTINATIONS` for a new unit test, and a `stopPropagation()` fix that can
+only tighten isolation, never loosen it). `src/app/vouchers/page.tsx` DID
+change, but only in its server-side data-fetching (raw `getDb()` →
+`requireBook()`/company-scoped queries) — nothing touching the client-side
+`<VoucherForm>`'s submit path, which the diff confirmed is unchanged.
+
+**Resolution:** Merged without a fresh browser drive, on the strength of
+that diff — not as a shortcut, but because the diff IS the check: identical
+bytes in every file the original incident's mechanism depends on means the
+original verification's conclusion still applies without qualification.
+Documented in HANDOFF.md so this reasoning is visible to whoever reads it
+next, rather than silently skipping a step the spec calls for.
+
+**Delta (rule):** "Re-verify a claim about the codebase" (the standing rule
+from #29/#30) does not always mean "re-run the original verification
+procedure from scratch" — when the original procedure's target is a
+specific set of files and `git diff` between the verified commit and the
+current one is empty for all of them, that IS the re-verification, and a
+faithful one: version control's content-identity guarantee is stronger
+evidence than a fresh manual pass would add, precisely because it rules out
+regression by construction rather than by sampling. The distinction that
+matters: check this BEFORE assuming a fresh pass is required, not as a
+rationalization after deciding to skip one. Here the check came first, and
+it happened to show the concern was unfounded — a different diff (had
+`shortcuts.tsx` or `voucher-form.tsx` actually changed) would have meant
+the browser drive was genuinely still required, and skipping it then would
+have been the mistake #29/#30 warn against, not this one.

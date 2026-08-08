@@ -5,7 +5,7 @@
  *
  * F4 Contra · F5 Payment · F6 Receipt · F7 Journal · F8 Sale · F9 Purchase ·
  * ^F8 Credit note · ^F9 Debit note · F2 date · ^A post · Esc back ·
- * Alt+C inline-create · ? overlay.
+ * Alt+C inline-create · ^K palette · ? overlay.
  */
 
 export type VoucherNavKind =
@@ -24,6 +24,7 @@ export type KeyAction =
   | { type: "submit-voucher" }
   | { type: "back" }
   | { type: "inline-create" }
+  | { type: "toggle-palette" }
   | { type: "toggle-overlay" };
 
 /** The slice of a KeyboardEvent the mapping depends on. */
@@ -76,6 +77,12 @@ export function actionFor(e: KeyStroke, ctx: KeyContext): KeyAction | null {
   if (!e.ctrlKey && !e.altKey && e.key === "F2") {
     return ctx.onVoucherScreen ? { type: "focus-date" } : null;
   }
+  // Palette is reachable from anywhere, including mid-edit — it is how you
+  // leave the screen you are stuck on. ^K (not ⌘K) because metaKey is left to
+  // the browser above, and ^ is this app's modifier (^A post, ^B sidebar).
+  if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "k") {
+    return { type: "toggle-palette" };
+  }
   if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "a") {
     // Tally accept. Only on the voucher screen — everywhere else ^A stays
     // native select-all.
@@ -93,6 +100,32 @@ export function actionFor(e: KeyStroke, ctx: KeyContext): KeyAction | null {
   return null;
 }
 
+/** A layer sitting on top of the screen and owning the keyboard. */
+export type ModalLayer = "palette" | "overlay" | null;
+
+/**
+ * Whether an action still carries while a modal layer owns the screen.
+ *
+ * This exists because the Tally layer listens on `window` and decides from the
+ * ROUTE, not from what is on top of it: ^A maps to submit-voucher anywhere
+ * under /vouchers, and `requestSubmit()` ignores the disabled state of the
+ * post button. So with the palette open over a voucher, ^A — which every user
+ * presses to select the text they just typed into a search box — would post
+ * the voucher underneath. A modal has to make the layer inert.
+ *
+ * Esc is resolved before this and always backs out, innermost layer first.
+ */
+export function actionSurvivesModal(
+  action: KeyAction,
+  modal: ModalLayer
+): boolean {
+  if (!modal) return true;
+  // Only the key that toggles the modal itself still acts.
+  return modal === "palette"
+    ? action.type === "toggle-palette"
+    : action.type === "toggle-overlay";
+}
+
 /** Rows for the `?` overlay and the voucher key rail, in display order. */
 export const KEY_HINTS: { keys: string; label: string }[] = [
   { keys: "F4", label: "Contra" },
@@ -108,5 +141,6 @@ export const KEY_HINTS: { keys: string; label: string }[] = [
   { keys: "Esc", label: "Back" },
   { keys: "⌥C", label: "Create party" },
   { keys: "⌃B", label: "Sidebar" },
+  { keys: "⌃K", label: "Go to…" },
   { keys: "?", label: "Shortcuts" },
 ];
