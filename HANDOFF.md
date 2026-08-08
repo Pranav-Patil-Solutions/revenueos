@@ -314,15 +314,34 @@ tested. Two warnings, both fixed (`d6fa2c6` on `feat/rvos-005-dashboard-ux`):
 391 tests pass, tsc/lint/build/smoke all green on `feat/rvos-005-dashboard-ux`
 @ `d6fa2c6`.
 
-**Still open**: qa-runner over the changed modules, and — the one item that
-cannot be skipped as "already verified" — re-drive the ⌃K/⌃A
-voucher-posting regression (EVOLUTION #34 on that branch) in an actual
-browser, on THIS rebased-and-fixed diff specifically, since the composition
-around it changed during the rebase even though the test suite passing
-doesn't prove the live browser interaction still holds.
+**qa-runner over changed modules — DONE, 2026-08-08, 0 failures.** Full gate
+re-confirmed green (tsc/lint/build/smoke/391 tests). Correctly declined to
+force component-test infra onto `command-palette.tsx`/`trend-chart.tsx`/
+`donut-chart.tsx` — this project has no jsdom/RTL/vitest, and no existing
+`src/components/*` file has a dedicated unit test; that's this codebase's
+established convention, not a gap to paper over. Did flag one real,
+actionable finding: `command-palette.tsx`'s `matches()` — the subsequence/
+substring search over every route — was a non-trivial pure function,
+inlined and unexported, untestable in place. Fixed (`1ebb939` on
+`feat/rvos-005-dashboard-ux`): exported `matches`/`DESTINATIONS` (no
+structural change — both were already plain top-level declarations), added
+`test/command-palette.test.ts` (order-sensitivity via a synthetic fixture,
+since real `DESTINATIONS` group names can accidentally satisfy the
+substring fallback either direction; case/whitespace handling; every
+destination matches its own label; no duplicate hrefs). Worth doing
+specifically because this is the same feature that already caused one real
+incident this build (the ⌃A voucher-hijack) — its correctness isn't
+hypothetical. 400 tests pass (was 391), tsc/lint/build all green.
 
-**MERGE** (after RVOS-005's own gate is green): fast-forward or merge
-`feat/rvos-005-dashboard-ux` (`d6fa2c6`) into `feat/rvos-004-multi-client`
+**Still open — the one item that cannot be skipped as "already verified"**:
+re-drive the ⌃K/⌃A voucher-posting regression (EVOLUTION #34 on that
+branch) in an actual browser, on THIS rebased-and-fixed diff specifically
+(`feat/rvos-005-dashboard-ux` @ `1ebb939`), since the composition around it
+changed during the rebase even though the test suite passing doesn't prove
+the live browser interaction still holds.
+
+**MERGE** (after the browser drive is green): fast-forward or merge
+`feat/rvos-005-dashboard-ux` (`1ebb939`) into `feat/rvos-004-multi-client`
 → `git fetch origin && git merge origin/master` (the LICENSE commit,
 trivial) → push master.
 
