@@ -940,3 +940,44 @@ would turn "whoops, wrong branch" into "whose commit do I just cherry-picked
 over," or worse, an accidental `git reset`/`checkout -- .` discarding
 someone else's uncommitted work. Re-verifying branch identity is now a
 standing check, not a one-time fix — see this HANDOFF's own GOTCHAS entry.
+
+## 32. RVOS-004 P6 (2026-08-08): the migration-rehearsal ship gate found a real bug, by actually running it
+
+**What happened:** P6's ship gate requires "migration rehearsed on a COPY
+of the real office database, snapshot restore verified, BEFORE it's ever
+run for real." Starting that rehearsal, step one was the office's own
+precondition — `npm run backup` — run against the real (still
+pre-migration) `data/revenueos.db`. It failed outright: `no such table:
+companies`. P6's own earlier commit (`8b0267f`) had changed
+`verifyBackup`'s sanity-check table list from `["journals", "journal_lines",
+"accounts", "settings"]` to `["journals", "journal_lines", "accounts",
+"companies"]` — correct for a database that has already been migrated, but
+every real installation is on the OLD schema right up until someone runs
+`npm run migrate`, and this office's actually is. The effect: `npm run
+backup`, the exact command the migration ship gate itself instructs
+running FIRST, was broken for every not-yet-migrated database, including
+the real one sitting behind the live :3322 dev server.
+
+**Resolution:** `verifyBackup` now checks whichever identity table the
+schema actually has — `companies` if migration 001 has run, `settings` if
+it hasn't, and fails only if NEITHER exists (a genuinely foreign/corrupt
+file). Added a regression test (`test/backup.test.ts`) that builds a
+fixture with `initSchema` + `seedCoreData` but deliberately WITHOUT calling
+`migrate()`, asserting `verifyBackup` still passes it. Re-ran `npm run
+backup` against the real db afterward — succeeded, 4 snapshots retained,
+source db's mtime unchanged (confirmed via `ls -la` before/after, same as
+the check in #29). 377 tests pass (was 376).
+
+**Delta (rule):** A ship gate that says "rehearse before running for real"
+is not satisfied by rehearsing against a database already shaped like the
+END state — the whole value of a rehearsal is running it against what the
+target ACTUALLY looks like right now, warts included. Here, "run the actual
+precondition command against the actual real file" surfaced a regression in
+under a minute that a rehearsal against a fixture already migrated to
+`companies` would never have found, because that fixture would never
+exercise the pre-migration code path at all. This is the same lesson as
+#27 (a smoke script silently drifted from a schema change) and #29/#30
+(verify a claim about the codebase before trusting it) wearing a different
+coat: a migration's "ship gate" needs to be exercised against a
+BEFORE-shaped database, not an idealized AFTER-shaped one, or it will
+rubber-stamp exactly the class of bug it exists to catch.

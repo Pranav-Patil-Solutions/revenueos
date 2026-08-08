@@ -212,6 +212,41 @@ test("verifyBackup rejects a missing, empty, foreign or corrupt file", () => {
   }
 });
 
+/**
+ * `npm run backup` is what an office runs to satisfy "back up first" BEFORE
+ * `npm run migrate` — the exact precondition RVOS-004 P6's own ship gate
+ * requires. Every real installation is on this pre-migration schema right
+ * up until someone runs the migration, so a backup taken THEN must still
+ * verify — regression for a bug this suite's own hands-on rehearsal found:
+ * P6 changed the sanity-check table list from `settings` to `companies`
+ * unconditionally, which made `npm run backup` fail outright on every
+ * not-yet-migrated database, including the office's real one. See
+ * EVOLUTION #32.
+ */
+test("verifyBackup accepts a PRE-migration database (the settings singleton, no companies table yet)", () => {
+  const dir = scratch();
+  try {
+    const file = path.join(dir, "pre-migration.db");
+    const db = new Database(file);
+    initSchema(db);
+    seedCoreData(db); // schema version 0 — settings exists, companies does not
+    db.close();
+
+    assert.equal(
+      (
+        new Database(file, { readonly: true })
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'companies'")
+          .get()
+      ),
+      undefined,
+      "fixture sanity check: this db must genuinely have no companies table yet"
+    );
+    assert.equal(verifyBackup(file), null, "a pre-migration backup must verify — it is a real, valid book");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("restore refuses an unusable backup rather than destroying the target", () => {
   const dir = scratch();
   try {

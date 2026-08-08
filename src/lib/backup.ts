@@ -332,7 +332,21 @@ export function verifyBackup(
     const verdict = check[0]?.integrity_check;
     if (verdict !== "ok") return `integrity_check said "${verdict}"`;
 
-    for (const table of ["journals", "journal_lines", "accounts", "companies"]) {
+    // The company-identity table is `companies` from migration 001 onward,
+    // but a backup can legitimately be taken of a database BEFORE that
+    // migration has ever run (every real install, right up until someone
+    // runs `npm run migrate`) — where it is still the old `settings`
+    // singleton. Hardcoding `companies` here would fail every pre-migration
+    // backup outright, which is the opposite of what a "back up first"
+    // precondition is for. Accept whichever one the schema actually has.
+    const hasTable = (name: string): boolean =>
+      db!.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name").get({
+        name,
+      }) !== undefined;
+    const identityTable = hasTable("companies") ? "companies" : hasTable("settings") ? "settings" : null;
+    if (!identityTable) return "neither companies nor settings table exists";
+
+    for (const table of ["journals", "journal_lines", "accounts", identityTable]) {
       db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
     }
     const lines = db.prepare("SELECT COUNT(*) AS n FROM journal_lines").get() as {
