@@ -3,10 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-type Destination = { href: string; label: string; group: string };
+export type Destination = { href: string; label: string; group: string };
 
 /** Every screen the app has, grouped the way the sidebar groups them. */
-const DESTINATIONS: Destination[] = [
+export const DESTINATIONS: Destination[] = [
   { href: "/", label: "Overview", group: "Books" },
   { href: "/capture", label: "Capture a page", group: "Ledger entry" },
   { href: "/vouchers", label: "Vouchers", group: "Ledger entry" },
@@ -31,7 +31,7 @@ const DESTINATIONS: Destination[] = [
 
 /** Subsequence match, so "tb" finds "Trial balance" and "bs" the balance
  * sheet — the way anyone who uses the app daily would type. */
-function matches(query: string, d: Destination): boolean {
+export function matches(query: string, d: Destination): boolean {
   const q = query.toLowerCase().replace(/\s+/g, "");
   if (q === "") return true;
   const hay = `${d.label} ${d.group}`.toLowerCase();
