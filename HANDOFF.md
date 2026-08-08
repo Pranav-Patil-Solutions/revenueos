@@ -182,11 +182,43 @@ first — not to `npm run smoke`. Don't re-block on this again.
    see EVOLUTION #31 — and has been cherry-picked back here; no other work
    was lost, see that entry for the full account.
 
-**Still open from the P6 ship gate**: migration 003 rehearsed on a COPY of
-`data/revenueos.db` with a verified restore, and the qa-runner 2-live-company
-browser drive against an isolated `:3322`-style instance (the `~/revenueos-preview`
-worktree stood up this session is the right place — see its own setup notes
-in this session's conversation; it needs a real `npm install`, not a
+8. `2f95c7d` — **fix(backup): verifyBackup accepts pre-migration databases.**
+   Found by actually running the ship gate's migration-rehearsal step
+   against the real (still pre-migration) `data/revenueos.db`, not a
+   fixture — `npm run backup` failed outright with `no such table:
+   companies`, because #6 had made the sanity-check table list require
+   `companies` unconditionally. Every real install is pre-migration until
+   `npm run migrate` runs, including this office's. Fixed: checks whichever
+   of `companies`/`settings` the schema actually has. Regression test added
+   (pre-migration fixture, no `migrate()` call). See EVOLUTION #32.
+
+9. **Migration 003 rehearsed on a COPY of the real db, restore verified —
+   done, this session, 2026-08-08.** With the backup fix above in place:
+   took a fresh verified `npm run backup` of the real `data/revenueos.db`
+   (0.14 MB, sha256 `98fd2e65…`, 4 snapshots retained — this itself is the
+   "back up first" precondition R2 calls for), copied that snapshot into an
+   isolated scratch dir's own `data/`, then ran `scripts/migrate.ts`
+   against the copy from that dir (`REVENUEOS_BACKUP_DIR` also repointed
+   into the scratch dir — nothing this step did could reach the real
+   `data/`). Result: schema 0→3, all three migrations applied, integrity
+   check `ok`, and every pre-migration row count (17 journals / 59
+   journal_lines / 2 parties / 23 accounts) held EXACTLY after migration —
+   zero data loss, all landed on `company_id = 1`. Then restored
+   `migrate.ts`'s own pre-migration snapshot back over the migrated copy
+   and confirmed it reverts cleanly: `settings` back, `companies` gone,
+   same row counts, integrity `ok`, journal_lines still net to zero. The
+   real `data/revenueos.db` was confirmed untouched before and after (same
+   file mtimes both times) — this step ran entirely inside a scratch
+   directory outside the repo.
+   **This closes R2 and the migration-rehearsal line of the ship gate.**
+   The real migration has NOT been run yet — that is a deliberate, separate
+   decision for whenever the live :3322 dev server is stopped and Pranav is
+   ready, not something to do automatically off the back of a rehearsal.
+
+**Still open from the P6 ship gate**: code-reviewer full-branch diff, and
+the qa-runner 2-live-company browser drive against an isolated
+`:3322`-style instance (the `~/revenueos-preview` worktree stood up this
+session is the right place — it needs a real `npm install`, not a
 symlinked `node_modules`, because Turbopack refuses to resolve through a
 symlink that points outside the project root). RVOS-005 rebase, its own
 ship gate, the LICENSE merge, and final handover are all still open.
@@ -194,17 +226,15 @@ ship gate, the LICENSE merge, and final handover are all still open.
 ## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
 **P6 remainder — THE RVOS-004 ship gate is not closed yet**
-The port (ratchet 28→0), the settings-singleton fix, smoke, and the
-automated isolation suite have all landed/passed (`8b0267f`, `5e44a6f` —
-see DONE #6/#7) — what's still open is the parts an automated test can't
-stand in for:
+The port (ratchet 28→0), the settings-singleton fix, smoke, the automated
+isolation suite, and the migration rehearsal (with a real bug found and
+fixed along the way) have all landed/passed (`8b0267f`, `5e44a6f`,
+`2f95c7d` — see DONE #6/#7/#8/#9) — what's still open is the two things
+that genuinely need a human-facing tool, not an automated test:
 - code-reviewer full-branch diff (0 blockers, explicit tenancy-leakage pass)
 - qa-runner drives :3322 with 2 LIVE companies, in an isolated copy per
   GOTCHAS (`~/revenueos-preview` worktree, real `npm install`)
-- migration 003 rehearsed on a COPY of the real office db
-  (`data/revenueos.db`), snapshot restore verified, BEFORE it's ever run for
-  real
-- EVOLUTION updated (already current through #31 as of this commit)
+- EVOLUTION updated (already current through #32 as of this commit)
 
 **PORT** — `receivablesTrend`/`documentStatusBreakdown` in `reports.ts`
 (RVOS-005's two new read models) onto the Book handle. New file, not yet in
