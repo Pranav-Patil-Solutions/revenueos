@@ -266,21 +266,37 @@ work, the merge, and handover — see below.
 
 ## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
 
-**PORT** — `receivablesTrend`/`documentStatusBreakdown` in `reports.ts`
-(RVOS-005's two new read models) onto the Book handle. New file, not yet in
-the ratchet baseline, so the ratchet will NOT flag them — easy to miss. Add
-both to P6's isolation enumeration.
+**PORT + REBASE — DONE, 2026-08-08.** Rebased `feat/rvos-005-dashboard-ux`
+onto this branch's tip (`bc66a61`) in the `~/revenueos-preview` worktree
+(kept separate from this checkout on purpose — see the standing GOTCHAS
+entry on concurrent-session branch safety). Resolved conflicts in
+`EVOLUTION.md`/`HANDOFF.md` (005's own local `## 26.` renumbered to `## 34.`,
+following this branch's #33 — see that branch's EVOLUTION for the full
+account, entries #34/#35), `src/lib/reports.ts` and `src/app/page.tsx`.
+`receivablesTrend`/`documentStatusBreakdown` now take a `Book` and scope
+every JOIN by `company_id`, matching the rest of `reports.ts` — the exact
+port this note used to call out as "the ratchet will NOT flag this, easy to
+miss." `test/reports.test.ts`'s trend/breakdown tests updated to build a
+`Book` alongside the raw db (raw insert helpers like `postAr` needed no
+change — `ADD_COLUMN_TABLES` default to company 1). Full gate re-run on the
+rebased tree: 391 tests pass, tsc/lint/build/smoke all green.
+`feat/rvos-005-dashboard-ux` now points at `10238ab`, a clean single commit
+on top of this branch's tip — confirmed via `git merge-base` that its
+ancestor is this branch's `bc66a61`, not the old stale P2a point.
 
-**RVOS-005 ship gate** (run fresh, post-port, on `feat/rvos-005-dashboard-ux`)
-- tsc/lint/test/build/smoke; zero-context code-reviewer full diff; qa-runner
-  over changed modules; re-drive the ⌃K/⌃A voucher-posting regression
-  (EVOLUTION #26 on the 005 branch — journal count must not change with the
-  palette open over a valid voucher) on THIS diff, don't skip as "already
-  fixed."
+**RVOS-005's OWN ship gate is still open** (run fresh on the REBASED tree,
+`feat/rvos-005-dashboard-ux` @ `10238ab`): zero-context code-reviewer full
+diff over `master...feat/rvos-005-dashboard-ux`; qa-runner over the changed
+modules; and — the one item that cannot be skipped as "already verified" —
+re-drive the ⌃K/⌃A voucher-posting regression (EVOLUTION #34 on that
+branch) in an actual browser, on THIS rebased diff specifically, since the
+composition around it changed during the rebase even though the test suite
+passing doesn't prove the live browser interaction still holds.
 
-**MERGE**: rebase 005 onto 004's final (post-P6) commit → both gates green on
-the same tree → `git fetch origin && git merge origin/master` (LICENSE, trivial)
-→ push master.
+**MERGE** (after RVOS-005's own gate is green): fast-forward or merge
+`feat/rvos-005-dashboard-ux` (`10238ab`) into `feat/rvos-004-multi-client`
+→ `git fetch origin && git merge origin/master` (the LICENSE commit,
+trivial) → push master.
 
 **HANDOVER** (final step): update this file (mark RVOS-004+005 SHIPPED,
 delete this NEXT section), EVOLUTION.md (every P4–P6+port+gate delta),

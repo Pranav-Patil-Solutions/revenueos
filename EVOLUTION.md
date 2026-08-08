@@ -1006,3 +1006,28 @@ near-miss, #31) already prove the gate is doing real work — this entry is
 the honest complement: verified doesn't mean re-litigated. The RVOS-004
 ship gate — tests/smoke/lint/build, code-reviewer, qa-runner, and a
 verified-restorable migration rehearsal — is now fully closed.
+
+## 34. RVOS-004/005 (2026-08-08): rebasing a parallel branch onto a finished tenancy migration surfaces exactly the code the ratchet couldn't see
+
+**What happened:** `feat/rvos-005-dashboard-ux` was cut from this branch's
+P2a tip (before P3–P6 existed) and built a dashboard trend/census feature
+against the then-single-tenant `reports.ts`. Rebasing it onto this branch's
+now-fully-shipped tip conflicted, as expected, in `reports.ts` and
+`page.tsx` — resolved by porting `receivablesTrend`/
+`documentStatusBreakdown` onto the `Book` handle (the exact "PORT" item this
+HANDOFF had been carrying since P6 landed, precisely because those two
+functions postdate every ratchet scan that ever ran and could never be
+caught by it). Full detail, plus the doc-conflict renumbering this rebase
+also required, lives on `feat/rvos-005-dashboard-ux`'s OWN EVOLUTION.md
+entries #34 and #35 (numbered independently on that branch's history — note
+for whoever does the eventual merge: THIS branch's own entries stop at #33,
+so #34 exists on both lines right now and needs the same renumber-at-merge
+treatment #31 already documented for the #26 collision between these same
+two branches).
+
+**Delta (rule):** this is the second time in one build that two branches
+diverging before a tenancy migration produced a numbering collision in
+EVOLUTION.md at merge time (see #31's GOTCHAS note). Any branch cut before
+a schema-shaping migration lands, and rebased onto it afterward, should
+expect this — not as a surprise each time, but as a standing property of
+working two branches off the same point in a fast-moving schema history.
