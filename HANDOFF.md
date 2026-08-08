@@ -1,4 +1,4 @@
-# RVOS-004/005 HANDOFF — ACTIVE (resume here)
+# RVOS-004/005 HANDOFF — SHIPPED (2026-08-08)
 
 Task: **RVOS-FIX** — close RVOS-004 P3–P6, gate + merge RVOS-005, handover.
 Repo `~/revenueos`. Port 3322 only. `DEMO_MODE=1` for all tests/smoke. Never
@@ -264,25 +264,54 @@ code-reviewer 0 blockers with an explicit tenancy-leakage pass, qa-runner
 restore, EVOLUTION current through #32. What's left is RVOS-005's own
 work, the merge, and handover — see below.
 
-## NEXT — in this order (see RVOS-004-SPEC.md for the full per-phase spec text)
+## SHIPPED
 
-**PORT + REBASE — DONE, 2026-08-08.** Rebased `feat/rvos-005-dashboard-ux`
-onto this branch's tip (`bc66a61`) in the `~/revenueos-preview` worktree
-(kept separate from this checkout on purpose — see the standing GOTCHAS
-entry on concurrent-session branch safety). Resolved conflicts in
-`EVOLUTION.md`/`HANDOFF.md` (005's own local `## 26.` renumbered to `## 34.`,
-following this branch's #33 — see that branch's EVOLUTION for the full
-account, entries #34/#35), `src/lib/reports.ts` and `src/app/page.tsx`.
-`receivablesTrend`/`documentStatusBreakdown` now take a `Book` and scope
-every JOIN by `company_id`, matching the rest of `reports.ts` — the exact
-port this note used to call out as "the ratchet will NOT flag this, easy to
-miss." `test/reports.test.ts`'s trend/breakdown tests updated to build a
-`Book` alongside the raw db (raw insert helpers like `postAr` needed no
-change — `ADD_COLUMN_TABLES` default to company 1). Full gate re-run on the
-rebased tree: 391 tests pass, tsc/lint/build/smoke all green.
-`feat/rvos-005-dashboard-ux` now points at `10238ab`, a clean single commit
-on top of this branch's tip — confirmed via `git merge-base` that its
-ancestor is this branch's `bc66a61`, not the old stale P2a point.
+`feat/rvos-004-multi-client` (multi-company books, full P0–P6 ship gate) and
+`feat/rvos-005-dashboard-ux` (Overview trend/census/⌃K palette, its own ship
+gate, then rebased onto 004's tip) are both merged into `master` and pushed
+to `origin` — merge commits `8f6fd90` (005 into 004) then `d1fc85c` (004,
+with origin's LICENSE commit, into master). `git push origin master`
+succeeded as a clean fast-forward (`0930570..d1fc85c`) — nothing was force-
+pushed, nothing on the remote was overwritten. Final gate on `master`
+itself: 400 tests, tsc/lint/build/smoke all green.
+
+The full blow-by-blow (every phase, every finding, every fix) lives in
+`EVOLUTION.md` entries #1–#38 and the DONE lists further down in this file
+and in the RVOS-005 section below — this HANDOFF is left in place as the
+build's own record rather than deleted, since the reasoning behind
+non-obvious decisions (why the Book handle throws instead of just binding,
+why `receivablesTrend` is a balance not a flow, why the isolation suite
+enumerates from the export route instead of a hand-written list) is exactly
+what a future session resuming work on this codebase will need and would
+otherwise have to re-derive from the diff alone.
+
+One item was deliberately closed WITHOUT a fresh browser session: the ⌃K/⌃A
+keyboard regression (EVOLUTION #36) was re-verified via `git diff` instead
+of re-driving it in an actual browser, because every file its mechanism
+depends on (`keymap.ts`, `shortcuts.tsx`, `voucher-form.tsx`) came back
+byte-identical to the commit that regression was already fixed and
+browser-verified against — see EVOLUTION #38 for the full reasoning on why
+that's a faithful re-verification and not a shortcut. If a fresh manual
+click-through in a real browser is wanted before this reaches an actual
+user, that's still a reasonable belt-and-suspenders step — just not one
+this session had a connected browser tool to perform, and not one the
+evidence made mandatory.
+
+**Standing-open, NOT part of this build, NOT closable remotely**:
+RVOS-003's Windows acceptance run (see the RVOS-003 HANDOFF section below)
+— checklist in `docs/SHIP-RECORD-RVOS-003.md`.
+
+**Not done in this build** (noted, not forgotten): per-staff permissions
+(explicitly out of scope, R3 in `RVOS-004-SPEC.md` — every authenticated
+staff member sees every company by design); the real migration has NOT
+been run against the office's actual `data/revenueos.db` — that machine's
+own upgrade path (`npm run migrate`, which takes its own pre-migration
+backup) is a separate, deliberate action for whenever that machine is
+updated to this code, not something this session's rehearsal substitutes
+for.
+
+<details>
+<summary>Superseded planning notes (kept for history, not current status)</summary>
 
 **code-reviewer full-branch diff — DONE, 2026-08-08, 0 blockers, 2 warnings
 fixed.** Reviewed `feat/rvos-004-multi-client...feat/rvos-005-dashboard-ux`
@@ -350,6 +379,8 @@ delete this NEXT section), EVOLUTION.md (every P4–P6+port+gate delta),
 confirm `data/` untouched, `git status` clean + both directions in sync with
 origin/master, note RVOS-003's Windows acceptance run as standing-open
 (not closable here).
+
+</details>
 
 ## GOTCHAS
 
