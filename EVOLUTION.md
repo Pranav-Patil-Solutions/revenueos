@@ -1079,3 +1079,68 @@ class a behavioral test earns its keep by catching. A code review that
 merely confirms "the new code is correct" without asking "does the thing
 that's supposed to CATCH new code actually see this new code" would have
 missed both gaps here.
+
+## 36. Companies page visual redesign (2026-08-08): no failures
+
+**What happened:** Restyled the Companies page and the shared app shell
+(sidebar, topbar, design tokens in `globals.css`) to a new "Ledger Blue"
+scheme against a reference screenshot — dark navy glass sidebar widened to
+310px, ice-blue content canvas, new accent/status colors, bumped card radii
+and title weight. Zero routes, fields, server actions, or keyboard shortcuts
+touched; only class names and CSS custom properties changed. Verified by:
+full `npm test` (377/377 pass, unchanged from before the diff), `tsc
+--noEmit` clean, `eslint` clean, and a real browser pass — minted a session
+for the existing user directly via `createSession()` (no password touched,
+session row deleted after) and screenshotted `/companies`, `/` (redirect-to-
+companies gate still fires with no active company, confirming the guard
+wasn't affected), and the collapsed/rail sidebar state via the real `⌃B`
+shortcut, all with Playwright.
+
+**No fix needed — logged per the standing rule that a clean session gets
+recorded too** (see [[agentic-workflow-standard|the global instruction]]).
+One thing worth naming for next time: `.side-user` had two dangling
+selectors left in `globals.css`'s rail-collapse transition rules after the
+sidebar's user-info block was dropped to match the reference — caught and
+removed in the same pass, not left as dead CSS.
+
+## 37. Companies redesign, legibility pass (2026-08-08): shipped two WCAG contrast failures on round 1, caught on request rather than by the build itself
+
+**What happened:** The round-1 redesign (#36) picked `--ink-3: #7c93ac` (muted
+body/meta text on the new ice-blue canvas) and `--sidebar-ink-3: #5b7290`
+(sidebar section headers) by eye against the reference screenshot, without
+computing contrast. Asked afterward to check legibility, a WCAG relative-
+luminance calculation on every text/background pair in the new token set
+found both fail AA for normal text: `ink-3` on `--page`/`--surface` measured
+2.88:1 / 3.17:1 (needs 4.5:1) — this is the color used for the Companies
+page's description paragraph, every card's metadata line, and the archived
+list; `sidebar-ink-3` on the sidebar gradient measured 3.36–3.82:1, used for
+the uppercase section headers ("1 · LEDGER ENTRY" etc.) and the "· ⌃B" hint.
+Both would read as borderline-illegible light gray on a bright background
+for anyone without excellent contrast vision — the opposite of "high-trust."
+
+**Context that made this easy to miss:** the ORIGINAL pre-redesign tokens
+had the same defect (`#86868b` ink-3 on the old `#f5f5f7` page measured only
+3.33–3.62:1) — so this was not a regression introduced by the redesign, it
+was a pre-existing gap the redesign inherited and, by moving to a lighter/
+bluer palette, made slightly worse. Nothing in the ship path (tsc, eslint,
+the 377-test suite) checks color contrast, so a purely-visual change can
+fail an accessibility bar that no automated gate here watches for.
+
+**Resolution:** Solved numerically for the lightest/darkest values in the
+same hue family that still hit ≥4.5:1 against every background they're
+actually used on (white cards AND the ice-blue page for `ink-3`; both
+gradient stops for `sidebar-ink-3`), rather than eyeballing a fix:
+`ink-3 → #5e7083` (5.10:1 white / 4.62:1 page), `sidebar-ink-3 → #7589a2`
+(5.26:1 / 4.63:1). Verified the fix landed in the actual rendered DOM (not
+just the CSS source) by reading `getComputedStyle(...).color` off the live
+page in a real browser pass, not just re-running the ratio formula on the
+source file.
+
+**Delta (rule):** A visual/token-only change still needs a contrast check
+before it ships, the same way a logic change needs a test — "matches the
+reference screenshot" is not the same claim as "meets AA," and a reference
+image can itself encode a contrast failure that's easy to eyeball past.
+When picking or changing any `--ink-*`/muted-text token, compute WCAG ratio
+against every background it is actually composited on (not just the most
+common one) before treating the color as final, the same way `book.ts`'s
+structural guard exists because "looks right" isn't a check.

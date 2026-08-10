@@ -28,7 +28,7 @@ export function Topbar({
   const locked = (current?.books_locked_through ?? "") !== "";
 
   return (
-    <header className="frosted sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-hairline px-8">
+    <header className="frosted sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-hairline px-8">
       <CompanySwitcher
         current={current ? { id: current.id, name: current.name } : null}
         companies={companies.map((c) => ({ id: c.id, name: c.name }))}

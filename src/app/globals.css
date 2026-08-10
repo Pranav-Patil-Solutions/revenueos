@@ -1,35 +1,46 @@
 @import "tailwindcss";
 
 /*
-  RevenueOS design tokens — Accountant Edition "Light" scheme (Apple UI over
-  ERP bones; approved final 2026-07-19). Single scheme, hard-coded.
+  RevenueOS design tokens — "Ledger Blue" scheme (restrained blue
+  glassmorphism over the accounting-workspace bones; approved 2026-08-08).
+  Single scheme, hard-coded.
 */
 :root {
-  --page: #f5f5f7;
+  --page: #eef5f8;
   --surface: #ffffff;
-  --surface-2: #e9e9eb;
-  --ink: #1d1d1f;
-  --ink-2: #515154;
-  --ink-3: #86868b;
-  --hairline: rgba(0, 0, 0, 0.1);
-  --grid: #e2e2e4;
-  --baseline: #d6d6d8;
+  --surface-2: #e4edf3;
+  --ink: #13243a;
+  --ink-2: #4a6079;
+  --ink-3: #5e7083;
+  --hairline: rgba(19, 36, 58, 0.1);
+  --grid: #dee9ef;
+  --baseline: #cfdee6;
 
-  --accent: #007aff;
-  --accent-soft: rgba(0, 122, 255, 0.12);
+  --accent: #276ef1;
+  --accent-soft: rgba(39, 110, 241, 0.12);
 
-  --status-good: #1f9c3f;
+  --status-good: #0f9d6a;
   --status-warning: #b25000;
   --status-serious: #c04d20;
   --status-critical: #d70015;
 
-  --sidebar-w: 240px;
-  --topbar-h: 48px;
+  /* The sidebar is the app's one dark surface — its own text/glass tokens,
+   * kept separate from the light-theme --ink-* scale above. */
+  --sidebar-from: #06121e;
+  --sidebar-to: #0a2032;
+  --sidebar-border: rgba(56, 130, 246, 0.22);
+  --sidebar-ink: #eaf1f8;
+  --sidebar-ink-2: #8ba3bd;
+  --sidebar-ink-3: #7589a2;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+
+  --sidebar-w: 310px;
+  --topbar-h: 56px;
   --statusbar-h: 32px;
 }
 
 html[data-sidebar="rail"] {
-  --sidebar-w: 62px;
+  --sidebar-w: 72px;
 }
 
 @theme inline {
@@ -48,6 +59,11 @@ html[data-sidebar="rail"] {
   --color-warning: var(--status-warning);
   --color-serious: var(--status-serious);
   --color-critical: var(--status-critical);
+  --color-sidebar-ink: var(--sidebar-ink);
+  --color-sidebar-ink-2: var(--sidebar-ink-2);
+  --color-sidebar-ink-3: var(--sidebar-ink-3);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-hover: var(--sidebar-hover);
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
@@ -68,12 +84,12 @@ body {
 
 /* ---- Shared Apple-ERP control classes ------------------------------------ */
 
-/* Cards: 12px radius + hairline + whisper shadow. */
+/* Cards: 16px radius + hairline + whisper shadow. */
 .card {
-  border-radius: 12px;
+  border-radius: 16px;
   border: 1px solid var(--hairline);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 2px rgba(19, 36, 58, 0.04);
 }
 
 /* Flat accent buttons — premium lettering, brightness hover, press scale. */
@@ -161,17 +177,21 @@ body {
 
 .sidebar {
   width: var(--sidebar-w);
+  background: linear-gradient(180deg, var(--sidebar-from), var(--sidebar-to));
+  border-right: 1px solid var(--sidebar-border);
+  border-top-right-radius: 22px;
+  border-bottom-right-radius: 22px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset -40px 0 60px -50px rgba(56, 130, 246, 0.35);
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .sidebar .side-label,
-.sidebar .side-header,
-.sidebar .side-user {
+.sidebar .side-header {
   transition: opacity 0.2s ease, translate 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 html[data-sidebar="rail"] .sidebar:not(.peek) .side-label,
-html[data-sidebar="rail"] .sidebar:not(.peek) .side-header,
-html[data-sidebar="rail"] .sidebar:not(.peek) .side-user {
+html[data-sidebar="rail"] .sidebar:not(.peek) .side-header {
   opacity: 0;
   translate: -6px 0;
   pointer-events: none;
@@ -181,13 +201,27 @@ html[data-sidebar="rail"] .sidebar .side-chevron {
 }
 /* Hover-to-peek: glide open as an overlay without reflowing content. */
 html[data-sidebar="rail"] .sidebar.peek {
-  width: 240px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  width: 310px;
+  box-shadow: 0 12px 40px rgba(6, 18, 30, 0.35);
 }
 
 .content-shell {
+  position: relative;
   padding-left: var(--sidebar-w);
   transition: padding-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* Extremely subtle mint-blue wash, upper right — never competes with content. */
+.content-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(
+    900px 560px at 100% 0%,
+    rgba(93, 214, 197, 0.1),
+    transparent 60%
+  );
+  pointer-events: none;
 }
 .statusbar-shell {
   left: var(--sidebar-w);

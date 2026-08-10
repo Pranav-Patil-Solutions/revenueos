@@ -24,14 +24,14 @@ export default async function CompaniesPage() {
 
   return (
     <div>
-      <h1 className="text-[22px] font-semibold tracking-tight">Companies</h1>
-      <p className="mt-1 text-[13.5px] text-ink-3">
+      <h1 className="text-[30px] font-bold tracking-tight text-ink">Companies</h1>
+      <p className="mt-1.5 text-[14px] text-ink-3">
         Every client whose books this office keeps. All signed-in staff see
         every company here — per-staff access is not built yet.
       </p>
 
       {active.length === 0 && (
-        <p className="mt-6 max-w-2xl rounded-xl border border-hairline bg-surface p-5 text-[13.5px] text-ink-3">
+        <p className="mt-6 max-w-2xl rounded-2xl border border-hairline bg-surface p-5 text-[13.5px] text-ink-3">
           No company yet. Create the first one below.
         </p>
       )}
@@ -42,15 +42,15 @@ export default async function CompaniesPage() {
           return (
             <div
               key={c.id}
-              className="rounded-xl border border-hairline bg-surface p-4"
+              className="rounded-2xl border border-hairline bg-surface p-5 shadow-[0_1px_2px_rgba(19,36,58,0.04)]"
             >
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-[13.5px] font-semibold">
+                  <p className="text-[15px] font-bold tracking-tight text-ink">
                     {c.name}
                     {isCurrent && <span className="pill ml-2">Active</span>}
                   </p>
-                  <p className="mt-0.5 text-[12px] text-ink-3">
+                  <p className="mt-0.5 text-[12.5px] text-ink-3">
                     {c.entity_type} · {c.gstin || "no GSTIN"}
                   </p>
                 </div>
@@ -101,8 +101,8 @@ export default async function CompaniesPage() {
         })}
       </div>
 
-      <div className="mt-6 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
-        <p className="text-[13.5px] font-semibold">Add a company</p>
+      <div className="mt-6 max-w-2xl rounded-2xl border border-hairline bg-surface p-6 shadow-[0_1px_2px_rgba(19,36,58,0.04)]">
+        <p className="text-[15px] font-bold tracking-tight text-ink">Add a company</p>
         <form action={createCompanyAction} className="mt-3 grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <label className={label} htmlFor="name">Company name</label>

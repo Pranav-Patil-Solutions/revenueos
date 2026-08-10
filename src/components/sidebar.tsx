@@ -198,15 +198,15 @@ export function Sidebar() {
     <aside
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
-      className={`sidebar fixed inset-y-0 left-0 z-30 flex flex-col overflow-hidden whitespace-nowrap border-r border-hairline bg-surface ${
+      className={`sidebar fixed inset-y-0 left-0 z-30 flex flex-col overflow-hidden whitespace-nowrap ${
         peek ? "peek" : ""
       }`}
     >
-      <div className="flex items-center gap-2.5 px-5 pt-6 pb-6">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent-soft">
+      <div className="flex items-center gap-2.5 px-6 pt-7 pb-6">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent">
           <svg
             viewBox="0 0 24 24"
-            className="size-4.5 stroke-accent"
+            className="size-4.5 stroke-white"
             fill="none"
             strokeWidth="2"
             strokeLinecap="round"
@@ -216,16 +216,16 @@ export function Sidebar() {
             <path d="M9 7h6M9 11h6" />
           </svg>
         </span>
-        <span className="side-label text-[15px] font-semibold tracking-tight">
-          Revenue<span className="text-accent">OS</span>
+        <span className="side-label text-[15.5px] font-bold tracking-tight text-sidebar-ink">
+          RevenueOS
         </span>
       </div>
 
-      <nav className="flex flex-1 flex-col px-3">
+      <nav className="flex flex-1 flex-col px-4">
         {NAV_GROUPS.map((group, gi) => (
           <div key={gi} className="flex flex-col gap-0.5">
             {group.header && (
-              <p className="side-header mt-4 mb-1 px-3 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-ink-3">
+              <p className="side-header mt-4 mb-1 px-3 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-sidebar-ink-3">
                 {group.header}
               </p>
             )}
@@ -241,7 +241,7 @@ export function Sidebar() {
                   className={`side-item flex items-center gap-3 rounded-lg px-3 py-2 text-[13.5px] font-medium ${
                     active
                       ? "bg-accent text-white"
-                      : "text-ink-2 hover:bg-surface-2/70 hover:text-ink"
+                      : "text-sidebar-ink-2 hover:bg-sidebar-hover hover:text-sidebar-ink"
                   }`}
                 >
                   <svg
@@ -265,7 +265,7 @@ export function Sidebar() {
       <button
         type="button"
         onClick={toggle}
-        className="side-item mx-3 mb-2 flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-ink-3 hover:bg-surface-2/70 hover:text-ink"
+        className="side-item mx-4 mb-6 flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-sidebar-ink-3 hover:bg-sidebar-hover hover:text-sidebar-ink"
         title="Collapse sidebar (Ctrl+B)"
       >
         <svg
@@ -279,21 +279,9 @@ export function Sidebar() {
           <path d="M15 6l-6 6 6 6" />
         </svg>
         <span className="side-label">
-          Collapse <span className="text-ink-3">· ⌃B</span>
+          Collapse <span className="text-sidebar-ink-3">· ⌃B</span>
         </span>
       </button>
-
-      <div className="side-user border-t border-hairline px-5 py-4">
-        <div className="flex items-center gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface-2 text-[11px] font-semibold text-ink-2">
-            PP
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium">Pranav Patil</p>
-            <p className="truncate text-[11.5px] text-ink-3">Books owner</p>
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }
