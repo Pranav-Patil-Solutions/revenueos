@@ -56,22 +56,16 @@ chart-of-accounts ledger. `staged_rows.settle_account` → `bank_account_id`.
   flex row collapsed to 18px (flex items default to `min-width:auto`), leaving
   the name unreadable — fixed via `min-w-0 flex-1` + `shrink-0`, re-measured at
   164px with no table overflow.
-- **Known verification gap:** a contra between two real bank accounts is
-  supported by `legsFor` but has neither a test nor a browser pass yet. Worth
-  closing early in P0b.
+- ~~Known verification gap: contra between two real bank accounts~~ **CLOSED**
+  — two tests added (bank→bank across two ledgers with totals provably
+  unchanged, plus cross-company refusal), mutation-tested to confirm they
+  actually catch a leg-collapse regression. **393/393 pass.**
 - Code-reviewer warnings fixed: (1) `applyDraftRows` now checks
   `bank_account_id` OWNERSHIP via `getBankAccount` for every draft row, since
   `saveDraft` never reaches `postDocument`'s scoped check and would otherwise
   persist another company's account id; (2) the Tally fallback account is now
   genuinely lazy (it was an IIFE that ran on every import).
 - `EVOLUTION.md` #38 written (includes the GOTCHA below — read it in full).
-
-**Two ship-gate agents were dispatched and are still running as of this
-handoff** — one `code-reviewer` pass on the diff, one `qa-runner` pass
-looking specifically for missing coverage on multi-account posting, archived-
-between-stage-and-post accounts, and the Tally third-account path. **Resume
-by checking their results before committing** — do not re-dispatch, they may
-already be done.
 
 ## GOTCHA — read before touching the dev server again
 

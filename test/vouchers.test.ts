@@ -5,7 +5,9 @@ import { book } from "../src/lib/book";
 import { buildLegs } from "../src/lib/posting";
 import { postDocument } from "../src/lib/posting";
 import { balanceSheet, trialBalance } from "../src/lib/reports";
-import { getCompany } from "../src/lib/companies";
+import { createBankAccount, listBankAccounts } from "../src/lib/bank-accounts";
+import { createCompany, getCompany } from "../src/lib/companies";
+import { seedAccountsForCompany } from "../src/lib/db";
 import type { PartyRow } from "../src/lib/types";
 import { postManualVoucher } from "../src/lib/vouchers";
 import { draftRows, postedDb, settleId, stagedDb } from "./helpers";
@@ -121,6 +123,87 @@ test("contra moves cash → bank with exact paise", () => {
         amount_paise: 100,
       }),
     /two different accounts/
+  );
+});
+
+/**
+ * The case the old enum made unrepresentable — RVOS-006 P0a.
+ *
+ * `settle_account` had exactly two values, so "move money from the current
+ * account to the OD account" could not be expressed at all: both ends resolved
+ * to ledger 1100 and the contra would have been refused as same-account. This
+ * is the transfer an office actually performs most often, and it stayed
+ * unverified when P0a shipped.
+ */
+test("contra moves money bank → bank between two real accounts, each on its own ledger", () => {
+  const db = postedDb();
+  const b = book(db, 1);
+  const seededBank = settleId(db, 1, "bank"); // ledger 1100
+  const second = createBankAccount(b, { name: "ICICI OD", kind: "bank" });
+  const secondCode = listBankAccounts(b).find((a) => a.id === second)!.account_code;
+  assert.equal(secondCode, "1110", "allocated in the bank range, not reusing 1100");
+
+  const before = trialBalance(b);
+  const { journalId } = postManualVoucher(b, {
+    kind: "contra",
+    entry_date: "2026-07-21",
+    memo: "Sweep to OD",
+    ref_no: "SWEEP-1",
+    from_bank_account_id: seededBank,
+    to_bank_account_id: second,
+    amount_paise: 250_000,
+  });
+
+  // Two DIFFERENT ledgers move. Under the old enum both legs would have been
+  // 1100 and this voucher could not exist.
+  assert.deepEqual(legsOf(db, journalId), [
+    { code: "1110", party_id: null, debit_paise: 250_000, credit_paise: 0 },
+    { code: "1100", party_id: null, debit_paise: 0, credit_paise: 250_000 },
+  ]);
+
+  // A contra is INTERNAL: money the business already had moves between two of
+  // its own asset ledgers. So the trial-balance totals must be completely
+  // unchanged — not merely still balanced. One ledger loses exactly what the
+  // other gains, so nothing is added to or removed from the books, and a
+  // transfer can never read as new income or a new liability.
+  const after = trialBalance(b);
+  assert.equal(after.balanced, true);
+  assert.equal(
+    after.total_debit_paise - before.total_debit_paise,
+    0,
+    "an internal transfer must not change the totals at all"
+  );
+  assert.equal(after.total_credit_paise - before.total_credit_paise, 0);
+  const net = (code: string) =>
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(jl.debit_paise) - SUM(jl.credit_paise), 0) AS n
+           FROM journal_lines jl JOIN accounts a ON a.id = jl.account_id
+           WHERE a.code = ? AND a.company_id = 1 AND jl.company_id = 1`
+        )
+        .get(code) as { n: number }
+    ).n;
+  assert.equal(net("1110"), 250_000, "the receiving account gained exactly the transfer");
+});
+
+test("contra refuses an account belonging to another company", () => {
+  const db = postedDb();
+  const other = createCompany(db, { name: "Client B" }, "2026-07-01T00:00:00Z");
+  seedAccountsForCompany(db, other);
+  const foreign = settleId(db, other, "bank");
+  assert.throws(
+    () =>
+      postManualVoucher(book(db, 1), {
+        kind: "contra",
+        entry_date: "2026-07-21",
+        memo: "",
+        ref_no: "",
+        from_bank_account_id: settleId(db, 1, "cash"),
+        to_bank_account_id: foreign,
+        amount_paise: 100,
+      }),
+    /does not exist in this book/
   );
 });
 

@@ -1174,9 +1174,20 @@ against an isolated scratch instance: created a second bank account (ledger
 1110 allocated in the bank range), renamed it, made it the default, archived
 the now-non-default seeded "Bank", and confirmed the voucher form's "Settled
 via" list then offered exactly the live accounts (`1110 …`, `1000 Cash`) with
-the archived one correctly absent. A contra between two real bank accounts is
-supported by `legsFor` but is NOT yet covered by either a test or a browser
-pass — the honest gap in this phase's verification.
+the archived one correctly absent.
+
+**Gap closed immediately after (same phase):** a contra between two real bank
+accounts — the transfer the old enum made *unrepresentable*, since both ends
+resolved to ledger 1100 and the voucher would have been refused as
+same-account — now has two tests: one proving 1100 → 1110 moves two DIFFERENT
+ledgers and leaves the trial-balance totals completely unchanged (an internal
+transfer must not read as new income or a new liability, so "still balanced"
+is too weak a claim), and one proving a `bank_account_id` from another company
+is refused. Both were mutation-tested: collapsing the two contra legs onto one
+account fails 3 tests, so the coverage is real rather than vacuous. Writing
+the first of them also corrected my own wrong assumption — I initially
+asserted the totals should GROW by the transfer amount, which would have
+encoded a misunderstanding of what a contra is into the suite.
 
 That browser pass also caught a defect no automated gate here could see: the
 name cell's `<input className="w-full">` inside a flex row collapsed to **18px**
