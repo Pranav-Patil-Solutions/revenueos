@@ -80,9 +80,11 @@ already be done.
 `~/revenueos` itself, even with `DEMO_MODE=1`, boots against the REAL
 `data/revenueos.db` and runs any pending migration on it in-process with no
 pre-migration backup — this happened once already this session (migration
-004 applied to the live ledger by accident; verified intact afterward,
-integrity_check ok, fk_check clean, journal balance 0, and a real backup was
-taken post-hoc via `scripts/backup.ts`). Full account in EVOLUTION #38.
+004 applied to the live ledger by accident; verified intact afterward —
+integrity_check ok, fk_check clean, journal balance 0 paise, all 48 staged
+rows mapped). A snapshot dated ~2 min AFTER the migration exists at
+`data/backups/revenueos-20260810-114804`; the genuine pre-004 rollback point
+is the older `revenueos-20260808-005733`. Full account in EVOLUTION #38.
 
 **For any future "let me just check this in a browser":** use a fully
 separate directory, real `npm ci` install there, `src`/config files COPIED
