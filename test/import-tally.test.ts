@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { book } from "../src/lib/book";
+import { defaultForHint } from "../src/lib/bank-accounts";
 import { initSchema, seedCoreData } from "../src/lib/db";
 import { migrate } from "../src/lib/migrate";
 import { MIGRATIONS } from "../src/lib/migrations";
@@ -80,14 +81,17 @@ const MAPPINGS: LedgerMapping[] = [
   { ledger_name: "Cash", target_kind: "account", account_id: 105, party_id: null },
 ];
 
+// bank_account_id is non-null exactly for the ledgers that ARE cash/bank
+// accounts — that flag, not the account code, is what marks a settlement leg
+// since RVOS-006 P0a.
 const ACCOUNTS: MappedAccount[] = [
-  { id: 101, code: "4000", type: "income" }, // Sales
-  { id: 102, code: "2200", type: "liability" }, // Output CGST
-  { id: 103, code: "2210", type: "liability" }, // Output SGST
-  { id: 104, code: "1100", type: "asset" }, // Bank
-  { id: 105, code: "1000", type: "asset" }, // Cash
-  { id: 106, code: "5900", type: "expense" }, // Expenses — a non-revenue leg
-  { id: 107, code: "1530", type: "asset" }, // Computers — a fixed asset
+  { id: 101, code: "4000", type: "income", bank_account_id: null }, // Sales
+  { id: 102, code: "2200", type: "liability", bank_account_id: null }, // Output CGST
+  { id: 103, code: "2210", type: "liability", bank_account_id: null }, // Output SGST
+  { id: 104, code: "1100", type: "asset", bank_account_id: 2 }, // Bank
+  { id: 105, code: "1000", type: "asset", bank_account_id: 1 }, // Cash
+  { id: 106, code: "5900", type: "expense", bank_account_id: null }, // Expenses
+  { id: 107, code: "1530", type: "asset", bank_account_id: null }, // Computers
 ];
 
 const INCLUSIVE = { taxInclusive: true };
@@ -206,13 +210,17 @@ test("mapped vouchers: type, side, party, settle account and inferred GST", () =
       cr: r.credit_paise,
       p: r.party_id,
       gst: r.gst_rate,
-      via: r.settle_account,
+      via: r.bank_account_id,
     })),
     [
       // Gross 11800 with 1800 of CGST+SGST reconciles to exactly 18%.
-      { t: "sale", dr: 1_180_000, cr: null, p: SHARMA, gst: 18, via: "cash" },
-      { t: "receipt", dr: null, cr: 500_000, p: SHARMA, gst: 0, via: "bank" },
-      { t: "payment", dr: 236_000, cr: null, p: GUPTA, gst: 0, via: "cash" },
+      // `via` is now the resolved bank_account_id from the ACCOUNTS fixture
+      // (1 = Cash, 2 = Bank), not a cash/bank hint — and a sale carries NO
+      // settlement account, because a sale has no cash leg. Under the old enum
+      // it defaulted to "cash", which was a value the voucher never evidenced.
+      { t: "sale", dr: 1_180_000, cr: null, p: SHARMA, gst: 18, via: null },
+      { t: "receipt", dr: null, cr: 500_000, p: SHARMA, gst: 0, via: 2 },
+      { t: "payment", dr: 236_000, cr: null, p: GUPTA, gst: 0, via: 1 },
     ]
   );
   assert.equal(rows[0].particulars, "Cloth bill #301"); // no ⚠ suffix when clean
@@ -443,9 +451,9 @@ test("end-to-end: parse → map → stage (frozen CHECK holds) → post → TB z
   const insert = db.prepare(
     `INSERT INTO staged_rows
        (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+        entry_type, gst_rate, bank_account_id, confidence, is_balance_row, include, party_id)
      VALUES (1, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
+             @entry_type, @gst_rate, @bank_account_id, @confidence, 0, @include, @party_id)`
   );
   // Every row inserts — including the journal mapped to 'other' — proving
   // nothing the Tally path emits violates the frozen 8-value CHECK.
@@ -459,7 +467,8 @@ test("end-to-end: parse → map → stage (frozen CHECK holds) → post → TB z
       credit_paise: r.credit_paise,
       entry_type: r.entry_type,
       gst_rate: r.gst_rate,
-      settle_account: r.settle_account,
+      bank_account_id:
+        r.bank_account_id ?? defaultForHint(book(db, 1), r.settle_hint ?? "cash").id,
       confidence: r.confidence,
       include: r.include ? 1 : 0,
       party_id: r.party_id,
@@ -478,7 +487,7 @@ test("end-to-end: parse → map → stage (frozen CHECK holds) → post → TB z
     credit_paise: r.credit_paise,
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
-    settle_account: r.settle_account,
+    bank_account_id: r.bank_account_id,
     include: r.include === 1,
   }));
   const { journals } = postDocument(book(db, 1), 1, drafts);

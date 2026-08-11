@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { book } from "../src/lib/book";
+import { defaultForHint } from "../src/lib/bank-accounts";
 import { initSchema, seedCoreData } from "../src/lib/db";
 import { migrate } from "../src/lib/migrate";
 import { MIGRATIONS } from "../src/lib/migrations";
@@ -95,7 +96,7 @@ test("clean rows: Indian amounts, party match is case-insensitive, dd/mm/yyyy ok
       p: r.party_id,
       dr: r.debit_paise,
       cr: r.credit_paise,
-      via: r.settle_account,
+      via: r.settle_hint,
     })),
     [
       { d: "2026-07-02", p: 1, dr: 12_345_678, cr: null, via: "cash" },
@@ -227,9 +228,9 @@ test("end-to-end: parse → stage (frozen CHECK holds) → post → TB zero, bot
   const insert = db.prepare(
     `INSERT INTO staged_rows
        (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+        entry_type, gst_rate, bank_account_id, confidence, is_balance_row, include, party_id)
      VALUES (1, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`
+             @entry_type, @gst_rate, @bank_account_id, @confidence, 0, @include, @party_id)`
   );
   // Every parsed row inserts — including the broken one mapped to 'other' —
   // proving nothing the parser emits violates the frozen 8-value CHECK.
@@ -243,7 +244,8 @@ test("end-to-end: parse → stage (frozen CHECK holds) → post → TB zero, bot
       credit_paise: r.credit_paise,
       entry_type: r.entry_type,
       gst_rate: r.gst_rate,
-      settle_account: r.settle_account,
+      bank_account_id:
+        r.bank_account_id ?? defaultForHint(book(db, 1), r.settle_hint ?? "cash").id,
       confidence: r.confidence,
       include: r.include ? 1 : 0,
       party_id: r.party_id,
@@ -262,7 +264,7 @@ test("end-to-end: parse → stage (frozen CHECK holds) → post → TB zero, bot
     credit_paise: r.credit_paise,
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
-    settle_account: r.settle_account,
+    bank_account_id: r.bank_account_id,
     include: r.include === 1,
   }));
   const { journals } = postDocument(book(db, 1), 1, drafts);

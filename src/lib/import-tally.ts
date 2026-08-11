@@ -1,15 +1,11 @@
 import { XMLParser } from "fast-xml-parser";
+import { defaultForHint } from "./bank-accounts";
 import type { Book } from "./book";
 import { rupeeStringToPaise } from "./format";
 import { ACC } from "./posting";
 import { GST_RATES, splitExclusive, splitInclusive } from "./tax/india-gst";
 import type { ImportRow } from "./import-csv";
-import type {
-  AccountType,
-  EntryType,
-  LedgerTargetKind,
-  SettleAccount,
-} from "./types";
+import type { AccountType, EntryType, LedgerTargetKind } from "./types";
 
 /**
  * Tally-path import: a Day Book exported as XML becomes staged rows in the
@@ -84,6 +80,12 @@ export interface MappedAccount {
   id: number;
   code: string;
   type: AccountType;
+  /** Non-null when this ledger IS one of the book's cash/bank/wallet accounts
+   * (RVOS-006 P0a). Tally names the ledger a voucher actually settled through,
+   * so unlike the photo and CSV paths this importer resolves a REAL account
+   * rather than a coarse hint — and a settlement through "HDFC Current" now
+   * imports instead of being refused for not being ledger 1000 or 1100. */
+  bank_account_id: number | null;
 }
 
 /** Tally voucher type → the frozen 8-value staged enum. Matched on the name
@@ -389,7 +391,7 @@ export function tallyVouchersToRows(
     let credit_paise: number | null = null;
     let party_id: number | null = null;
     let gst_rate: number | null = null;
-    let settle_account: SettleAccount = "cash";
+    let bank_account_id: number | null = null;
 
     if (!entry_type) {
       problems.push(
@@ -417,8 +419,10 @@ export function tallyVouchersToRows(
       } else if (entry_type === "receipt" || entry_type === "payment") {
         // A settlement moves cash/bank against the party — no tax to infer.
         gst_rate = 0;
+        // Any of the book's cash/bank/wallet accounts, not just the two
+        // seeded ones — see MappedAccount.bank_account_id.
         const settleLegs = accountLegs.filter(
-          (l) => l.account.code === ACC.bank || l.account.code === ACC.cash
+          (l) => l.account.bank_account_id !== null
         );
         const extra = accountLegs.length - settleLegs.length;
         if (settleLegs.length === 0) {
@@ -438,7 +442,7 @@ export function tallyVouchersToRows(
             `${extra} extra ledger${extra === 1 ? "" : "s"} beyond the settlement (TDS, charges, discount) — post it manually via Vouchers`
           );
         } else {
-          settle_account = settleLegs[0].account.code === ACC.bank ? "bank" : "cash";
+          bank_account_id = settleLegs[0].account.bank_account_id;
         }
       } else {
         const taxLegs = accountLegs.filter((l) =>
@@ -499,7 +503,8 @@ export function tallyVouchersToRows(
       // the safe landing spot for anything we refused to classify.
       entry_type: reason ? "other" : entry_type!,
       gst_rate,
-      settle_account,
+      settle_hint: null, // Tally names the real ledger — no hint needed
+      bank_account_id,
       party_id,
       confidence: reason ? 0.2 : 1,
       include: reason === "",
@@ -549,11 +554,24 @@ export function finalizeTallyImport(book: Book, input: FinalizeTallyImportInput)
       "SELECT * FROM ledger_mappings WHERE company_id = @company_id"
     );
     const accounts = b.all<MappedAccount>(
-      "SELECT id, code, type FROM accounts WHERE company_id = @company_id"
+      `SELECT a.id, a.code, a.type, ba.id AS bank_account_id
+       FROM accounts a
+       LEFT JOIN bank_accounts ba
+         ON ba.account_id = a.id AND ba.company_id = @company_id
+       WHERE a.company_id = @company_id`
     );
     const parsed = tallyVouchersToRows(input.vouchers, mappings, accounts, {
       taxInclusive: input.taxInclusive,
     });
+
+    // Non-settlement vouchers (a sale, a purchase) have no cash/bank leg at
+    // all, so they carry no account — but staged_rows.bank_account_id is NOT
+    // NULL. They land on the book's default cash account, where the column is
+    // simply unread: buildLegs only consults it for receipt/payment. Resolved
+    // once, and only if some row actually needs it.
+    let fallback: number | null = null;
+    const fallbackBankAccountId = (): number =>
+      fallback ?? (fallback = defaultForHint(b, "cash").id);
 
     const docId = b.run(
       `INSERT INTO documents
@@ -571,9 +589,9 @@ export function finalizeTallyImport(book: Book, input: FinalizeTallyImportInput)
       b.run(
         `INSERT INTO staged_rows
            (company_id, document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+            entry_type, gst_rate, bank_account_id, confidence, is_balance_row, include, party_id)
          VALUES (@company_id, @document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-                 @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`,
+                 @entry_type, @gst_rate, @bank_account_id, @confidence, 0, @include, @party_id)`,
         {
           document_id: docId,
           row_no: r.row_no,
@@ -584,7 +602,7 @@ export function finalizeTallyImport(book: Book, input: FinalizeTallyImportInput)
           credit_paise: r.credit_paise,
           entry_type: r.entry_type,
           gst_rate: r.gst_rate,
-          settle_account: r.settle_account,
+          bank_account_id: r.bank_account_id ?? fallbackBankAccountId(),
           confidence: r.confidence,
           include: r.include ? 1 : 0,
           party_id: r.party_id,

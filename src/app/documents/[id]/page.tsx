@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { deleteDocument, runExtraction } from "@/lib/actions";
+import { listBankAccounts } from "@/lib/bank-accounts";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { LedgerImage } from "@/components/ledger-image";
 import { ReviewTable } from "@/components/review-table";
@@ -33,6 +34,13 @@ export default async function DocumentReviewPage({
     { docId: doc.id }
   );
   const isPhoto = doc.source_type === "photo";
+  // Active accounts only: a staged row may still POINT at an archived account
+  // (posting deliberately allows that — see posting.ts), but the grid must not
+  // offer one for a fresh correction.
+  const bankAccounts = listBankAccounts(book).map((ba) => ({
+    id: ba.id,
+    name: ba.name,
+  }));
   // Imports carry a party per row — the review grid shows who each row books to.
   const partyNames = isPhoto
     ? undefined
@@ -183,6 +191,7 @@ export default async function DocumentReviewPage({
               docId={doc.id}
               rows={rows}
               readOnly={doc.status === "posted"}
+              bankAccounts={bankAccounts}
               partyNames={partyNames}
               defaultPartyName={isPhoto ? undefined : doc.party_name}
             />

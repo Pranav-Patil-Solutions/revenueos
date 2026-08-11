@@ -17,6 +17,12 @@ import {
 } from "./companies";
 import { generateItems } from "./compliance";
 import { requireBook, requireSession } from "./dal";
+import {
+  archiveBankAccount,
+  createBankAccount,
+  renameBankAccount,
+  setDefaultBankAccount,
+} from "./bank-accounts";
 import { getDb, seedAccountsForCompany, UPLOADS_DIR } from "./db";
 import { readSessionToken } from "./session";
 import { extractDocument } from "./extraction";
@@ -65,6 +71,25 @@ const ENTRY_TYPES: EntryType[] = [
   "other",
 ];
 
+/** A bank/cash account id off a review-grid payload. Untrusted input, so it is
+ * validated as a positive integer here and its OWNERSHIP is checked by the Book
+ * handle when the posting path resolves it to a ledger code (RVOS-006 P0a). */
+function bankAccountId(v: unknown, label: string): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+    throw new Error(`${label}: pick a cash or bank account`);
+  }
+  return v;
+}
+
+/** The same, off a form field. */
+function formBankAccountId(formData: FormData, field: string): number {
+  const v = Number(formData.get(field));
+  if (!Number.isInteger(v) || v <= 0) {
+    throw new Error("Pick a cash or bank account for this voucher.");
+  }
+  return v;
+}
+
 function parseDraftRows(rowsJson: string): DraftRowInput[] {
   const parsed: unknown = JSON.parse(rowsJson);
   if (!Array.isArray(parsed)) throw new Error("rows payload must be an array");
@@ -107,7 +132,7 @@ function parseDraftRows(rowsJson: string): DraftRowInput[] {
       credit_paise,
       entry_type: r.entry_type as EntryType,
       gst_rate,
-      settle_account: r.settle_account === "bank" ? "bank" : "cash",
+      bank_account_id: bankAccountId(r.bank_account_id, label),
       include: r.include === true,
     };
   });
@@ -377,9 +402,15 @@ export async function createVoucher(formData: FormData): Promise<void> {
 
   let input: VoucherInput;
   if (kind === "contra") {
-    const from = formData.get("from") === "bank" ? "bank" : "cash";
-    const to = formData.get("to") === "bank" ? "bank" : "cash";
-    input = { kind, entry_date, memo, ref_no, from, to, amount_paise: amount() };
+    input = {
+      kind,
+      entry_date,
+      memo,
+      ref_no,
+      from_bank_account_id: formBankAccountId(formData, "from_bank_account_id"),
+      to_bank_account_id: formBankAccountId(formData, "to_bank_account_id"),
+      amount_paise: amount(),
+    };
   } else if (kind === "journal") {
     input = {
       kind,
@@ -410,7 +441,7 @@ export async function createVoucher(formData: FormData): Promise<void> {
       party_id,
       amount_paise: amount(),
       gst_rate,
-      settle_account: formData.get("settle_account") === "bank" ? "bank" : "cash",
+      bank_account_id: formBankAccountId(formData, "bank_account_id"),
     };
   } else {
     throw new Error("Unknown voucher kind.");
@@ -791,7 +822,7 @@ export async function createTdsVoucher(formData: FormData): Promise<void> {
     base_paise,
     section,
     use_alt: formData.get("use_alt") === "on",
-    settle_account: formData.get("settle_account") === "cash" ? "cash" : "bank",
+    bank_account_id: formBankAccountId(formData, "bank_account_id"),
     tds_paise_override,
   });
   revalidatePath("/tax/tds");
@@ -989,4 +1020,52 @@ export async function deleteDocument(docId: number): Promise<void> {
   await unlink(path.join(process.cwd(), doc.image_path)).catch(() => {});
   revalidatePath("/documents");
   redirect("/documents");
+}
+
+// ---------------------------------------------------------------------------
+// Bank, cash and wallet accounts — RVOS-006 P0a
+// ---------------------------------------------------------------------------
+
+export async function createBankAccountAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook();
+  const kind = String(formData.get("kind") ?? "");
+  if (kind !== "bank" && kind !== "cash" && kind !== "wallet" && kind !== "card") {
+    throw new Error("Pick an account kind.");
+  }
+  const ifsc = String(formData.get("ifsc") ?? "").trim().toUpperCase();
+  if (ifsc !== "" && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+    throw new Error("IFSC must look like HDFC0001234 (or be left blank).");
+  }
+  createBankAccount(book, {
+    name: String(formData.get("name") ?? ""),
+    kind,
+    account_no: String(formData.get("account_no") ?? ""),
+    ifsc,
+    is_default: formData.get("is_default") === "on",
+  });
+  revalidatePath("/settings/bank-accounts");
+  revalidatePath("/vouchers");
+  redirect("/settings/bank-accounts");
+}
+
+export async function renameBankAccountAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook();
+  renameBankAccount(book, Number(formData.get("id")), String(formData.get("name") ?? ""));
+  revalidatePath("/settings/bank-accounts");
+  revalidatePath("/settings/accounts");
+  redirect("/settings/bank-accounts");
+}
+
+export async function setDefaultBankAccountAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook();
+  setDefaultBankAccount(book, Number(formData.get("id")));
+  revalidatePath("/settings/bank-accounts");
+  redirect("/settings/bank-accounts");
+}
+
+export async function archiveBankAccountAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook();
+  archiveBankAccount(book, Number(formData.get("id")), new Date().toISOString());
+  revalidatePath("/settings/bank-accounts");
+  redirect("/settings/bank-accounts");
 }

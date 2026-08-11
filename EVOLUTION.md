@@ -1144,3 +1144,87 @@ When picking or changing any `--ink-*`/muted-text token, compute WCAG ratio
 against every background it is actually composited on (not just the most
 common one) before treating the color as final, the same way `book.ts`'s
 structural guard exists because "looks right" isn't a check.
+
+## 38. RVOS-006 P0a: real bank accounts, caught starting the dev server against the live db mid-build
+
+**What happened:** Retired the hardcoded `settle_account TEXT CHECK (IN
+('cash','bank'))` enum — 58 call sites mapping to exactly two ledger codes —
+in favour of a real `bank_accounts` table (migration 004), each account
+owning its own chart-of-accounts ledger. `staged_rows.settle_account` becomes
+`staged_rows.bank_account_id`. Ingestion paths (LLM photo, CSV, Tally XML)
+still only ever produce a coarse cash-vs-bank HINT (`SettleHint`) — nothing
+upstream can know WHICH of an office's several bank accounts a khata line
+means — resolved to a real account at staging time by `defaultForHint`
+(`src/lib/bank-accounts.ts`, new). Tally is the one exception: it names the
+actual ledger a voucher settled through, so it resolves a REAL account
+directly via `MappedAccount.bank_account_id` rather than a hint.
+`seedAccountsForCompany` now also wraps a new company's seeded Cash/Bank in
+`bank_accounts` rows, so onboarding after this migration doesn't leave a book
+with nowhere for `defaultForHint` to resolve to. New `/settings/bank-accounts`
+page for add/rename/set-default/archive (archive-only, and refused on the
+last account of a kind — a future import would have nowhere to resolve). 391
+tests pass (was 377), `tsc`/`eslint`/smoke/build all green.
+
+Verified at two levels, stated separately because they prove different things:
+*at test level*, `postDocument` posting three rows on three different
+`bank_account_id`s each land on their OWN ledger code and not each other's,
+and a row whose account was archived between staging and posting still posts
+(deliberate — see `postDocument`'s `settleCodes` comment). *In a real browser*
+against an isolated scratch instance: created a second bank account (ledger
+1110 allocated in the bank range), renamed it, made it the default, archived
+the now-non-default seeded "Bank", and confirmed the voucher form's "Settled
+via" list then offered exactly the live accounts (`1110 …`, `1000 Cash`) with
+the archived one correctly absent. A contra between two real bank accounts is
+supported by `legsFor` but is NOT yet covered by either a test or a browser
+pass — the honest gap in this phase's verification.
+
+That browser pass also caught a defect no automated gate here could see: the
+name cell's `<input className="w-full">` inside a flex row collapsed to **18px**
+because a flex item's default `min-width` is `auto`, so the Save button won the
+row. The account name was present in the DOM and completely unreadable on
+screen. Fixed with `min-w-0 flex-1` + `shrink-0` on the button and a rebalanced
+column set (measured after: 164px, and `scrollWidth === clientWidth`, so no
+overflow either). A width assertion is the kind of thing only a rendered pass
+catches — `tsc` and 391 passing tests had nothing to say about it.
+
+**What went wrong, caught mid-build:** To do that real-instance verification
+I started `DEMO_MODE=1 npm run dev` from `~/revenueos` — and `DEMO_MODE` only
+short-circuits LLM extraction with a canned fixture; it does **not** change
+`DATA_DIR`, which `db.ts` still resolves from `process.cwd()`. Every ordinary
+boot calls `migrate()` in-process with no `opts.backup` (this is documented
+and deliberate — see `migrateInProcess`'s comment: "what every ordinary app
+boot does," transactionally safe on its own). So starting the dev server for
+what I intended as a throwaway UI check ran migration 004 for real, against
+`data/revenueos.db` — the actual production ledger — with no independently
+verified backup taken FIRST, which is exactly the cutover discipline
+`scripts/migrate.ts` exists to enforce and which this session skipped by
+accident.
+
+**Why it turned out fine, verified rather than assumed:** stopped the server
+immediately on noticing; `PRAGMA integrity_check` → `ok`, `foreign_key_check`
+→ empty, `journal_lines` net → 0 paise, and every table's row count intact
+across both companies in that book. The migration engine's own design is why:
+transactional, foreign-key-checked, and `assertBooksIntact` re-proven before
+commit. Independently re-checked afterwards on the live file: `schema_version`
+shows 004 applied once at 2026-08-10T11:46:41Z, all 48 staged rows carry a
+non-NULL `bank_account_id` (0 nulls), and `bank_accounts` holds a defaulted
+cash + bank pair for BOTH companies in that book. A snapshot dated ~2 minutes
+after the migration exists at `data/backups/revenueos-20260810-114804`
+(verified here: version 4, net 0 paise, `integrity_check ok`) — but that is a
+post-migration snapshot, so the genuine pre-004 rollback point is the older
+`revenueos-20260808-005733`. A verified backup taken BEFORE the DDL, which is
+what `scripts/migrate.ts` exists to guarantee, is precisely what was missing.
+
+**Delta (rule):** `DEMO_MODE=1` is NOT a sandbox flag — it only fakes the LLM
+call. The only way to run this app against throwaway data is a `cwd` that
+has no `data/` of its own (a genuinely separate directory), never the real
+repo root, regardless of `DEMO_MODE`. Any future "let me just start the dev
+server to check the UI" must first confirm `pwd` is NOT the real project root
+— or better, must go through a fully isolated copy the way the eventual
+browser check in this same session did (real `npm ci` install, `src` and
+config files copied not symlinked — Turbopack's root-escape check rejects a
+symlinked `src`/config even though a symlinked `node_modules` is fine, so a
+scratch instance needs real files at the project root, symlink only
+`node_modules`). Added to `[[agentic-workflow-standard]]`-equivalent personal
+practice going forward: a `data/` directory existing at `cwd` is the actual
+signal to check, not the env var.

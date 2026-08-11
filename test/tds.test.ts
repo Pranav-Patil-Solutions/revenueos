@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { settleId } from "./helpers";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { book } from "../src/lib/book";
@@ -123,7 +124,7 @@ test("a 194C payment posts Dr expense / Cr 2300 / Cr bank, register row linked",
     expense_account_code: "5900",
     base_paise: R(10_000),
     section: "194C",
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
   });
   assert.equal(computation.tds_paise, R(100));
 
@@ -169,7 +170,7 @@ test("ATOMIC: a register insert failure leaves no journal behind", () => {
       expense_account_code: "5900",
       base_paise: R(10_000),
       section: "194C",
-      settle_account: "bank",
+      bank_account_id: settleId(db, 1, "bank"),
     })
   );
   const after = (db.prepare("SELECT COUNT(*) n FROM journals").get() as { n: number }).n;
@@ -190,7 +191,7 @@ test("no-PAN payee is deducted at 20% through the posting path too", () => {
     expense_account_code: "5900",
     base_paise: R(10_000),
     section: "194C",
-    settle_account: "cash",
+    bank_account_id: settleId(db, 1, "cash"),
   });
   assert.equal(computation.tds_paise, R(2_000));
   assert.equal(computation.no_pan, true);
@@ -206,7 +207,7 @@ test("the manual override books the office's own figure (salary), bounded by the
     expense_account_code: "5900",
     base_paise: R(50_000),
     section: "192B",
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
     tds_paise_override: R(3_500),
   });
   assert.equal(computation.tds_paise, 0); // what the engine said
@@ -227,7 +228,7 @@ test("the manual override books the office's own figure (salary), bounded by the
         expense_account_code: "5900",
         base_paise: R(1_000),
         section: "192B",
-        settle_account: "bank",
+        bank_account_id: settleId(db, 1, "bank"),
         tds_paise_override: R(2_000), // more than the bill
       }),
     /between zero and the bill/
@@ -246,7 +247,7 @@ test("an override stores its EFFECTIVE rate in the register, not the unused defa
     expense_account_code: "5900",
     base_paise: R(50_000),
     section: "192B",
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
     tds_paise_override: R(3_500),
   });
   const row = db
@@ -258,7 +259,7 @@ test("an override stores its EFFECTIVE rate in the register, not the unused defa
   const same = postVoucherWithTds(book(db, 1), {
     entry_date: "2026-08-01", memo: "", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
-    settle_account: "bank", tds_paise_override: R(100),
+    bank_account_id: settleId(db, 1, "bank"), tds_paise_override: R(100),
   });
   const sameRow = db
     .prepare("SELECT rate_bp FROM tds_entries WHERE id = ?")
@@ -290,7 +291,7 @@ test("a zero-TDS voucher (below-rate override) still posts a clean two-leg journ
     expense_account_code: "5900",
     base_paise: R(5_000),
     section: "194C",
-    settle_account: "cash",
+    bank_account_id: settleId(db, 1, "cash"),
     tds_paise_override: 0,
   });
   const legs = (db
@@ -313,7 +314,7 @@ test("books lock refuses a back-dated TDS voucher atomically", () => {
         expense_account_code: "5900",
         base_paise: R(10_000),
         section: "194C",
-        settle_account: "bank",
+        bank_account_id: settleId(db, 1, "bank"),
       }),
     /locked/
   );
@@ -333,19 +334,19 @@ function seedQuarterData(db: Database.Database): void {
     postVoucherWithTds(book(db, 1), {
       entry_date: date, memo: "work", ref_no: "", party_id: VERMA,
       expense_account_code: "5900", base_paise: base, section: "194C",
-      settle_account: "bank",
+      bank_account_id: settleId(db, 1, "bank"),
     });
   }
   postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-01", memo: "labour", ref_no: "", party_id: NOPAN,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
-    settle_account: "cash",
+    bank_account_id: settleId(db, 1, "cash"),
   });
   // Q2 (Jul–Sep): salary — 24Q, not 26Q.
   postVoucherWithTds(book(db, 1), {
     entry_date: "2026-07-31", memo: "salary", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(50_000), section: "192B",
-    settle_account: "bank", tds_paise_override: R(3_500),
+    bank_account_id: settleId(db, 1, "bank"), tds_paise_override: R(3_500),
   });
 }
 
@@ -399,12 +400,12 @@ test("a challan covers one return form — salary and non-salary never share one
   postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-10", memo: "work", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(10_000), section: "194C",
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
   });
   postVoucherWithTds(book(db, 1), {
     entry_date: "2026-05-31", memo: "salary", ref_no: "", party_id: VERMA,
     expense_account_code: "5900", base_paise: R(50_000), section: "192B",
-    settle_account: "bank", tds_paise_override: R(3_500),
+    bank_account_id: settleId(db, 1, "bank"), tds_paise_override: R(3_500),
   });
   // The exact filter createTdsChallan uses.
   const pendingFor = (form: string) =>

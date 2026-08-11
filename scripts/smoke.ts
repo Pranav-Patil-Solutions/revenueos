@@ -26,6 +26,7 @@ async function main(): Promise<void> {
   step = "boot fresh db + seeds";
   const { getDb, SEED_ACCOUNTS } = await import("../src/lib/db");
   const { book: makeBook } = await import("../src/lib/book");
+  const { defaultForHint } = await import("../src/lib/bank-accounts");
   const { getCompany } = await import("../src/lib/companies");
   const db = getDb();
   const book = makeBook(db, 1); // fresh single-company install — company 1
@@ -79,7 +80,7 @@ async function main(): Promise<void> {
     credit_paise: r.credit_paise,
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
-    settle_account: r.settle_account,
+    bank_account_id: r.bank_account_id,
     include: r.row_no === 10 ? false : r.include === 1,
   }));
   const { journals } = postDocument(book, docId, drafts);
@@ -164,8 +165,8 @@ async function main(): Promise<void> {
         entry_date: "2026-07-10",
         memo: "back-dated",
         ref_no: "",
-        from: "cash",
-        to: "bank",
+        from_bank_account_id: defaultForHint(book, "cash").id,
+        to_bank_account_id: defaultForHint(book, "bank").id,
         amount_paise: 100,
       }),
     /locked/
@@ -196,37 +197,22 @@ async function main(): Promise<void> {
   const parsed = parseImportCsv(csv, partyRows);
   assert.equal(parsed.included, 2, "two clean rows");
   assert.equal(parsed.excluded, 1, "bad row excluded with reason");
-  // Same one-transaction shape the /api/import/excel route writes.
-  const insertStagedSql = `INSERT INTO staged_rows
-       (company_id, document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-        entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
-     VALUES (@company_id, @document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-             @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`;
-  const importDocId = book.tx((b): number => {
-    const id = b.run(
-      `INSERT INTO documents
-           (company_id, party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
-         VALUES (@company_id, @partyId, 'data/uploads/smoke.csv', 'smoke-csv-sha', 'extracted', 'excel', 'csv-template', @now, @now)`,
-      { partyId: sharma!.id, now: new Date().toISOString() }
-    ).lastInsertRowid as number;
-    for (const r of parsed.rows) {
-      b.run(insertStagedSql, {
-        document_id: id,
-        row_no: r.row_no,
-        entry_date: r.entry_date,
-        particulars: r.particulars,
-        ref_no: r.ref_no,
-        debit_paise: r.debit_paise,
-        credit_paise: r.credit_paise,
-        entry_type: r.entry_type,
-        gst_rate: r.gst_rate,
-        settle_account: r.settle_account,
-        confidence: r.confidence,
-        include: r.include ? 1 : 0,
-        party_id: r.party_id,
-      });
-    }
-    return id;
+  // Calls the REAL staging function the /api/import/excel route uses, rather
+  // than a hand-rolled copy of its INSERT.
+  //
+  // This used to be a duplicate of that SQL, and RVOS-006 P0a is the second
+  // time it silently drifted from the schema (EVOLUTION #27 was the first,
+  // where a `ledger_mappings` ON CONFLICT clause went stale). The tenancy
+  // ratchet cannot see it because that test only walks `src/lib/`, and tsc
+  // cannot see it because it is a string. Calling the production path means
+  // there is no second copy left to drift.
+  const { stageExcelImport } = await import("../src/lib/import-csv");
+  const importDocId = stageExcelImport(book, {
+    partyId: sharma!.id,
+    rows: parsed.rows,
+    imagePath: "data/uploads/smoke.csv",
+    sha256: "smoke-csv-sha",
+    now: new Date().toISOString(),
   });
   const importStaged = book.all(
     "SELECT * FROM staged_rows WHERE company_id = @company_id AND document_id = @docId ORDER BY row_no",
@@ -241,7 +227,7 @@ async function main(): Promise<void> {
     credit_paise: r.credit_paise,
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
-    settle_account: r.settle_account,
+    bank_account_id: r.bank_account_id,
     include: r.include === 1,
   })));
   assert.equal(importJournals.journals, 2, "2 import journals posted");
@@ -321,40 +307,29 @@ async function main(): Promise<void> {
   const tallyParsed = tallyVouchersToRows(
     tallyVouchers,
     savedMappings,
-    book.all("SELECT id, code, type FROM accounts WHERE company_id = @company_id") as import(
-      "../src/lib/import-tally"
-    ).MappedAccount[],
+    book.all(
+      `SELECT a.id, a.code, a.type, ba.id AS bank_account_id
+       FROM accounts a
+       LEFT JOIN bank_accounts ba ON ba.account_id = a.id AND ba.company_id = @company_id
+       WHERE a.company_id = @company_id`
+    ) as import("../src/lib/import-tally").MappedAccount[],
     { taxInclusive: true }
   );
   assert.equal(tallyParsed.included, 2, "sale + receipt import; journal does not");
   assert.equal(tallyParsed.excluded, 1, "journal excluded with a reason");
   assert.match(tallyParsed.rows[2].reason, /post it manually via Vouchers/);
 
-  const tallyDocId = book.tx((b): number => {
-    const id = b.run(
-      `INSERT INTO documents
-           (company_id, party_id, image_path, image_sha256, status, source_type, model, created_at, extracted_at)
-         VALUES (@company_id, @partyId, 'data/uploads/smoke-daybook.xml', 'smoke-tally-sha', 'extracted', 'tally', 'tally-daybook', @now, @now)`,
-      { partyId: sharma!.id, now: nowIso }
-    ).lastInsertRowid as number;
-    for (const r of tallyParsed.rows) {
-      b.run(insertStagedSql, {
-        document_id: id,
-        row_no: r.row_no,
-        entry_date: r.entry_date,
-        particulars: r.particulars,
-        ref_no: r.ref_no,
-        debit_paise: r.debit_paise,
-        credit_paise: r.credit_paise,
-        entry_type: r.entry_type,
-        gst_rate: r.gst_rate,
-        settle_account: r.settle_account,
-        confidence: r.confidence,
-        include: r.include ? 1 : 0,
-        party_id: r.party_id,
-      });
-    }
-    return id;
+  // Real staging function, not a copy of its INSERT — same reason as the CSV
+  // block above. It re-upserts the mappings already saved, which is a no-op.
+  const { finalizeTallyImport } = await import("../src/lib/import-tally");
+  const tallyDocId = finalizeTallyImport(book, {
+    partyId: sharma!.id,
+    mappings: savedMappings,
+    vouchers: tallyVouchers,
+    taxInclusive: true,
+    imagePath: "data/uploads/smoke-daybook.xml",
+    sha256: "smoke-tally-sha",
+    now: nowIso,
   });
   const tallyStaged = book.all(
     "SELECT * FROM staged_rows WHERE company_id = @company_id AND document_id = @docId ORDER BY row_no",
@@ -369,7 +344,7 @@ async function main(): Promise<void> {
     credit_paise: r.credit_paise,
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
-    settle_account: r.settle_account,
+    bank_account_id: r.bank_account_id,
     include: r.include === 1,
   })));
   assert.equal(tallyPosted.journals, 2, "2 tally journals posted");
@@ -482,7 +457,7 @@ async function main(): Promise<void> {
     expense_account_code: "5900",
     base_paise: 1_000_000, // ₹10,000
     section: "194C",
-    settle_account: "bank",
+    bank_account_id: defaultForHint(book, "bank").id,
   });
   assert.equal(tdsPost.computation.tds_paise, 10_000, "1% of ₹10,000 = ₹100");
   const bal2300 = () =>

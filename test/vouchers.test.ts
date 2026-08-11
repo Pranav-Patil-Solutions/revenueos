@@ -8,7 +8,7 @@ import { balanceSheet, trialBalance } from "../src/lib/reports";
 import { getCompany } from "../src/lib/companies";
 import type { PartyRow } from "../src/lib/types";
 import { postManualVoucher } from "../src/lib/vouchers";
-import { draftRows, postedDb, stagedDb } from "./helpers";
+import { draftRows, postedDb, settleId, stagedDb } from "./helpers";
 
 function journalCount(db: Database.Database): number {
   return (db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number }).n;
@@ -40,7 +40,7 @@ test("structured sale voucher posts exactly buildLegs' output", () => {
     party_id: 1,
     amount_paise: 118_000, // ₹1,180 gross @ 18%
     gst_rate: 18,
-    settle_account: "cash",
+    bank_account_id: settleId(db, 1, "cash"),
   });
 
   const party = db.prepare("SELECT * FROM parties WHERE id = 1").get() as PartyRow;
@@ -52,10 +52,10 @@ test("structured sale voucher posts exactly buildLegs' output", () => {
       debit_paise: 118_000,
       credit_paise: null,
       gst_rate: 18,
-      settle_account: "cash",
     },
     party,
-    settings
+    settings,
+    "1000"
   );
 
   const stored = legsOf(db, journalId);
@@ -87,7 +87,7 @@ test("structured voucher rejects a party of the wrong kind", () => {
         party_id: 1,
         amount_paise: 118_000,
         gst_rate: 18,
-        settle_account: "cash",
+        bank_account_id: settleId(db, 1, "cash"),
       }),
     /needs a supplier/
   );
@@ -101,8 +101,8 @@ test("contra moves cash → bank with exact paise", () => {
     entry_date: "2026-07-20",
     memo: "Cash deposited",
     ref_no: "",
-    from: "cash",
-    to: "bank",
+    from_bank_account_id: settleId(db, 1, "cash"),
+    to_bank_account_id: settleId(db, 1, "bank"),
     amount_paise: 300_000,
   });
   assert.deepEqual(legsOf(db, journalId), [
@@ -116,8 +116,8 @@ test("contra moves cash → bank with exact paise", () => {
         entry_date: "2026-07-20",
         memo: "",
         ref_no: "",
-        from: "cash",
-        to: "cash",
+        from_bank_account_id: settleId(db, 1, "cash"),
+        to_bank_account_id: settleId(db, 1, "cash"),
         amount_paise: 100,
       }),
     /two different accounts/
@@ -217,8 +217,8 @@ test("books lock rejects back-dated vouchers and document posting", () => {
         entry_date: "2026-07-31",
         memo: "",
         ref_no: "",
-        from: "cash",
-        to: "bank",
+        from_bank_account_id: settleId(db, 1, "cash"),
+        to_bank_account_id: settleId(db, 1, "bank"),
         amount_paise: 100,
       }),
     /locked/
@@ -229,8 +229,8 @@ test("books lock rejects back-dated vouchers and document posting", () => {
     entry_date: "2026-08-01",
     memo: "",
     ref_no: "",
-    from: "cash",
-    to: "bank",
+    from_bank_account_id: settleId(db, 1, "cash"),
+    to_bank_account_id: settleId(db, 1, "bank"),
     amount_paise: 100,
   });
 
@@ -254,7 +254,7 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     party_id: 1,
     amount_paise: 59_000,
     gst_rate: 18,
-    settle_account: "cash",
+    bank_account_id: settleId(db, 1, "cash"),
   });
   postManualVoucher(b, {
     kind: "receipt",
@@ -264,15 +264,15 @@ test("mixed manual batch keeps TB at zero and the BS balanced", () => {
     party_id: 1,
     amount_paise: 59_000,
     gst_rate: null,
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
   });
   postManualVoucher(b, {
     kind: "contra",
     entry_date: "2026-08-05",
     memo: "c",
     ref_no: "",
-    from: "bank",
-    to: "cash",
+    from_bank_account_id: settleId(db, 1, "bank"),
+    to_bank_account_id: settleId(db, 1, "cash"),
     amount_paise: 25_000,
   });
   postManualVoucher(b, {

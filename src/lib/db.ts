@@ -363,8 +363,53 @@ export function seedAccountsForCompany(db: Database.Database, companyId: number)
     for (const a of SEED_ACCOUNTS) {
       insert.run({ company_id: companyId, ...a });
     }
+    seedBankAccounts(db, companyId);
   });
   tx();
+}
+
+/**
+ * Wrap a new company's seeded Cash and Bank ledgers in `bank_accounts` rows —
+ * RVOS-006 P0a.
+ *
+ * Deliberately called from INSIDE `seedAccountsForCompany` rather than left to
+ * its callers. Migration 004 does this for every company that existed when it
+ * ran, but a company onboarded afterwards would otherwise get a chart of
+ * accounts with no bank accounts wrapping it — and then every import and
+ * voucher for that client would fail at `defaultForHint`, because there is no
+ * account for a 'cash' or 'bank' row to resolve to. One call site means there
+ * is nowhere to forget it.
+ */
+function seedBankAccounts(db: Database.Database, companyId: number): void {
+  const findAccount = db.prepare(
+    "SELECT id FROM accounts WHERE company_id = @companyId AND code = @code"
+  );
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO bank_accounts
+       (company_id, name, kind, account_id, is_default, created_at)
+     VALUES (@companyId, @name, @kind, @accountId, 1, @now)`
+  );
+  const now = new Date().toISOString();
+  for (const seed of [
+    { code: "1000", name: "Cash", kind: "cash" },
+    { code: "1100", name: "Bank", kind: "bank" },
+  ]) {
+    const account = findAccount.get({ companyId, code: seed.code }) as
+      | { id: number }
+      | undefined;
+    if (!account) {
+      throw new Error(
+        `Cannot seed bank accounts for company ${companyId}: ledger ${seed.code} is missing.`
+      );
+    }
+    insert.run({
+      companyId,
+      name: seed.name,
+      kind: seed.kind,
+      accountId: account.id,
+      now,
+    });
+  }
 }
 
 /** Demo parties so DEMO_MODE works on a fresh db without any setup. */

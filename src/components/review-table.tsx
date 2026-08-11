@@ -35,7 +35,7 @@ interface EditRow {
   credit: string;
   entry_type: EntryType;
   gst_rate: string; // "" = null
-  settle_account: "cash" | "bank";
+  bank_account_id: number;
   include: boolean;
   confidence: number;
   is_balance_row: boolean;
@@ -69,18 +69,27 @@ export function ReviewTable({
   docId,
   rows,
   readOnly,
+  bankAccounts,
   partyNames,
   defaultPartyName,
 }: {
   docId: number;
   rows: StagedRow[];
   readOnly: boolean;
+  /** The book's active cash/bank/wallet accounts, for the settlement column.
+   * Ingestion resolved a coarse cash-vs-bank hint to a default; this is where a
+   * human corrects it to the account the money actually moved through. */
+  bankAccounts: { id: number; name: string }[];
   /** id → name for the per-row party column (imports only). The column is
    * hidden when absent, keeping the photo path's layout untouched. */
   partyNames?: Record<number, string>;
   defaultPartyName?: string;
 }) {
   const showParty = partyNames !== undefined;
+  // Named per row from the list rather than joined server-side: the review grid
+  // is a client component and the account set is small and already loaded.
+  const bankAccountName = (id: number): string =>
+    bankAccounts.find((ba) => ba.id === id)?.name ?? "—";
   const [edit, setEdit] = useState<EditRow[]>(() =>
     rows.map((r) => ({
       id: r.id,
@@ -93,7 +102,7 @@ export function ReviewTable({
       credit: paiseToInput(r.credit_paise),
       entry_type: r.entry_type,
       gst_rate: r.gst_rate === null ? "" : String(r.gst_rate),
-      settle_account: r.settle_account,
+      bank_account_id: r.bank_account_id,
       include: r.include === 1,
       confidence: r.confidence,
       is_balance_row: r.is_balance_row === 1,
@@ -168,7 +177,7 @@ export function ReviewTable({
         credit_paise: inputToPaise(r.credit),
         entry_type: r.entry_type,
         gst_rate: r.gst_rate === "" ? null : Number(r.gst_rate),
-        settle_account: r.settle_account,
+        bank_account_id: r.bank_account_id,
         include: r.include,
       }))
     );
@@ -282,7 +291,9 @@ export function ReviewTable({
                     <td className="px-2 py-1.5 text-right">{r.credit || ""}</td>
                     <td className="px-2 py-1.5">{r.entry_type.replace("_", " ")}</td>
                     <td className="px-2 py-1.5">{r.gst_rate === "" ? "—" : `${r.gst_rate}%`}</td>
-                    <td className="px-2 py-1.5">{r.settle_account}</td>
+                    <td className="px-2 py-1.5">
+                      {bankAccountName(r.bank_account_id)}
+                    </td>
                   </>
                 ) : (
                   <>
@@ -364,14 +375,17 @@ export function ReviewTable({
                     </td>
                     <td className="px-1 py-1">
                       <select
-                        value={r.settle_account}
+                        value={r.bank_account_id}
                         onChange={(e) =>
-                          set(i, { settle_account: e.target.value as "cash" | "bank" })
+                          set(i, { bank_account_id: Number(e.target.value) })
                         }
-                        className={`${cellInput} w-18`}
+                        className={`${cellInput} w-28`}
                       >
-                        <option value="cash">cash</option>
-                        <option value="bank">bank</option>
+                        {bankAccounts.map((ba) => (
+                          <option key={ba.id} value={ba.id}>
+                            {ba.name}
+                          </option>
+                        ))}
                       </select>
                     </td>
                   </>

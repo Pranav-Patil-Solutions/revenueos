@@ -7,6 +7,7 @@ import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
 import type { PartyRow, TdsChallanRow } from "@/lib/types";
 import { requireBook } from "@/lib/dal";
+import { listBankAccounts } from "@/lib/bank-accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,12 @@ export default async function TdsPage({
   const parties = book.all(
     "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
   ) as PartyRow[];
+  const bankAccounts = listBankAccounts(book);
+  // A TDS-deducted bill is almost always paid by bank, so default there — but
+  // fall back rather than render an empty select on a cash-only book.
+  const defaultPayFrom = String(
+    (bankAccounts.find((ba) => ba.kind === "bank") ?? bankAccounts[0])?.id ?? ""
+  );
   const undepositedAll = register
     .filter((r) => r.challan_id === null)
     .reduce((s, r) => s + r.tds_paise, 0);
@@ -145,9 +152,17 @@ export default async function TdsPage({
             <label className="mb-1.5 block text-[12px] font-medium text-ink-3" htmlFor="tds-settle">
               Paid from
             </label>
-            <select id="tds-settle" name="settle_account" className={field} defaultValue="bank">
-              <option value="bank">Bank</option>
-              <option value="cash">Cash</option>
+            <select
+              id="tds-settle"
+              name="bank_account_id"
+              className={field}
+              defaultValue={defaultPayFrom}
+            >
+              {bankAccounts.map((ba) => (
+                <option key={ba.id} value={ba.id}>
+                  {ba.account_code} {ba.name}
+                </option>
+              ))}
             </select>
           </div>
           <div>

@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { settleId } from "./helpers";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { book } from "../src/lib/book";
@@ -219,7 +220,7 @@ test("posted deductions turn TDS rows on even with no TAN in settings", () => {
     expense_account_code: "5900",
     base_paise: 1_000_000,
     section: "194C",
-    settle_account: "bank",
+    bank_account_id: settleId(db, 1, "bank"),
   });
   const items = generateItems(book(db, 1), FY, settingsWith(db, {}), "2026-04-01");
   assert.equal(items.filter((i) => i.regime === "tds").length, 16);

@@ -45,6 +45,7 @@ export const SCOPED_TABLES = [
   "wdv_openings",
   "compliance_marks",
   "ledger_mappings",
+  "bank_accounts",
 ] as const;
 
 export type ScopedTable = (typeof SCOPED_TABLES)[number];

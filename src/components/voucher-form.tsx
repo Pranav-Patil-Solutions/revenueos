@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createVoucher, createVoucherParty } from "@/lib/actions";
 import { inr } from "@/lib/format";
 import type { VoucherNavKind } from "@/lib/keymap";
+import type { BankAccountKind } from "@/lib/types";
 import {
   FOCUS_DATE_EVENT,
   INLINE_CREATE_EVENT,
@@ -19,6 +20,12 @@ interface PartyOption {
 interface AccountOption {
   code: string;
   name: string;
+}
+interface BankAccountOption {
+  id: number;
+  name: string;
+  kind: BankAccountKind;
+  account_code: string;
 }
 
 const KIND_TABS: { kind: VoucherNavKind; label: string; fkey: string }[] = [
@@ -59,6 +66,7 @@ export function VoucherForm({
   kind,
   parties: initialParties,
   accounts,
+  bankAccounts,
   today,
   defaultGstRate,
   postedId,
@@ -66,6 +74,10 @@ export function VoucherForm({
   kind: VoucherNavKind;
   parties: PartyOption[];
   accounts: AccountOption[];
+  /** The book's active cash/bank/wallet accounts (RVOS-006 P0a). A contra can
+   * now move money bank→bank, not just cash↔bank, so both ends of a contra and
+   * every settlement pick from this list. */
+  bankAccounts: BankAccountOption[];
   today: string;
   defaultGstRate: number;
   postedId: number | null;
@@ -82,6 +94,22 @@ export function VoucherForm({
   ]);
   const [inlineParty, setInlineParty] = useState(false);
   const [inlineName, setInlineName] = useState("");
+
+  // Rendered once and reused by all three selects — the same account list.
+  const bankAccountOptions = bankAccounts.map((ba) => (
+    <option key={ba.id} value={ba.id}>
+      {ba.account_code} {ba.name}
+    </option>
+  ));
+  // A contra defaults to the most common real movement (cash → bank), and a
+  // settlement to cash; `?? bankAccounts[0]` keeps a book with no cash account
+  // (or no bank account) rendering rather than selecting nothing.
+  const cashFirstId = String(
+    (bankAccounts.find((ba) => ba.kind === "cash") ?? bankAccounts[0])?.id ?? ""
+  );
+  const bankFirstId = String(
+    (bankAccounts.find((ba) => ba.kind === "bank") ?? bankAccounts[0])?.id ?? ""
+  );
 
   const partyKind = CUSTOMER_KINDS.has(kind) ? "customer" : "supplier";
   const partyOptions = parties.filter((p) => p.kind === partyKind);
@@ -207,16 +235,24 @@ export function VoucherForm({
           <div className="mt-4 grid grid-cols-3 gap-4">
             <div>
               <label className={label} htmlFor="v-from">From</label>
-              <select id="v-from" name="from" className={field} defaultValue="cash">
-                <option value="cash">1000 Cash</option>
-                <option value="bank">1100 Bank</option>
+              <select
+                id="v-from"
+                name="from_bank_account_id"
+                className={field}
+                defaultValue={cashFirstId}
+              >
+                {bankAccountOptions}
               </select>
             </div>
             <div>
               <label className={label} htmlFor="v-to">To</label>
-              <select id="v-to" name="to" className={field} defaultValue="bank">
-                <option value="cash">1000 Cash</option>
-                <option value="bank">1100 Bank</option>
+              <select
+                id="v-to"
+                name="to_bank_account_id"
+                className={field}
+                defaultValue={bankFirstId}
+              >
+                {bankAccountOptions}
               </select>
             </div>
             <div>
@@ -294,9 +330,13 @@ export function VoucherForm({
               {SETTLE_KINDS.has(kind) && (
                 <div>
                   <label className={label} htmlFor="v-settle">Settled via</label>
-                  <select id="v-settle" name="settle_account" className={field} defaultValue="cash">
-                    <option value="cash">1000 Cash</option>
-                    <option value="bank">1100 Bank</option>
+                  <select
+                    id="v-settle"
+                    name="bank_account_id"
+                    className={field}
+                    defaultValue={cashFirstId}
+                  >
+                    {bankAccountOptions}
                   </select>
                 </div>
               )}

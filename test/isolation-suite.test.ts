@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { book, type Book } from "../src/lib/book";
+import { settleId } from "./helpers";
 import { initSchema, seedAccountsForCompany, seedCoreData } from "../src/lib/db";
 import { migrate } from "../src/lib/migrate";
 import { MIGRATIONS } from "../src/lib/migrations";
@@ -186,7 +187,7 @@ function postCompanyData(
     party_id: partyId,
     amount_paise: seed.saleAmount,
     gst_rate: 18,
-    settle_account: "cash",
+    bank_account_id: settleId(db, id, "cash"),
   });
   postVoucherWithTds(b, {
     entry_date: "2026-06-12",
@@ -196,7 +197,7 @@ function postCompanyData(
     expense_account_code: "5900",
     base_paise: seed.tdsBase,
     section: "194C",
-    settle_account: "bank",
+    bank_account_id: settleId(db, id, "bank"),
   });
   insertAsset(db, id, {
     name: seed.assetName,

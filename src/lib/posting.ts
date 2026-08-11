@@ -1,3 +1,4 @@
+import { getBankAccount } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
 import {
@@ -28,8 +29,15 @@ import type {
  * manual opposite entry.
  */
 
-/** The account codes the posting engine moves. Exported so importers classify
- * ledgers against the same codes this engine posts to — one source of truth. */
+/**
+ * The account codes the posting engine moves. Exported so importers classify
+ * ledgers against the same codes this engine posts to — one source of truth.
+ *
+ * `cash` and `bank` are the SEEDED defaults only. Since RVOS-006 P0a a book may
+ * hold any number of cash/bank/wallet accounts, each with its own code, and a
+ * settlement's actual code is resolved per row from `bank_account_id`. Do not
+ * treat these two as "the" cash and bank ledgers.
+ */
 export const ACC = {
   cash: "1000",
   bank: "1100",
@@ -85,12 +93,7 @@ export function assertBalanced(legs: Leg[]): void {
 
 type PostableRow = Pick<
   StagedRow,
-  | "row_no"
-  | "entry_type"
-  | "debit_paise"
-  | "credit_paise"
-  | "gst_rate"
-  | "settle_account"
+  "row_no" | "entry_type" | "debit_paise" | "credit_paise" | "gst_rate"
 >;
 type PartyLike = Pick<PartyRow, "id" | "kind" | "state_code">;
 type SettingsLike = Pick<
@@ -120,12 +123,21 @@ function outputTaxLegs(
   return legs;
 }
 
-/** Double-entry legs for one staged row. G is the row's single non-zero
- * column; the entry_type decides which accounts move and in which direction. */
+/**
+ * Double-entry legs for one staged row. G is the row's single non-zero column;
+ * the entry_type decides which accounts move and in which direction.
+ *
+ * `settleCode` is the chart-of-accounts code money moves through for the
+ * settlement kinds (receipt/payment), resolved by the caller from the row's
+ * `bank_account_id` — RVOS-006 P0a. It is passed in rather than looked up here
+ * so this function stays pure and unit-testable, which is how the tax-split
+ * arithmetic has always been verified.
+ */
 export function buildLegs(
   row: PostableRow,
   party: PartyLike,
-  settings: SettingsLike
+  settings: SettingsLike,
+  settleCode: string
 ): Leg[] {
   const debit = row.debit_paise ?? 0;
   const credit = row.credit_paise ?? 0;
@@ -137,7 +149,7 @@ export function buildLegs(
   const G = debit > 0 ? debit : credit;
   const rate = row.gst_rate ?? settings.default_gst_rate;
   const interState = isInterState(party.state_code, settings.state_code);
-  const settle = row.settle_account === "bank" ? ACC.bank : ACC.cash;
+  const settle = settleCode;
 
   switch (row.entry_type) {
     case "sale": {
@@ -194,20 +206,37 @@ export function buildLegs(
   }
 }
 
-/** Persist review-grid edits onto staged rows. No status checks here — both
+/**
+ * Persist review-grid edits onto staged rows. No status checks here — both
  * callers guard: the draft action rejects posted docs, postDocument re-checks
- * inside its transaction. */
+ * inside its transaction.
+ *
+ * `bank_account_id` ownership IS checked here, for every row, whether or not
+ * it is included — `saveDraft` (a plain edit, never posts) would otherwise
+ * accept and persist any positive integer a form payload supplies, including
+ * another company's account id, with nothing to catch it until someone later
+ * tried to post that row through `postDocument`'s scoped lookup. A draft is
+ * still untrusted input the moment it is written, not only at posting time.
+ * Archived accounts ARE accepted (see `postDocument`'s settleCodeFor) — this
+ * is an ownership check, not the "must be active" one `resolveSettleCode`
+ * applies for a fresh posting choice.
+ */
 export function applyDraftRows(
   book: Book,
   docId: number,
   rows: DraftRowInput[]
 ): void {
   for (const r of rows) {
+    if (!getBankAccount(book, r.bank_account_id)) {
+      throw new Error(
+        `row ${r.id}: that bank/cash account is not in this book.`
+      );
+    }
     book.run(
       `UPDATE staged_rows SET
          entry_date = @entry_date, particulars = @particulars, ref_no = @ref_no,
          debit_paise = @debit_paise, credit_paise = @credit_paise,
-         entry_type = @entry_type, gst_rate = @gst_rate, settle_account = @settle_account,
+         entry_type = @entry_type, gst_rate = @gst_rate, bank_account_id = @bank_account_id,
          include = @include
        WHERE id = @id AND document_id = @docId AND company_id = @company_id`,
       {
@@ -218,7 +247,7 @@ export function applyDraftRows(
         credit_paise: r.credit_paise,
         entry_type: r.entry_type,
         gst_rate: r.gst_rate,
-        settle_account: r.settle_account,
+        bank_account_id: r.bank_account_id,
         include: r.include ? 1 : 0,
         id: r.id,
         docId,
@@ -273,6 +302,30 @@ export function postDocument(
     ) as { id: number; code: string }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
 
+    // bank_account_id → its ledger code, once for the whole document rather
+    // than per row. Archived accounts ARE resolved here on purpose: archiving
+    // means "stop offering this for new entries", not "this ledger is closed to
+    // history", and refusing would strand an already-reviewed document whose
+    // account was archived in between with no accounting gain.
+    const settleCodes = new Map(
+      (
+        b.all(
+          `SELECT ba.id, a.code FROM bank_accounts ba
+           JOIN accounts a ON a.id = ba.account_id AND a.company_id = @company_id
+           WHERE ba.company_id = @company_id`
+        ) as { id: number; code: string }[]
+      ).map((r) => [r.id, r.code])
+    );
+    const settleCodeFor = (row: StagedRow): string => {
+      const code = settleCodes.get(row.bank_account_id);
+      if (!code) {
+        throw new Error(
+          `row ${row.row_no}: bank/cash account ${row.bank_account_id} is not in this book`
+        );
+      }
+      return code;
+    };
+
     applyDraftRows(b, docId, rows);
 
     const staged = b.all(
@@ -291,7 +344,12 @@ export function postDocument(
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
       assertNotLocked(b, row.entry_date);
-      const legs = buildLegs(row, partyFor(row.party_id ?? doc.party_id), settings);
+      const legs = buildLegs(
+        row,
+        partyFor(row.party_id ?? doc.party_id),
+        settings,
+        settleCodeFor(row)
+      );
       assertBalanced(legs);
       const journalId = b.run(
         `INSERT INTO journals

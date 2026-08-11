@@ -142,6 +142,24 @@ export default async function SettingsPage() {
         </div>
       </div>
 
+      <div className="mt-4 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-[13.5px] font-semibold">Bank &amp; cash accounts</p>
+            <p className="mt-0.5 text-[12.5px] text-ink-3">
+              Every account, wallet and card money actually moves through —
+              vouchers and imports settle against one of these.
+            </p>
+          </div>
+          <Link
+            href="/settings/bank-accounts"
+            className="btn-quiet btn shrink-0"
+          >
+            Open
+          </Link>
+        </div>
+      </div>
+
       <p className="mt-4 max-w-2xl text-[12px] leading-relaxed text-ink-3">
         Country and currency are carried on every report; tax logic itself is a
         pluggable regime module. India GST is the only tax pack in v1.

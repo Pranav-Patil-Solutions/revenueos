@@ -1,4 +1,5 @@
 import { VoucherForm } from "@/components/voucher-form";
+import { listBankAccounts } from "@/lib/bank-accounts";
 import { getCompany } from "@/lib/companies";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { KEY_HINTS, type VoucherNavKind } from "@/lib/keymap";
@@ -58,6 +59,12 @@ export default async function VouchersPage({
   const accounts = book.all(
     "SELECT code, name FROM accounts WHERE company_id = @company_id ORDER BY code"
   ) as { code: string; name: string }[];
+  const bankAccounts = listBankAccounts(book).map((ba) => ({
+    id: ba.id,
+    name: ba.name,
+    kind: ba.kind,
+    account_code: ba.account_code,
+  }));
   const recent = book.all(
     `SELECT j.id, j.entry_date, j.entry_type, j.memo, j.ref_no,
             (SELECT SUM(debit_paise) FROM journal_lines
@@ -85,6 +92,7 @@ export default async function VouchersPage({
           kind={kind}
           parties={parties}
           accounts={accounts}
+          bankAccounts={bankAccounts}
           today={todayIso()}
           defaultGstRate={settings.default_gst_rate}
           postedId={postedId}

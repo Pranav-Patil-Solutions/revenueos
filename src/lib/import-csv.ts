@@ -1,7 +1,8 @@
 import type { Book } from "./book";
 import { rupeeStringToPaise } from "./format";
 import { GST_RATES } from "./tax/india-gst";
-import type { EntryType, SettleAccount } from "./types";
+import { defaultForHint } from "./bank-accounts";
+import type { EntryType, SettleHint } from "./types";
 
 /**
  * Excel-path import: the user fills the CSV template (exported from Excel /
@@ -42,7 +43,21 @@ export interface ImportParty {
   name: string;
 }
 
-/** One parsed template row, shaped for a staged_rows insert. */
+/**
+ * One parsed row, shaped for a staged_rows insert. Shared with the Tally
+ * importer so both land through the same shape.
+ *
+ * The two settlement fields are not redundant — they record how much the source
+ * actually knew (RVOS-006 P0a). Exactly one is set per path:
+ *
+ * - `settle_hint` (CSV, photo): the template asks for "cash" or "bank", because
+ *   a shopkeeper filling a spreadsheet should not have to know account ids, and
+ *   `parseTemplateCsv` is a pure function with no database to resolve against.
+ * - `bank_account_id` (Tally): the voucher NAMES the ledger it settled through,
+ *   so the importer resolves a real account and does not have to guess.
+ *
+ * Staging resolves whichever is present to a `bank_account_id`.
+ */
 export interface ImportRow {
   row_no: number;
   entry_date: string | null;
@@ -52,7 +67,8 @@ export interface ImportRow {
   credit_paise: number | null;
   entry_type: EntryType;
   gst_rate: number | null;
-  settle_account: SettleAccount;
+  settle_hint: SettleHint | null;
+  bank_account_id: number | null;
   party_id: number | null; // NULL = the document's default party
   confidence: number;
   include: boolean;
@@ -247,9 +263,9 @@ export function parseImportCsv(
       }
     }
 
-    let settle_account: SettleAccount = "cash";
+    let settle_hint: SettleHint = "cash";
     const settleRaw = cell(8).toLowerCase();
-    if (settleRaw === "bank") settle_account = "bank";
+    if (settleRaw === "bank") settle_hint = "bank";
     else if (settleRaw !== "" && settleRaw !== "cash") {
       problems.push(`settle_account must be cash or bank, not "${cell(8)}"`);
     }
@@ -264,7 +280,8 @@ export function parseImportCsv(
       credit_paise,
       entry_type,
       gst_rate,
-      settle_account,
+      settle_hint,
+      bank_account_id: null, // the CSV path never knows the account
       party_id,
       confidence: reason ? 0.2 : 1,
       include: reason === "",
@@ -307,13 +324,25 @@ export function stageExcelImport(book: Book, input: StageExcelImportInput): numb
       }
     ).lastInsertRowid as number;
 
+    // "cash"/"bank" from the template → a real account, resolved once per
+    // import rather than per row. Corrected per row in the review grid.
+    const hintCache = new Map<SettleHint, number>();
+    const bankAccountFor = (hint: SettleHint): number => {
+      let id = hintCache.get(hint);
+      if (id === undefined) {
+        id = defaultForHint(b, hint).id;
+        hintCache.set(hint, id);
+      }
+      return id;
+    };
+
     for (const r of input.rows) {
       b.run(
         `INSERT INTO staged_rows
            (company_id, document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, party_id)
+            entry_type, gst_rate, bank_account_id, confidence, is_balance_row, include, party_id)
          VALUES (@company_id, @document_id, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-                 @entry_type, @gst_rate, @settle_account, @confidence, 0, @include, @party_id)`,
+                 @entry_type, @gst_rate, @bank_account_id, @confidence, 0, @include, @party_id)`,
         {
           document_id: docId,
           row_no: r.row_no,
@@ -324,7 +353,7 @@ export function stageExcelImport(book: Book, input: StageExcelImportInput): numb
           credit_paise: r.credit_paise,
           entry_type: r.entry_type,
           gst_rate: r.gst_rate,
-          settle_account: r.settle_account,
+          bank_account_id: r.bank_account_id ?? bankAccountFor(r.settle_hint ?? "cash"),
           confidence: r.confidence,
           include: r.include ? 1 : 0,
           party_id: r.party_id,

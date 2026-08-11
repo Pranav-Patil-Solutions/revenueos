@@ -1,3 +1,4 @@
+import { resolveSettleCode } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
 import { assertBalanced, buildLegs, type Leg } from "./posting";
@@ -8,7 +9,6 @@ import type {
   JournalKind,
   PartyRow,
   SettingsRow,
-  SettleAccount,
   StagedRow,
 } from "./types";
 
@@ -36,16 +36,18 @@ export interface StructuredVoucherInput {
   party_id: number;
   amount_paise: number; // gross (ledger column) amount
   gst_rate: number | null;
-  settle_account: SettleAccount;
+  bank_account_id: number;
 }
 
+/** Contra moves money between two of the book's own accounts — since RVOS-006
+ * P0a that includes bank→bank transfers, not just cash↔bank. */
 export interface ContraVoucherInput {
   kind: "contra";
   entry_date: string;
   memo: string;
   ref_no: string;
-  from: SettleAccount;
-  to: SettleAccount;
+  from_bank_account_id: number;
+  to_bank_account_id: number;
   amount_paise: number;
 }
 
@@ -74,7 +76,6 @@ export type VoucherInput =
   | ContraVoucherInput
   | JournalVoucherInput;
 
-const SETTLE: Record<SettleAccount, string> = { cash: "1000", bank: "1100" };
 
 /** Soft books lock: entries on or before settings.books_locked_through are
  * refused (fix-forward still applies after the lock date). */
@@ -108,18 +109,18 @@ function legsFor(book: Book, input: VoucherInput): Leg[] {
   switch (input.kind) {
     case "contra": {
       assertAmount(input.amount_paise);
-      if (input.from === input.to) {
-        throw new Error("Contra needs two different accounts (cash ↔ bank).");
+      if (input.from_bank_account_id === input.to_bank_account_id) {
+        throw new Error("A contra needs two different accounts.");
       }
       return [
         {
-          accountCode: SETTLE[input.to],
+          accountCode: resolveSettleCode(book, input.to_bank_account_id),
           partyId: null,
           debitPaise: input.amount_paise,
           creditPaise: 0,
         },
         {
-          accountCode: SETTLE[input.from],
+          accountCode: resolveSettleCode(book, input.from_bank_account_id),
           partyId: null,
           debitPaise: 0,
           creditPaise: input.amount_paise,
@@ -185,21 +186,20 @@ function legsFor(book: Book, input: VoucherInput): Leg[] {
       const settings = getCompany(book.db, book.companyId) as CompanyRow;
       const row: Pick<
         StagedRow,
-        | "row_no"
-        | "entry_type"
-        | "debit_paise"
-        | "credit_paise"
-        | "gst_rate"
-        | "settle_account"
+        "row_no" | "entry_type" | "debit_paise" | "credit_paise" | "gst_rate"
       > = {
         row_no: 0,
         entry_type: input.kind,
         debit_paise: input.amount_paise,
         credit_paise: null,
         gst_rate: input.gst_rate,
-        settle_account: input.settle_account,
       };
-      return buildLegs(row, party, settings);
+      return buildLegs(
+        row,
+        party,
+        settings,
+        resolveSettleCode(book, input.bank_account_id)
+      );
     }
   }
 }
@@ -273,7 +273,8 @@ export interface TdsVoucherInput {
   base_paise: number;
   section: string;
   use_alt?: boolean;
-  settle_account: SettleAccount;
+  /** Which of the book's accounts the net payment leaves from. */
+  bank_account_id: number;
   /** For sections with no standard rate (salary), the office's own figure.
    * Ignored otherwise. */
   tds_paise_override?: number | null;
@@ -335,7 +336,7 @@ export function postVoucherWithTds(
         ? computation.bp
         : roundHalfUp((tdsPaise * 10_000) / input.base_paise);
 
-    const settleCode = SETTLE[input.settle_account];
+    const settleCode = resolveSettleCode(b, input.bank_account_id);
     const legs: Leg[] = [
       {
         accountCode: input.expense_account_code,

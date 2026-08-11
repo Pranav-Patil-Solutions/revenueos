@@ -47,8 +47,8 @@ test("demo fixture validates: 11 rows, balance row pre-excluded, paise conversio
     r.rows.filter((x) => x.include).length,
     10 // only the balance row is excluded by default
   );
-  assert.equal(r.rows[5].settle_account, "bank"); // NEFT receipt
-  assert.equal(r.rows[8].settle_account, "cash");
+  assert.equal(r.rows[5].settle_hint, "bank"); // NEFT receipt
+  assert.equal(r.rows[8].settle_hint, "cash");
   assert.equal(r.page.has_balance_column, true);
 });
 

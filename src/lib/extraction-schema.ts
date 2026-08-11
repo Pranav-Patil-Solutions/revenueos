@@ -1,4 +1,4 @@
-import type { EntryType, SettleAccount } from "./types";
+import type { EntryType, SettleHint } from "./types";
 import { GST_RATES } from "./tax/india-gst";
 import { toPaise } from "./format";
 
@@ -31,7 +31,10 @@ export interface ValidatedRow {
   credit_paise: number | null;
   entry_type: EntryType;
   gst_rate: number | null;
-  settle_account: SettleAccount;
+  /** Coarse cash-vs-bank hint, NOT an account — the model is never asked which
+   * of the office's accounts a line means, because it cannot know. Resolved to
+   * a real account at staging time (see bank-accounts.ts). */
+  settle_hint: SettleHint;
   confidence: number;
   is_balance_row: boolean;
   include: boolean;
@@ -86,7 +89,7 @@ function cleanDate(v: unknown): string | null {
  * Normalizations: rupees → integer paise; confidence clamped to 0–1; null or
  * malformed dates inherit from the previous row (ditto marks); balance rows
  * default to excluded; receipts/payments that read like bank movements
- * default settle_account to bank.
+ * default settle_hint to bank.
  */
 export function validateExtraction(parsed: unknown): ExtractionResult {
   if (typeof parsed !== "object" || parsed === null) {
@@ -150,14 +153,13 @@ export function validateExtraction(parsed: unknown): ExtractionResult {
     const particulars =
       typeof r.particulars === "string" ? r.particulars.trim() : "";
 
-    let settle_account: SettleAccount =
-      r.settle_account === "bank" ? "bank" : "cash";
+    let settle_hint: SettleHint = r.settle_hint === "bank" ? "bank" : "cash";
     if (
-      r.settle_account === undefined &&
+      r.settle_hint === undefined &&
       (entry_type === "receipt" || entry_type === "payment") &&
       BANK_HINT.test(particulars)
     ) {
-      settle_account = "bank";
+      settle_hint = "bank";
     }
 
     return {
@@ -169,7 +171,7 @@ export function validateExtraction(parsed: unknown): ExtractionResult {
       credit_paise,
       entry_type: entry_type as EntryType,
       gst_rate,
-      settle_account,
+      settle_hint,
       confidence,
       is_balance_row,
       include: !is_balance_row,

@@ -224,4 +224,165 @@ const dropSettings: Migration = {
   },
 };
 
-export const MIGRATIONS: Migration[] = [companies, sessionCompany, dropSettings];
+/**
+ * 004 — one "Bank" becomes many real accounts (RVOS-006 P0a).
+ *
+ * `staged_rows.settle_account` was `TEXT CHECK (settle_account IN
+ * ('cash','bank'))`, and `posting.ts` mapped those two values to exactly two
+ * ledger codes. An office with a current account, an OD account and a UPI
+ * wallet had nowhere to put them: every bank movement collapsed onto ledger
+ * 1100, which makes reconciliation against a real bank statement impossible
+ * and shows one figure on the balance sheet where there are three.
+ *
+ * So: a `bank_accounts` table, each row owning its OWN chart-of-accounts
+ * ledger, and `staged_rows` carries a `bank_account_id` instead of the enum.
+ *
+ * Note on the enum's lifecycle: `initSchema`'s frozen DDL still creates
+ * `settle_account` on a brand-new database, and this migration then rebuilds
+ * it away — the same shape migration 003 has with `settings`, which the DDL
+ * also still creates. Editing the DDL instead would leave a fresh database and
+ * an existing one with different column sets for this migration to reconcile,
+ * which is strictly worse than one redundant column for the length of one boot.
+ *
+ * The seeded Cash (1000) and Bank (1100) ledgers are REUSED rather than
+ * replaced, so every journal, report, export and backup taken before this
+ * migration still lines up afterwards.
+ */
+const bankAccounts: Migration = {
+  version: 4,
+  name: "bank_accounts: one 'Bank' becomes many real accounts",
+  up: (db: Database.Database) => {
+    db.exec(`
+      CREATE TABLE bank_accounts (
+        id         INTEGER PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id),
+        name       TEXT NOT NULL,
+        -- 'wallet' and 'card' exist because an office really holds them, but
+        -- they are never inferred from a document: nothing upstream can tell a
+        -- wallet movement from a bank one, so a human picks them or nothing
+        -- does (see bank-accounts.ts on the hint seam).
+        kind       TEXT NOT NULL CHECK (kind IN ('bank','cash','wallet','card')),
+        -- Its own ledger. Two accounts sharing one ledger could not be
+        -- reconciled separately, which is the entire point of this migration.
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        account_no TEXT NOT NULL DEFAULT '',
+        ifsc       TEXT NOT NULL DEFAULT '',
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0,1)),
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (company_id, account_id)
+      );
+      CREATE INDEX idx_bank_accounts_company ON bank_accounts(company_id);
+      -- At most one default per kind per book. A partial index, so archived and
+      -- non-default rows are unconstrained.
+      CREATE UNIQUE INDEX idx_bank_accounts_default
+        ON bank_accounts(company_id, kind) WHERE is_default = 1;
+    `);
+
+    // ── every existing book gets its Cash and Bank ledgers wrapped ──
+    const companyRows = db.prepare("SELECT id FROM companies ORDER BY id").all() as {
+      id: number;
+    }[];
+    const findAccount = db.prepare(
+      "SELECT id FROM accounts WHERE company_id = @companyId AND code = @code"
+    );
+    const insertAccount = db.prepare(
+      `INSERT INTO accounts (company_id, code, name, type, group_code)
+       VALUES (@companyId, @code, @name, 'asset', 'current_assets')`
+    );
+    const insertBankAccount = db.prepare(
+      `INSERT INTO bank_accounts
+         (company_id, name, kind, account_id, is_default, created_at)
+       VALUES (@companyId, @name, @kind, @accountId, 1, @now)`
+    );
+    const now = new Date().toISOString();
+
+    for (const { id: companyId } of companyRows) {
+      for (const seed of [
+        { code: "1000", name: "Cash", kind: "cash" },
+        { code: "1100", name: "Bank", kind: "bank" },
+      ]) {
+        // Created if absent rather than assumed: this migration must be total
+        // for every company in the file, and a book missing 1000/1100 would
+        // otherwise fail the NOT NULL backfill below with a far less obvious
+        // error than "your chart of accounts is incomplete".
+        let account = findAccount.get({ companyId, code: seed.code }) as
+          | { id: number }
+          | undefined;
+        if (!account) {
+          const inserted = insertAccount.run({
+            companyId,
+            code: seed.code,
+            name: seed.name,
+          });
+          account = { id: Number(inserted.lastInsertRowid) };
+        }
+        insertBankAccount.run({
+          companyId,
+          name: seed.name,
+          kind: seed.kind,
+          accountId: account.id,
+          now,
+        });
+      }
+    }
+
+    // ── staged_rows: the enum becomes a reference ──
+    // Rebuild-copy-drop-rename, the same procedure migration 001 used. The
+    // engine has foreign keys off for this and runs foreign_key_check before
+    // committing.
+    db.exec(`
+      CREATE TABLE staged_rows_new (
+        id                INTEGER PRIMARY KEY,
+        company_id        INTEGER NOT NULL DEFAULT 1 REFERENCES companies(id),
+        document_id       INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        row_no            INTEGER NOT NULL,
+        entry_date        TEXT,
+        particulars       TEXT NOT NULL DEFAULT '',
+        ref_no            TEXT NOT NULL DEFAULT '',
+        debit_paise       INTEGER,
+        credit_paise      INTEGER,
+        entry_type        TEXT NOT NULL CHECK (entry_type IN
+                          ('sale','receipt','purchase','payment','credit_note','debit_note','opening','other')),
+        gst_rate          INTEGER,
+        -- Was: settle_account TEXT CHECK (... IN ('cash','bank')).
+        bank_account_id   INTEGER NOT NULL REFERENCES bank_accounts(id),
+        confidence        REAL NOT NULL DEFAULT 0,
+        is_balance_row    INTEGER NOT NULL DEFAULT 0,
+        include           INTEGER NOT NULL DEFAULT 1,
+        posted_journal_id INTEGER,
+        party_id          INTEGER REFERENCES parties(id)
+      );
+
+      INSERT INTO staged_rows_new
+        (id, company_id, document_id, row_no, entry_date, particulars, ref_no,
+         debit_paise, credit_paise, entry_type, gst_rate, bank_account_id,
+         confidence, is_balance_row, include, posted_journal_id, party_id)
+      SELECT s.id, s.company_id, s.document_id, s.row_no, s.entry_date, s.particulars,
+             s.ref_no, s.debit_paise, s.credit_paise, s.entry_type, s.gst_rate,
+             -- The old enum's two values map to the book's default account of
+             -- that kind. NOT NULL is deliberate: a row that cannot be mapped
+             -- rolls the whole migration back rather than posting money
+             -- through an account nobody chose.
+             (SELECT ba.id FROM bank_accounts ba
+               WHERE ba.company_id = s.company_id
+                 AND ba.kind = CASE WHEN s.settle_account = 'bank' THEN 'bank' ELSE 'cash' END
+               ORDER BY ba.is_default DESC, ba.id LIMIT 1),
+             s.confidence, s.is_balance_row, s.include, s.posted_journal_id, s.party_id
+        FROM staged_rows s;
+
+      DROP TABLE staged_rows;
+      ALTER TABLE staged_rows_new RENAME TO staged_rows;
+      CREATE INDEX idx_staged_document ON staged_rows(document_id);
+      CREATE INDEX idx_staged_rows_company ON staged_rows(company_id);
+      CREATE INDEX idx_staged_rows_bank_account ON staged_rows(bank_account_id);
+    `);
+  },
+};
+
+export const MIGRATIONS: Migration[] = [
+  companies,
+  sessionCompany,
+  dropSettings,
+  bankAccounts,
+];

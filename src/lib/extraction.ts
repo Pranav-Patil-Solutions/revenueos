@@ -1,4 +1,5 @@
 import path from "node:path";
+import { defaultForHint } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
 import { claudeVision } from "./llm-cli";
@@ -8,7 +9,7 @@ import {
   type ExtractionResult,
 } from "./extraction-schema";
 import { todayIso } from "./format";
-import type { DocumentWithParty, SettingsRow } from "./types";
+import type { DocumentWithParty, SettingsRow, SettleHint } from "./types";
 
 export function extractModel(): string {
   return process.env.REVENUEOS_EXTRACT_MODEL ?? "claude-sonnet-5";
@@ -34,10 +35,10 @@ export const DEMO_FIXTURE = {
     { row_no: 3, entry_date: "2026-07-05", particulars: "By Cash", ref_no: null, debit: null, credit: 7000, entry_type: "receipt", gst_rate: null, confidence: 0.95, is_balance_row: false },
     { row_no: 4, entry_date: "2026-07-08", particulars: "To Sales — suit lengths #248", ref_no: "248", debit: 5600, credit: null, entry_type: "sale", gst_rate: 12, confidence: 0.9, is_balance_row: false },
     { row_no: 5, entry_date: "2026-07-10", particulars: "कपड़ा बिक्री / kapda bikri #252", ref_no: "252", debit: 2360, credit: null, entry_type: "sale", gst_rate: 18, confidence: 0.88, is_balance_row: false },
-    { row_no: 6, entry_date: "2026-07-12", particulars: "By Bank NEFT", ref_no: null, debit: null, credit: 4000, entry_type: "receipt", gst_rate: null, settle_account: "bank", confidence: 0.93, is_balance_row: false },
+    { row_no: 6, entry_date: "2026-07-12", particulars: "By Bank NEFT", ref_no: null, debit: null, credit: 4000, entry_type: "receipt", gst_rate: null, settle_hint: "bank", confidence: 0.93, is_balance_row: false },
     { row_no: 7, entry_date: "2026-07-13", particulars: "By Credit Note CN-07 (return)", ref_no: "CN-07", debit: null, credit: 1180, entry_type: "credit_note", gst_rate: 18, confidence: 0.85, is_balance_row: false },
     { row_no: 8, entry_date: "2026-07-14", particulars: "To Purchases — packing inv 88", ref_no: "88", debit: null, credit: 5900, entry_type: "purchase", gst_rate: 18, confidence: 0.9, is_balance_row: false },
-    { row_no: 9, entry_date: "2026-07-15", particulars: "By Cash paid", ref_no: null, debit: 2000, credit: null, entry_type: "payment", gst_rate: null, settle_account: "cash", confidence: 0.92, is_balance_row: false },
+    { row_no: 9, entry_date: "2026-07-15", particulars: "By Cash paid", ref_no: null, debit: 2000, credit: null, entry_type: "payment", gst_rate: null, settle_hint: "cash", confidence: 0.92, is_balance_row: false },
     { row_no: 10, entry_date: null, particulars: "—illegible—", ref_no: null, debit: null, credit: null, entry_type: "other", gst_rate: null, confidence: 0.3, is_balance_row: false },
     { row_no: 11, entry_date: "2026-07-15", particulars: "Balance c/d", ref_no: null, debit: null, credit: 12580, entry_type: "opening", gst_rate: null, confidence: 0.95, is_balance_row: true },
   ],
@@ -103,13 +104,25 @@ function persistExtraction(
     b.run("DELETE FROM staged_rows WHERE document_id = @docId AND company_id = @company_id", {
       docId,
     });
+    // The model gives a coarse cash-vs-bank hint; resolve each hint to a real
+    // account ONCE for the whole page rather than per row. The reviewer can
+    // change it per row in the grid, where the account list is visible.
+    const hintCache = new Map<SettleHint, number>();
+    const bankAccountFor = (hint: SettleHint): number => {
+      let id = hintCache.get(hint);
+      if (id === undefined) {
+        id = defaultForHint(b, hint).id;
+        hintCache.set(hint, id);
+      }
+      return id;
+    };
     for (const r of result.rows) {
       b.run(
         `INSERT INTO staged_rows
            (document_id, row_no, entry_date, particulars, ref_no, debit_paise, credit_paise,
-            entry_type, gst_rate, settle_account, confidence, is_balance_row, include, company_id)
+            entry_type, gst_rate, bank_account_id, confidence, is_balance_row, include, company_id)
          VALUES (@docId, @row_no, @entry_date, @particulars, @ref_no, @debit_paise, @credit_paise,
-                 @entry_type, @gst_rate, @settle_account, @confidence, @is_balance_row, @include, @company_id)`,
+                 @entry_type, @gst_rate, @bank_account_id, @confidence, @is_balance_row, @include, @company_id)`,
         {
           docId,
           row_no: r.row_no,
@@ -120,7 +133,7 @@ function persistExtraction(
           credit_paise: r.credit_paise,
           entry_type: r.entry_type,
           gst_rate: r.gst_rate,
-          settle_account: r.settle_account,
+          bank_account_id: bankAccountFor(r.settle_hint),
           confidence: r.confidence,
           is_balance_row: r.is_balance_row ? 1 : 0,
           include: r.include ? 1 : 0,

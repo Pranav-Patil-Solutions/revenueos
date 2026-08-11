@@ -15,7 +15,15 @@ export type EntryType =
   | "debit_note"
   | "opening"
   | "other";
-export type SettleAccount = "cash" | "bank";
+/**
+ * The coarse settlement hint an INGESTION path produces — a khata photo, the
+ * CSV template, a Tally voucher. It is not an account: nothing upstream can
+ * know which of an office's three bank accounts a line refers to, so the hint
+ * is resolved to the book's default account of that kind at staging time and
+ * corrected by a human in the review grid. See `bank-accounts.ts`. */
+export type SettleHint = "cash" | "bank";
+/** 'wallet' and 'card' are real but never inferred — a human picks them. */
+export type BankAccountKind = "bank" | "cash" | "wallet" | "card";
 export type SourceType = "photo" | "excel" | "tally";
 export type LedgerTargetKind = "account" | "party";
 export type EntityType = "proprietorship" | "partnership" | "company";
@@ -102,12 +110,27 @@ export interface StagedRow {
   credit_paise: number | null;
   entry_type: EntryType;
   gst_rate: number | null;
-  settle_account: SettleAccount;
+  /** Which cash/bank/wallet account this settles through — resolved from a
+   * `SettleHint` at staging time, overridable at review. */
+  bank_account_id: number;
   confidence: number; // 0–1
   is_balance_row: number; // 0 | 1
   include: number; // 0 | 1
   posted_journal_id: number | null;
   party_id: number | null; // NULL = the document's party (photo path)
+}
+
+/** One cash/bank/wallet/card account, each owning its own ledger. */
+export interface BankAccountRow {
+  id: number;
+  name: string;
+  kind: BankAccountKind;
+  account_id: number;
+  account_no: string;
+  ifsc: string;
+  is_default: number; // 0 | 1
+  archived_at: string | null;
+  created_at: string;
 }
 
 /** One edited review-grid row as sent by the client to save/post actions. */
@@ -120,7 +143,7 @@ export interface DraftRowInput {
   credit_paise: number | null;
   entry_type: EntryType;
   gst_rate: number | null;
-  settle_account: SettleAccount;
+  bank_account_id: number;
   include: boolean;
 }
 
