@@ -90,12 +90,22 @@ export interface TaxYearRates {
 /**
  * Rate tables, oldest first.
  *
- * 2026-27 is VERIFIED against fetched official texts (see its `source`).
- * 2025-26 is deliberately left unverified: it is a 1961-Act year assembled
- * from secondary sources, and no one has checked it against that Act's own
- * schedule — computations for it keep their caveat. Flip `verified` ONLY
- * after checking a year against the bare Act/Finance Act text, and put the
- * citation in `source` when you do.
+ * BOTH shipped years are verified against fetched official gazette texts —
+ * see each year's `source`, and `RATE_VERIFICATION` for the per-group
+ * citations that are the actual authority.
+ *
+ * 2025-26 was the later of the two to be checked (2026-07-21/22): it is a
+ * 1961-Act year, and it was originally assembled from secondary sources and
+ * deliberately shipped UNVERIFIED with a caveat on every computation. That is
+ * no longer its state — it was subsequently verified group-by-group against
+ * the bare Finance Act texts, with two independent adversarial passes
+ * instructed to refute rather than confirm. This paragraph is kept because the
+ * history matters: the gap was closed by reading gazette PDFs, after
+ * indiacode's consolidated 1961-Act text turned out to be frozen at ~2019 and
+ * would have shipped stale ceilings.
+ *
+ * Flip a year's `verified` to true ONLY after checking it against the bare
+ * Act/Finance Act text, and put the citation in `source` when you do.
  *
  * Model notes for 2026-27 (Income-tax Act 2025 + Finance Act 2026). NOTE:
  * "verified" is per GROUP — see RATE_VERIFICATION. The year-level `verified`

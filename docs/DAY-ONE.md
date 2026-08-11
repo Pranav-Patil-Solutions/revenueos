@@ -254,7 +254,14 @@ Unconfirmed figures show a banner on screen and carry the same warning into
 every export and the printed CA pack.
 
 - **FY 2026-27** is verified against the published Acts.
-- **FY 2025-26** is not yet verified and will keep its banner.
+- **FY 2025-26** is also verified now (checked 21–22 July 2026 against the
+  gazette texts, group by group). It no longer shows a banner. It used to, and
+  if you remember being told otherwise, that is why.
+
+Verification is recorded **per group of fields, per year** — not one flag for a
+whole year — so a computation only claims to be verified for the figures it
+actually read. If a future year is added without that work being done, its
+computations will show the banner again automatically.
 
 **Do not remove a banner to make a report look tidy.** A figure becomes
 verified only when someone has checked it against the Act or the official
