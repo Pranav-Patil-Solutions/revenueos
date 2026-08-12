@@ -125,6 +125,31 @@ it was the narrow version that hid "Add asset"/"Dispose" being offered to
 clerks. It reads the capability per action out of actions.ts, so a new
 privileged action is covered without touching the test.
 
+## DONE (extras, committed 4394759)
+
+- **`npm run reset-password`** — the lockout escape hatch DAY-ONE §1 documents.
+  `changePassword` had had no caller at all. Verified by RUNNING it against a
+  scratch copy through a pseudo-terminal (it refuses a piped password by
+  design): backup-then-write, NULL-actor audit row, old password refused and
+  new one accepted afterwards.
+- **layout.tsx sidebar boot script** — was `<Script beforeInteractive>`, whose
+  inline branch defers through `self.__next_s` until after the document is up,
+  so the no-flash snippet ran after the flash. Now a plain `<script>` from a
+  Server Component. Verified: `dataset.sidebar` is "rail" at DOMContentLoaded
+  and the sidebar measures 72px on every sampled frame, never 310.
+
+## NEXT UP: P0c — cost centres (migration 006)
+
+Nothing is broken; this is forward work. The shape, from the plan:
+- `cost_centres` table (company-scoped → add to `SCOPED_TABLES`), archive-only.
+- Nullable `journal_lines.cost_centre_id`, threaded through BOTH posting paths
+  (`postDocument` in posting.ts, `postManualVoucher`/`postVoucherWithTds` in
+  vouchers.ts) NOW, while there are only two — after payroll there will be five.
+- It is nullable on purpose: most lines have no cost centre, and P15's budgets
+  slice by it, so the dimension must exist before Stage 1 writes journals.
+- Same standing rules: SCOPED_TABLES + isolation test, capability on any new
+  action (`accounts.manage` fits), audit the mutations, ship gate, EVOLUTION.
+
 ## GOTCHA — read before touching the dev server again
 
 `DEMO_MODE=1` only fakes the LLM call. It does NOT change `DATA_DIR`
