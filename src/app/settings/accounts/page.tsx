@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createAccount, renameAccount } from "@/lib/actions";
 import { ACCOUNT_GROUPS, DEFAULT_GROUP_BY_TYPE } from "@/lib/coa";
 import type { AccountRow } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -11,7 +11,10 @@ const label = "mb-1.5 block text-[12.5px] font-medium text-ink-3";
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — every action here independently requires
+  // accounts.manage, so a crafted request is refused either way.
+  const canManage = userCan(user, "accounts.manage");
 
   const accounts = book.all<AccountRow>(
     "SELECT * FROM accounts WHERE company_id = @company_id ORDER BY code"
@@ -77,7 +80,7 @@ export default async function AccountsPage() {
                               required
                             />
                             <button
-                              type="submit"
+                              type="submit" disabled={!canManage}
                               className="rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3 hover:text-accent"
                             >
                               Save
@@ -125,7 +128,7 @@ export default async function AccountsPage() {
               </select>
             </div>
           </div>
-          <button type="submit" className="btn mt-4 w-full">
+          <button type="submit" disabled={!canManage} className="btn mt-4 w-full">
             Add account
           </button>
         </form>

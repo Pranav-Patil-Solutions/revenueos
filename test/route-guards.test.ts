@@ -214,3 +214,60 @@ test("no voucher leg hardcodes a settlement ledger", () => {
       `bank_account_id via resolveSettleCode, or a multi-account book cannot reconcile`
   );
 });
+
+/**
+ * A ratchet against ungated post controls — RVOS-006 P0b.
+ *
+ * The ACTIONS are always safe: each one requiring `entry.post` refuses a clerk
+ * regardless of what the UI rendered. This is about not lying to the user. A
+ * button that looks available and throws on click is a worse experience than no
+ * button, and P0b shipped three of them (depreciation, TDS voucher, TDS
+ * challan) before this test existed.
+ *
+ * So: any page importing a posting action must also import `userCan`, which is
+ * the only way to decide whether to offer the control. Deliberately a coarse
+ * check — it proves the page CONSULTED the capability, not that it branched
+ * correctly, which is what the browser pass is for.
+ */
+test("every page offering a privileged action also consults userCan", () => {
+  const actionsSrc = readFileSync(
+    path.join(process.cwd(), "src", "lib", "actions.ts"),
+    "utf8"
+  );
+  /**
+   * Every action whose capability a CLERK does not hold — read from the source
+   * of truth rather than hardcoded, so a new one is covered automatically.
+   *
+   * Originally this only checked `entry.post`, and that narrowness hid a whole
+   * second class of the same bug: a clerk was still shown "Add asset" and
+   * "Dispose" on the depreciation page, which need `accounts.manage`. Found by
+   * looking at a screenshot of the page as a clerk, not by reading the code.
+   */
+  const privileged = ["entry.post", "accounts.manage", "company.manage", "users.manage"];
+  const postingActions = [
+    ...actionsSrc.matchAll(
+      /export async function (\w+)[\s\S]{0,600}?await requireBook\("([a-z._]+)"\)/g
+    ),
+  ]
+    .filter((m) => privileged.includes(m[2]))
+    .map((m) => m[1]);
+  assert.ok(
+    postingActions.length >= 10,
+    `expected many privileged actions, found ${postingActions.length}`
+  );
+
+  const offenders: string[] = [];
+  for (const file of pages) {
+    const src = readFileSync(file, "utf8");
+    const offersPosting = postingActions.some((a) =>
+      new RegExp(`\\b${a}\\b`).test(src)
+    );
+    if (offersPosting && !src.includes("userCan")) offenders.push(rel(file));
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these pages offer a posting action without consulting userCan, so a clerk ` +
+      `sees a button that will throw: ${offenders.join(", ")}`
+  );
+});

@@ -12,7 +12,7 @@ import {
   postedDepreciation,
 } from "@/lib/tax/depreciation";
 import type { FixedAssetRow } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +41,12 @@ export default async function DepreciationPage({
 }: {
   searchParams: Promise<{ fy?: string; posted?: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — every action here independently requires
+  // accounts.manage, so a crafted request is refused either way.
+  const canManage = userCan(user, "accounts.manage");
+  // Presentation only — the actions independently require entry.post.
+  const canPost = userCan(user, "entry.post");
 
   const sp = await searchParams;
   const assets = book.all(
@@ -70,7 +75,7 @@ export default async function DepreciationPage({
         <form method="get" className="flex items-center gap-2">
           <FySelect fys={fys} value={fy} />
           <button
-            type="submit"
+            type="submit" disabled={!canManage}
             className="rounded-lg border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] font-medium text-ink-2 hover:text-ink"
           >
             Apply
@@ -190,17 +195,25 @@ export default async function DepreciationPage({
               </>
             )}
           </p>
-          {!posted && schedule.total_depreciation_paise > 0 && (
-            <form action={postDepreciationEntry}>
-              <input type="hidden" name="fy" value={fy} />
-              <button
-                type="submit"
-                className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
-              >
-                Post {inr(schedule.total_depreciation_paise)} for {fyLabel(fy)}
-              </button>
-            </form>
-          )}
+          {!posted &&
+            schedule.total_depreciation_paise > 0 &&
+            (canPost ? (
+              <form action={postDepreciationEntry}>
+                <input type="hidden" name="fy" value={fy} />
+                <button
+                  type="submit" disabled={!canManage}
+                  className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+                >
+                  Post {inr(schedule.total_depreciation_paise)} for {fyLabel(fy)}
+                </button>
+              </form>
+            ) : (
+              // The schedule itself stays fully visible — a clerk reading it is
+              // useful. Only the act of writing it to the books is withheld.
+              <p className="text-[12px] text-ink-3">
+                An accountant posts this entry.
+              </p>
+            ))}
         </div>
       </section>
 
@@ -274,7 +287,7 @@ export default async function DepreciationPage({
                             className="w-28 rounded-md border border-hairline bg-surface-2 px-2 py-1 text-[12px] text-ink outline-none focus:border-accent"
                           />
                           <button
-                            type="submit"
+                            type="submit" disabled={!canManage}
                             className="rounded-md border border-hairline px-2 py-1 text-[12px] font-medium text-ink-2 hover:text-accent"
                           >
                             Dispose
@@ -331,7 +344,7 @@ export default async function DepreciationPage({
           </div>
           <div className="lg:col-span-6">
             <button
-              type="submit"
+              type="submit" disabled={!canManage}
               className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
             >
               Add asset

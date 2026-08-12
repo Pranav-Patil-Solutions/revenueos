@@ -6,7 +6,7 @@ import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { buildComputation } from "@/lib/tax/computation";
 import type { ItAdjustmentRow } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,10 @@ export default async function ComputationPage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — every action here independently requires
+  // accounts.manage, so a crafted request is refused either way.
+  const canManage = userCan(user, "accounts.manage");
 
   const sp = await searchParams;
   const books = fyList(book);
@@ -53,7 +56,7 @@ export default async function ComputationPage({
         <form method="get" className="flex items-center gap-2">
           <FySelect fys={fys} value={fy} />
           <button
-            type="submit"
+            type="submit" disabled={!canManage}
             className="rounded-lg border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] font-medium text-ink-2 hover:text-ink"
           >
             Apply
@@ -207,7 +210,7 @@ export default async function ComputationPage({
                   <input type="hidden" name="id" value={a.id} />
                   <input type="hidden" name="fy" value={fy} />
                   <button
-                    type="submit"
+                    type="submit" disabled={!canManage}
                     className="text-[12px] font-medium text-ink-3 hover:text-critical"
                   >
                     Remove
@@ -251,7 +254,7 @@ export default async function ComputationPage({
           </div>
           <div className="lg:col-span-5">
             <button
-              type="submit"
+              type="submit" disabled={!canManage}
               className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
             >
               Add adjustment
@@ -319,7 +322,7 @@ export default async function ComputationPage({
             </div>
             <div className="sm:col-span-2">
               <button
-                type="submit"
+                type="submit" disabled={!canManage}
                 className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
               >
                 Record payment

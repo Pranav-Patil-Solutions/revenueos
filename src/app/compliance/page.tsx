@@ -8,7 +8,7 @@ import {
   type ComplianceItem,
   type ComplianceStatus,
 } from "@/lib/compliance";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,17 @@ function StatusPill({ status }: { status: ComplianceStatus }) {
 const markBtn =
   "rounded-md border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] font-medium text-ink-2 hover:text-ink";
 
-function MarkForm({ item, fy }: { item: ComplianceItem; fy: string }) {
+function MarkForm({
+  item,
+  fy,
+  canManage,
+}: {
+  item: ComplianceItem;
+  fy: string;
+  /** Marking an item off is an accounts.manage action, so a clerk sees the
+   * board but cannot sign items off. */
+  canManage: boolean;
+}) {
   const marked = item.status === "done" || item.status === "na";
   return (
     <form action={markCompliance} className="flex items-center justify-end gap-1.5">
@@ -40,7 +50,7 @@ function MarkForm({ item, fy }: { item: ComplianceItem; fy: string }) {
       <input type="hidden" name="rule_code" value={item.rule_code} />
       <input type="hidden" name="period" value={item.period} />
       {marked ? (
-        <button type="submit" name="status" value="clear" className={markBtn}>
+        <button type="submit" disabled={!canManage} name="status" value="clear" className={markBtn}>
           Clear
         </button>
       ) : (
@@ -51,10 +61,10 @@ function MarkForm({ item, fy }: { item: ComplianceItem; fy: string }) {
             aria-label={`Note for ${item.label} ${item.period_label}`}
             className="w-24 rounded-md border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] text-ink outline-none focus:border-accent"
           />
-          <button type="submit" name="status" value="done" className={markBtn}>
+          <button type="submit" disabled={!canManage} name="status" value="done" className={markBtn}>
             Done
           </button>
-          <button type="submit" name="status" value="na" className={markBtn}>
+          <button type="submit" disabled={!canManage} name="status" value="na" className={markBtn}>
             N/A
           </button>
         </>
@@ -68,7 +78,10 @@ export default async function CompliancePage({
 }: {
   searchParams: Promise<{ fy?: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — every action here independently requires
+  // accounts.manage, so a crafted request is refused either way.
+  const canManage = userCan(user, "accounts.manage");
 
   const sp = await searchParams;
   const books = fyList(book);
@@ -106,7 +119,7 @@ export default async function CompliancePage({
         <form method="get" className="flex items-center gap-2">
           <FySelect fys={fys} value={fy} />
           <button
-            type="submit"
+            type="submit" disabled={!canManage}
             className="rounded-lg border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] font-medium text-ink-2 hover:text-ink"
           >
             Apply
@@ -179,7 +192,7 @@ export default async function CompliancePage({
                       <StatusPill status={item.status} />
                     </td>
                     <td className="w-56 px-5 py-2.5">
-                      <MarkForm item={item} fy={fy} />
+                      <MarkForm item={item} fy={fy} canManage={canManage} />
                     </td>
                   </tr>
                 ))}

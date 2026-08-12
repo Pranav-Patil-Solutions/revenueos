@@ -7,7 +7,7 @@ import {
 } from "@/lib/actions";
 import { listBankAccounts } from "@/lib/bank-accounts";
 import type { BankAccountKind } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -23,7 +23,10 @@ const KIND_LABEL: Record<BankAccountKind, string> = {
 export const dynamic = "force-dynamic";
 
 export default async function BankAccountsPage() {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — every action here independently requires
+  // accounts.manage, so a crafted request is refused either way.
+  const canManage = userCan(user, "accounts.manage");
   const accounts = listBankAccounts(book, { includeArchived: true });
 
   return (
@@ -85,7 +88,7 @@ export default async function BankAccountsPage() {
                       />
                       {!a.archived_at && (
                         <button
-                          type="submit"
+                          type="submit" disabled={!canManage}
                           className="shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-3 hover:text-accent"
                         >
                           Save
@@ -105,7 +108,7 @@ export default async function BankAccountsPage() {
                         <form action={setDefaultBankAccountAction}>
                           <input type="hidden" name="id" value={a.id} />
                           <button
-                            type="submit"
+                            type="submit" disabled={!canManage}
                             className="text-[11px] font-medium text-ink-3 hover:text-accent"
                           >
                             Make default
@@ -121,7 +124,7 @@ export default async function BankAccountsPage() {
                       <form action={archiveBankAccountAction}>
                         <input type="hidden" name="id" value={a.id} />
                         <button
-                          type="submit"
+                          type="submit" disabled={!canManage}
                           className="text-[11px] font-medium text-ink-3 hover:text-danger"
                         >
                           Archive
@@ -175,7 +178,7 @@ export default async function BankAccountsPage() {
               Make this the default of its kind
             </label>
           </div>
-          <button type="submit" className="btn mt-4 w-full">
+          <button type="submit" disabled={!canManage} className="btn mt-4 w-full">
             Add account
           </button>
         </form>

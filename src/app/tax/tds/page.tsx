@@ -6,7 +6,7 @@ import { formatDate, inr, todayIso } from "@/lib/format";
 import { currentFy, fyLabel, fyList } from "@/lib/fy";
 import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds";
 import type { PartyRow, TdsChallanRow } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 import { listBankAccounts } from "@/lib/bank-accounts";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,9 @@ export default async function TdsPage({
 }: {
   searchParams: Promise<{ fy?: string; q?: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
+  // Presentation only — the actions independently require entry.post.
+  const canPost = userCan(user, "entry.post");
 
   const sp = await searchParams;
   const books = fyList(book);
@@ -191,10 +193,16 @@ export default async function TdsPage({
           <div className="lg:col-span-2 lg:text-right">
             <button
               type="submit"
-              className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+              disabled={!canPost}
+              className="rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               Post payment with TDS
             </button>
+            {!canPost && (
+              <p className="mt-1.5 text-[11.5px] text-ink-3">
+                Your role cannot post to the books — an accountant does this.
+              </p>
+            )}
           </div>
         </form>
       </section>
@@ -354,7 +362,8 @@ export default async function TdsPage({
           <div className="self-end">
             <button
               type="submit"
-              className="w-full rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
+              disabled={!canPost}
+              className="w-full rounded-lg bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               Deposit undeposited TDS
             </button>

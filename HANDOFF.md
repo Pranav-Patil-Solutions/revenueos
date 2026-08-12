@@ -113,10 +113,17 @@ tsc/eslint/smoke/build green. Full reasoning in EVOLUTION #39.
   reason shown. Browser-verified with a valid amount filled, so the check is
   role and not form validity: owner enabled, clerk still blocked.
 
-**STILL OPEN from P0b (small):**
-- `/tax/depreciation` and the TDS voucher form are not yet role-gated — the
-  actions refuse correctly, but the buttons still look available to a clerk.
-  Same one-line `userCan(user, "entry.post")` prop as the other two.
+**Role-gating COMPLETE (fourth commit).** 415/415 pass.
+Every privileged control across the app is now gated, verified per role in a
+browser: on /compliance, /settings/accounts, /settings/bank-accounts,
+/tax/computation and /tax/depreciation an owner has every submit enabled and a
+clerk has exactly ONE — "Sign out", which must stay enabled for everyone.
+
+The ratchet in route-guards.test.ts now covers ALL privileged capabilities
+(entry.post, accounts.manage, company.manage, users.manage), not just posting —
+it was the narrow version that hid "Add asset"/"Dispose" being offered to
+clerks. It reads the capability per action out of actions.ts, so a new
+privileged action is covered without touching the test.
 
 ## GOTCHA — read before touching the dev server again
 

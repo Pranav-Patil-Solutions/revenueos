@@ -1346,3 +1346,39 @@ case-insensitive path, which works because the column is `COLLATE NOCASE`.
 
 Verified: 413 tests, tsc/eslint/smoke/build green, plus a two-login browser
 pass (owner and clerk) proving enforcement from both sides.
+
+## 41. Role-gating: the narrow ratchet hid the second half of its own bug class
+
+**What happened:** Closed the last P0b item — gating `/tax/depreciation` and the
+TDS forms — then wrote a ratchet asserting that any page offering an
+`entry.post` action must consult `userCan`. It passed. The work looked done.
+
+Then I looked at a screenshot of the depreciation page **as a clerk** and saw
+"Add asset" and "Dispose" sitting there, fully enabled. Those need
+`accounts.manage`, not `entry.post`, so the ratchet I had just written was
+structurally incapable of seeing them: I had encoded the specific instance of
+the bug I was fixing rather than the class it belonged to.
+
+Generalising it to every privileged capability (`entry.post`,
+`accounts.manage`, `company.manage`, `users.manage`) immediately named four
+more pages: `/compliance`, `/settings/accounts`, `/settings/bank-accounts`,
+`/tax/computation`. All were fixed the same way, and the test now derives each
+action's capability from `actions.ts` so a new privileged action is covered
+without the test being edited.
+
+**Delta (rule):** when a defect is found, write the ratchet for the CLASS, not
+the instance — then re-read its output as a list of things it *cannot* see. A
+test that passes immediately after being written against a bug you just fixed
+has told you almost nothing; the useful question is which sibling cases fall
+outside its predicate. Here the honest generalisation was one word ("posting" →
+"privileged") and it found 4× more than the original.
+
+**On verification:** the per-role browser sweep counts ENABLED submit buttons
+per page rather than asserting on specific selectors. That caught the real
+signal — owner all-enabled, clerk exactly one — and the remaining one turned out
+to be "Sign out", which must never be gated. A selector-by-selector check would
+have missed both the extra buttons and the fact that one *should* stay live.
+An earlier version of this same check was also nearly useless: it reported the
+owner's Post button as disabled too, because the form was empty, so it could
+not distinguish "blocked by role" from "blocked by validation". Filling a valid
+amount first is what made it discriminating.
