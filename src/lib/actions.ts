@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { writeAudit } from "./audit";
+import { resolveSettleCode } from "./bank-accounts";
 import { setSessionCompany } from "./auth";
 import type { Book } from "./book";
 import { groupFor } from "./coa";
@@ -876,6 +877,11 @@ export async function createTdsChallan(formData: FormData): Promise<void> {
   }
   const challan_no = String(formData.get("challan_no") ?? "").trim();
   const bsr_code = String(formData.get("bsr_code") ?? "").trim();
+  // Which account the deposit actually left. This used to be hardcoded to
+  // ledger 1100 ("Bank"), which quietly survived RVOS-006 P0a: a book with a
+  // current account AND an OD account showed every TDS deposit leaving the
+  // first one, so the bank reconciliation P0a exists to enable would not tie.
+  const bankAccountId = formBankAccountId(formData, "bank_account_id");
 
   const q = QUARTER_RANGES[quarter as 1 | 2 | 3 | 4](fy);
   book.tx((b) => {
@@ -901,7 +907,12 @@ export async function createTdsChallan(formData: FormData): Promise<void> {
       ref_no: challan_no,
       legs: [
         { account_code: "2300", party_id: null, debit_paise: amount, credit_paise: 0 },
-        { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: amount },
+        {
+          account_code: resolveSettleCode(b, bankAccountId),
+          party_id: null,
+          debit_paise: 0,
+          credit_paise: amount,
+        },
       ],
     });
     const challanId = b.run(
@@ -916,6 +927,23 @@ export async function createTdsChallan(formData: FormData): Promise<void> {
         { challanId, id: e.id }
       );
     }
+    // The journal itself is logged by postManualVoucher; this row records the
+    // DEPOSIT as the office understands it — which return, which quarter, how
+    // many deductions it cleared — which is what someone reconciling a return
+    // against the books is actually looking for.
+    writeAudit(
+      b,
+      {
+        action: "tds.challan",
+        entity: "tds_challan",
+        entity_id: challanId,
+        summary:
+          `Deposited TDS for ${form} Q${quarter} ${fyLabel(fy)} — ` +
+          `${pending.length} deduction${pending.length === 1 ? "" : "s"}`,
+        after: { form, quarter, fy, amount_paise: amount, challan_no, journalId },
+      },
+      new Date().toISOString()
+    );
   });
   revalidatePath("/tax/tds");
   revalidatePath("/reports");

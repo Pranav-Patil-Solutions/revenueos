@@ -101,13 +101,22 @@ tsc/eslint/smoke/build green. Full reasoning in EVOLUTION #39.
   refusal panel on direct navigation with NO staff data in the DOM, and can
   still read the audit trail.
 
-**STILL OPEN from P0b:**
-- TDS challan (`createTdsChallan`) posts a journal but writes no audit row —
-  the one remaining unlogged mutation. One `writeAudit` inside its transaction.
-- Role-aware hiding is done for the Staff card only. Post buttons (Vouchers,
-  the review grid's Post, depreciation) still render for a `clerk` and will
-  throw a readable error on click rather than being hidden. `userCan()` is
-  there for it.
+**P0b leftovers — DONE (third commit).** 414/414 pass.
+- `createTdsChallan` now writes a `tds.challan` audit row, AND had a real P0a
+  hole fixed: its bank leg was a hardcoded `account_code: "1100"`, so every TDS
+  deposit appeared to leave the first bank account whichever one it came from.
+  It now takes a "Paid from" account. New ratchet in route-guards.test.ts fails
+  if any leg in actions.ts names ledger 1000/1100 inline again.
+- Post controls are role-gated: the review grid keeps "Save draft" for a clerk
+  (staging is their job, and reversible) and replaces "Save & post" with "An
+  accountant posts this to the books"; the voucher form disables Post with the
+  reason shown. Browser-verified with a valid amount filled, so the check is
+  role and not form validity: owner enabled, clerk still blocked.
+
+**STILL OPEN from P0b (small):**
+- `/tax/depreciation` and the TDS voucher form are not yet role-gated — the
+  actions refuse correctly, but the buttons still look available to a clerk.
+  Same one-line `userCan(user, "entry.post")` prop as the other two.
 
 ## GOTCHA — read before touching the dev server again
 

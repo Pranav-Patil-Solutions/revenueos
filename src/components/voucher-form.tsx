@@ -66,6 +66,7 @@ export function VoucherForm({
   kind,
   parties: initialParties,
   accounts,
+  canPost,
   bankAccounts,
   today,
   defaultGstRate,
@@ -74,6 +75,14 @@ export function VoucherForm({
   kind: VoucherNavKind;
   parties: PartyOption[];
   accounts: AccountOption[];
+  /**
+   * Whether this user may post (RVOS-006 P0b). Every voucher on this screen
+   * writes an immutable journal, so unlike the review grid there is no
+   * reversible half to leave enabled — a clerk gets an explanation instead of a
+   * form. Presentation only: `createVoucher` independently requires
+   * `entry.post`.
+   */
+  canPost: boolean;
   /** The book's active cash/bank/wallet accounts (RVOS-006 P0a). A contra can
    * now move money bank→bank, not just cash↔bank, so both ends of a contra and
    * every settlement pick from this list. */
@@ -468,13 +477,17 @@ export function VoucherForm({
         <div className="mt-5 flex items-center gap-3">
           <button
             type="submit"
-            disabled={kind === "journal" ? !balanced : amountPaise === null}
+            disabled={
+              !canPost || (kind === "journal" ? !balanced : amountPaise === null)
+            }
             className="rounded-lg bg-accent px-4 py-2 text-[12.5px] font-semibold text-white transition hover:brightness-110 active:scale-[.98] disabled:opacity-40"
           >
             Post voucher <span className="ml-1 text-white/70">⌃A</span>
           </button>
           <span className="text-[12px] text-ink-3">
-            Posts one immutable journal — corrections are fix-forward.
+            {canPost
+              ? "Posts one immutable journal — corrections are fix-forward."
+              : "Your role cannot post to the books — an accountant does this."}
           </span>
         </div>
       </form>

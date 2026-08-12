@@ -69,6 +69,7 @@ export function ReviewTable({
   docId,
   rows,
   readOnly,
+  canPost,
   bankAccounts,
   partyNames,
   defaultPartyName,
@@ -76,6 +77,14 @@ export function ReviewTable({
   docId: number;
   rows: StagedRow[];
   readOnly: boolean;
+  /**
+   * Whether this user may POST (RVOS-006 P0b). A clerk keeps "Save draft" —
+   * staging is their whole job and it is reversible — and loses "Save & post",
+   * which writes immutable journals. Hiding it is presentation only; the
+   * `saveAndPost` action independently requires `entry.post`, so a crafted
+   * request is refused regardless of what the UI showed.
+   */
+  canPost: boolean;
   /** The book's active cash/bank/wallet accounts, for the settlement column.
    * Ingestion resolved a coarse cash-vs-bank hint to a default; this is where a
    * human corrects it to the account the money actually moved through. */
@@ -447,14 +456,23 @@ export function ReviewTable({
             >
               {pending ? "Working…" : "Save draft"}
             </button>
-            <button
-              type="button"
-              onClick={onPost}
-              disabled={pending}
-              className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              Save &amp; post
-            </button>
+            {canPost ? (
+              <button
+                type="button"
+                onClick={onPost}
+                disabled={pending}
+                className="rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                Save &amp; post
+              </button>
+            ) : (
+              // Say WHY rather than just omitting the button: a reviewer who
+              // has finished a document needs to know it is now someone else's
+              // move, not wonder where the control went.
+              <span className="self-center text-[12px] text-ink-3">
+                An accountant posts this to the books.
+              </span>
+            )}
           </div>
         </div>
       )}

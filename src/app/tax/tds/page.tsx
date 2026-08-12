@@ -334,6 +334,23 @@ export default async function TdsPage({
             </label>
             <input id="ch-bsr" name="bsr_code" className={field} />
           </div>
+          <div>
+            <label className="mb-1.5 block text-[12px] font-medium text-ink-3" htmlFor="ch-from">
+              Paid from
+            </label>
+            <select
+              id="ch-from"
+              name="bank_account_id"
+              className={field}
+              defaultValue={defaultPayFrom}
+            >
+              {bankAccounts.map((ba) => (
+                <option key={ba.id} value={ba.id}>
+                  {ba.account_code} {ba.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="self-end">
             <button
               type="submit"

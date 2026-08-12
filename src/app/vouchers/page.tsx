@@ -4,7 +4,7 @@ import { getCompany } from "@/lib/companies";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { KEY_HINTS, type VoucherNavKind } from "@/lib/keymap";
 import type { CompanyRow, JournalKind } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +44,7 @@ export default async function VouchersPage({
 }: {
   searchParams: Promise<{ kind?: string; posted?: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
 
   const sp = await searchParams;
   const kind: VoucherNavKind = KINDS.includes(sp.kind as VoucherNavKind)
@@ -92,6 +92,7 @@ export default async function VouchersPage({
           kind={kind}
           parties={parties}
           accounts={accounts}
+          canPost={userCan(user, "entry.post")}
           bankAccounts={bankAccounts}
           today={todayIso()}
           defaultGstRate={settings.default_gst_rate}

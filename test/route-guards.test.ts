@@ -189,3 +189,28 @@ test("no server action falls back to the read-only capability default", () => {
       `must name what it needs, or a viewer is authorized to perform it`
   );
 });
+
+/**
+ * A ratchet against the defect found in RVOS-006 P0b's cleanup.
+ *
+ * `createTdsChallan` built its bank leg with a literal `account_code: "1100"`,
+ * which survived P0a's sweep because P0a replaced the `settle_account` ENUM and
+ * this code never used the enum — it named the ledger directly. The result was
+ * a book where every TDS deposit appeared to leave the first bank account no
+ * matter which one it came from, defeating the reconciliation P0a exists to
+ * make possible.
+ *
+ * A settlement leg must resolve its ledger from a `bank_account_id`, never name
+ * 1000/1100 inline. Seeding and chart-of-accounts metadata legitimately mention
+ * those codes, so this is scoped to leg construction specifically.
+ */
+test("no voucher leg hardcodes a settlement ledger", () => {
+  const src = readFileSync(path.join(process.cwd(), "src", "lib", "actions.ts"), "utf8");
+  const offenders = [...src.matchAll(/account_code:\s*"(1000|1100)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    offenders,
+    [],
+    `a leg names ledger ${offenders.join(", ")} directly — resolve it from a ` +
+      `bank_account_id via resolveSettleCode, or a multi-account book cannot reconcile`
+  );
+});

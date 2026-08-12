@@ -8,7 +8,7 @@ import { ReviewTable } from "@/components/review-table";
 import { StatusBadge } from "@/components/status-badge";
 import { formatTimestamp } from "@/lib/format";
 import type { DocumentWithParty, StagedRow } from "@/lib/types";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export default async function DocumentReviewPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
 
   const { id } = await params;
   const doc = book.get(
@@ -191,6 +191,7 @@ export default async function DocumentReviewPage({
               docId={doc.id}
               rows={rows}
               readOnly={doc.status === "posted"}
+              canPost={userCan(user, "entry.post")}
               bankAccounts={bankAccounts}
               partyNames={partyNames}
               defaultPartyName={isPhoto ? undefined : doc.party_name}
