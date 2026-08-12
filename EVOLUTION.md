@@ -1382,3 +1382,119 @@ An earlier version of this same check was also nearly useless: it reported the
 owner's Post button as disabled too, because the form was empty, so it could
 not distinguish "blocked by role" from "blocked by validation". Filling a valid
 amount first is what made it discriminating.
+
+---
+
+## 42. Password reset: a capability the app defined, tested, and then never wired to anything
+
+Asked for a way back in after a forgotten password, I found `changePassword`
+in `src/lib/auth.ts` — correct, transactional, session-revoking, and covered by
+two tests in `test/auth.test.ts`. It had no caller anywhere in `src/` or
+`scripts/`. The office's own `docs/DAY-ONE.md` told them, accurately, that a
+forgotten password had no route back.
+
+So the gap was not a missing function and not missing tests. Both existed and
+both passed. The gap was that nothing a user could reach ever called it — and
+no test could have failed, because a test that calls the function directly
+proves the function, not its reachability.
+
+**Delta (rule):** an exported capability with tests but zero production callers
+is not "done, pending UI" — it is a feature the product does not have, and the
+green test suite actively disguises that. When auditing what the app can do,
+grep for callers, not for definitions. `grep -rn "changePassword" src/ scripts/`
+returning only the definition line is the whole finding.
+
+**Second delta (script guard rail):** the first version of
+`scripts/reset-password.ts` read the new password with a muted readline that
+resolved only on an answer. On EOF or Ctrl-C, readline emits `close` with no
+answer, the promise never settled, node ran out of work and exited **0**,
+having printed a prompt and changed nothing. A cancelled reset was byte-for-byte
+indistinguishable from a successful one at the exit code — the same failure
+shape as the WAL incident (#23): a check whose pass state looks like its fail
+state. Rejecting on `close`-without-answer is the fix. Found by rehearsing the
+script against a copy of the real db rather than by reading it.
+
+**On verification:** rehearsed end-to-end against a `sqlite3 .backup` copy of
+the live book, driven through a real pty with `expect` — a piped stdin cannot
+exercise a TTY-only prompt, and the script refuses one on purpose. Checked, on
+the copy: the new password verifies, the old one does not, `failed_attempts` is
+0, the lock is cleared, sessions are 0, one audit row exists per company with a
+NULL actor, and the pre-change hash is preserved in the backup it took. Then
+checked that all four failure paths (EOF, mismatch, weak password, wrong
+username) left the hash, the audit count and the backup count untouched. The
+real `data/revenueos.db` was never opened for writing.
+
+---
+
+## 43. `next/script beforeInteractive` for a before-first-paint inline script — the one thing it does not do
+
+The sidebar-restore snippet in `src/app/layout.tsx` was a `<Script
+strategy="beforeInteractive">`. React 19 flagged it: "Scripts inside React
+components are never executed when rendering on the client."
+
+The warning is the smaller half. Reading `node_modules/next/dist/client/script.js`
+(next/script is `'use client'`) shows the inline `beforeInteractive` branch does
+not emit a script the browser runs while parsing — it emits a script that pushes
+the source onto `self.__next_s`, a queue Next's runtime drains after the document
+is up. So the snippet whose entire job was "before first paint" ran after it:
+the sidebar painted at 310px and snapped to 72px, exactly the flash the code was
+written to prevent. It had presumably been doing that since it was written.
+
+**Delta (rule):** for anything that must run before first paint, render a plain
+`<script>` from a Server Component. `next/script` is a loader for third-party
+scripts and its strategies describe *loading order relative to hydration*, not
+*execution relative to paint* — "beforeInteractive" names hydration, not paint,
+and the two are not the same instant.
+
+**Second delta (method):** the docs page for `<Script>` does not say this. It
+documents inline scripts and it documents `beforeInteractive`, separately, and
+their intersection is only visible in the component source. When a framework
+API's behaviour is load-bearing, read the implementation — AGENTS.md already
+says to read `node_modules/next/dist/docs/` for this Next version; the addition
+is that the docs are the floor, not the ceiling.
+
+**Verified in the browser afterwards** (isolated scratch instance, real login,
+so no session had to be minted by hand):
+
+- `document.documentElement.dataset.sidebar` is already `"rail"` **at
+  DOMContentLoaded** — i.e. the snippet ran during parse, not after hydration.
+  That is the discriminating observation: under `next/script`'s
+  `self.__next_s` queue it could not have been set that early.
+- Sampling the sidebar's width every 8ms from before navigation gives **72px on
+  every frame, never 310** — so there is no wide-then-snap frame at all. The
+  flash is gone, not merely faster.
+- Zero console errors, the React "script tag" warning included.
+
+Worth recording that this correction overturned an earlier judgement made in
+this same programme: the warning had been dismissed as dev-only noise on the
+reasoning that Next injects `beforeInteractive` inline scripts into the initial
+HTML. That reasoning was wrong, and the cost of being wrong was a user-visible
+flash that had shipped and been looked at without being seen. "It's only a dev
+warning" is a claim about the warning, not about the code it points at.
+
+
+## 42. reset-password, verified by driving it rather than reading it
+
+`scripts/reset-password.ts` (the lockout escape hatch DAY-ONE §1 documents) was
+verified by actually running it against an isolated scratch copy — never
+`data/revenueos.db`.
+
+What running it proved that reading could not:
+
+- Piping the password is REFUSED ("this needs a terminal"), so the guard rail
+  against passwords landing in shell history and `ps` output is real, not just
+  documented. Exercising the happy path therefore needed a pseudo-terminal.
+- Through a PTY: a verified backup is taken BEFORE the write, the audit row
+  lands with `actor_user_id` NULL and a readable summary, and afterwards the old
+  password is refused at the login form while the new one signs in.
+- It reported "0 session(s) revoked", which looked wrong against two live
+  session rows — until checking WHOSE they were. Both belonged to the other
+  user (`owner1`), so clerk1 genuinely had none live, and resetting one person's
+  password correctly did not sign the other out. Counting sessions would have
+  produced a false alarm; identifying their owners is what settled it.
+
+**Method note:** every claim in this entry is about observed behaviour of the
+running script. The pattern that keeps paying off in this programme is to make
+the check DISCRIMINATING — ask what the result would look like if the code were
+broken, and make sure the observation distinguishes the two. A session count
+could not; a session-to-username join could.

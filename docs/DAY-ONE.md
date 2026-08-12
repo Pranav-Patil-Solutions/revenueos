@@ -23,6 +23,20 @@ mail server and no cloud account behind it.
 > Five wrong passwords locks the account for 15 minutes. The lock survives a
 > restart, so rebooting will not clear it — waiting is the only way through.
 
+**If a password is forgotten**, it cannot be looked up — the app stores a
+one-way scramble of it, not the password. It can be *replaced*, but only from
+this machine, at a command prompt in the RevenueOS folder:
+
+```
+npm run reset-password -- --list                # which accounts exist
+npm run reset-password -- --user PRANAV         # then type the new one twice
+```
+
+It takes a backup before it changes anything, clears any 15-minute lock, and
+signs that person out everywhere — so anyone already logged in on another
+screen has to sign in again. The reset is written to the audit log. Nobody
+who is not sitting at this machine can do it.
+
 Leave the app running. Closing the window stops it.
 
 ---

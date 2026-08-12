@@ -12,6 +12,7 @@
     "backup": "tsx scripts/backup.ts",
     "export:company": "tsx scripts/export-company.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "reset-password": "tsx scripts/reset-password.ts",
     "restore": "tsx scripts/restore.ts",
     "preflight": "tsx scripts/preflight.ts"
   },
