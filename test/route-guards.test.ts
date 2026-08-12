@@ -151,10 +151,34 @@ test("every server action in actions.ts is guarded", () => {
   // dependably covers them: each one is its own boundary. requireBook()
   // (RVOS-004 P3) is also a valid guard — it requires a session AND an
   // active company, a strict superset of requireSession() alone.
-  const guards = [...src.matchAll(/await require(?:Session|Book)\(\)/g)].length;
+  const guards = [...src.matchAll(/await require(?:Session|Book)\(/g)].length;
   assert.equal(
     guards,
     exported.length,
     `${exported.length} exported actions but ${guards} guards — one is unprotected`
+  );
+});
+
+/**
+ * A ratchet, not a style rule — RVOS-006 P0b.
+ *
+ * `requireBook()` defaults to `book.read` so that the many display-only PAGES
+ * did not all have to be edited when capabilities landed. That default is
+ * exactly wrong for a server action: every action here MUTATES something, so an
+ * action that forgets its capability would be authorized for any signed-in
+ * user, including a `viewer`, and would look guarded while being wide open.
+ *
+ * So inside actions.ts every requireBook must name a capability. This is the
+ * same shape as the tenancy ratchet in book.ts: make the omission a loud
+ * failure in a test rather than a silent grant in production.
+ */
+test("no server action falls back to the read-only capability default", () => {
+  const src = readFileSync(path.join(process.cwd(), "src", "lib", "actions.ts"), "utf8");
+  const bare = [...src.matchAll(/await requireBook\(\s*\)/g)].length;
+  assert.equal(
+    bare,
+    0,
+    `${bare} action(s) call requireBook() with no capability — a mutating action ` +
+      `must name what it needs, or a viewer is authorized to perform it`
   );
 });

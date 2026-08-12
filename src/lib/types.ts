@@ -120,6 +120,33 @@ export interface StagedRow {
   party_id: number | null; // NULL = the document's party (photo path)
 }
 
+/** Staff role (RVOS-006 P0b). See roles.ts for what each may do. */
+export type Role = "owner" | "accountant" | "clerk" | "viewer";
+
+/** A permission, cut by consequence rather than by screen — see roles.ts. */
+export type Capability =
+  | "book.read"
+  | "entry.stage"
+  | "entry.post"
+  | "books.lock"
+  | "accounts.manage"
+  | "company.manage"
+  | "users.manage";
+
+/** One append-only audit row. Never updated or deleted — SQL triggers enforce
+ * it, because a trail the app can rewrite is not evidence. */
+export interface AuditLogRow {
+  id: number;
+  actor_user_id: number | null;
+  action: string;
+  entity: string;
+  entity_id: number | null;
+  summary: string;
+  before_json: string | null;
+  after_json: string | null;
+  created_at: string;
+}
+
 /** One cash/bank/wallet/card account, each owning its own ledger. */
 export interface BankAccountRow {
   id: number;

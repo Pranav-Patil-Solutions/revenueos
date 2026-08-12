@@ -5,7 +5,9 @@ import { NextResponse } from "next/server";
 import { assertUsableCompany, book, type Book } from "./book";
 import { getDb } from "./db";
 import { lookupSession, type SessionUser } from "./auth";
+import { can, refusalMessage } from "./roles";
 import { readSessionToken } from "./session";
+import type { Capability } from "./types";
 
 /**
  * Data Access Layer — the REAL authorization boundary (RVOS-003 P2).
@@ -76,7 +78,9 @@ export async function requireApiSession(): Promise<SessionUser | Response> {
  * but a handle is cheap to construct and holding one across requests would
  * be the mistake, so this deliberately does not use `cache()` itself.
  */
-export async function requireBook(): Promise<{ user: SessionUser; book: Book }> {
+export async function requireBook(
+  capability: Capability = "book.read"
+): Promise<{ user: SessionUser; book: Book }> {
   const user = await requireSession();
   if (user.companyId == null) redirect("/companies");
   const db = getDb();
@@ -87,7 +91,34 @@ export async function requireBook(): Promise<{ user: SessionUser; book: Book }> 
     usable = false;
   }
   if (!usable) redirect("/companies");
-  return { user, book: book(db, user.companyId) };
+
+  // Capability check AFTER the company is known to be usable, so a refusal
+  // always means "you may not do this", never "your company vanished".
+  //
+  // Defaults to `book.read` so every existing page that just displays data
+  // keeps working unchanged; the sensitive actions name their capability
+  // explicitly. A throw (not a redirect) because these are Server Actions as
+  // often as pages, and silently redirecting a POST would look to the caller
+  // like the action had succeeded.
+  assertCan(user, capability);
+
+  return { user, book: book(db, user.companyId, user.user_id) };
+}
+
+/**
+ * Refuse unless the role holds the capability. Exported so a page can gate a
+ * BUTTON on the same rule that gates the action behind it — the two must not
+ * drift, or the UI offers something the server will reject.
+ */
+export function assertCan(user: SessionUser, capability: Capability): void {
+  if (!can(user.role, capability)) {
+    throw new Error(refusalMessage(user.role, capability));
+  }
+}
+
+/** Non-throwing form, for deciding whether to render a control. */
+export function userCan(user: SessionUser, capability: Capability): boolean {
+  return can(user.role, capability);
 }
 
 /**
@@ -101,9 +132,9 @@ export async function requireBook(): Promise<{ user: SessionUser; book: Book }> 
  *   const gate = await requireApiBook();
  *   if (gate instanceof Response) return gate;
  */
-export async function requireApiBook(): Promise<
-  { user: SessionUser; book: Book } | Response
-> {
+export async function requireApiBook(
+  capability: Capability = "book.read"
+): Promise<{ user: SessionUser; book: Book } | Response> {
   const gate = await requireApiSession();
   if (gate instanceof Response) return gate;
   if (gate.companyId == null) {
@@ -121,5 +152,12 @@ export async function requireApiBook(): Promise<
       { status: 409 }
     );
   }
-  return { user: gate, book: book(db, gate.companyId) };
+  if (!can(gate.role, capability)) {
+    // 403, not 401: the caller IS authenticated, they simply may not do this.
+    return NextResponse.json(
+      { error: refusalMessage(gate.role, capability) },
+      { status: 403 }
+    );
+  }
+  return { user: gate, book: book(db, gate.companyId, gate.user_id) };
 }

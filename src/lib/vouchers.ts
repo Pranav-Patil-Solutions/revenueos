@@ -1,3 +1,4 @@
+import { writeAudit } from "./audit";
 import { resolveSettleCode } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
@@ -225,14 +226,15 @@ export function postManualVoucher(
 
     const journalId = b.run(
       `INSERT INTO journals
-         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-       VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, NULL, NULL, @now)`,
+         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at, created_by)
+       VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, NULL, NULL, @now, @createdBy)`,
       {
         entry_date: input.entry_date,
         entry_type: input.kind === "journal" ? input.entry_type ?? input.kind : input.kind,
         memo: input.memo,
         ref_no: input.ref_no,
         now: new Date().toISOString(),
+        createdBy: b.actorUserId,
       }
     ).lastInsertRowid as number;
 
@@ -253,6 +255,23 @@ export function postManualVoucher(
         }
       );
     });
+
+    // Inside the SAME transaction as the journal — a log entry for an entry
+    // that rolled back would be a lie, and a posted entry with no log entry is
+    // the gap the log exists to close.
+    writeAudit(
+      b,
+      {
+        action: "journal.post",
+        entity: "journal",
+        entity_id: journalId,
+        summary:
+          `Posted ${input.kind.replace("_", " ")} dated ${input.entry_date}` +
+          (input.ref_no ? ` (ref ${input.ref_no})` : ""),
+        after: { entry_date: input.entry_date, kind: input.kind, legs },
+      },
+      new Date().toISOString()
+    );
     return { journalId };
   });
 }
@@ -372,9 +391,15 @@ export function postVoucherWithTds(
 
     const journalId = b.run(
       `INSERT INTO journals
-         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-       VALUES (@company_id, @entry_date, 'tds_deduction', @memo, @ref_no, NULL, NULL, @now)`,
-      { entry_date: input.entry_date, memo: input.memo, ref_no: input.ref_no, now }
+         (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at, created_by)
+       VALUES (@company_id, @entry_date, 'tds_deduction', @memo, @ref_no, NULL, NULL, @now, @createdBy)`,
+      {
+        entry_date: input.entry_date,
+        memo: input.memo,
+        ref_no: input.ref_no,
+        now,
+        createdBy: b.actorUserId,
+      }
     ).lastInsertRowid as number;
 
     legs.forEach((l, i) => {

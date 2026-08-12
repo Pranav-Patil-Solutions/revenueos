@@ -1239,3 +1239,67 @@ scratch instance needs real files at the project root, symlink only
 `node_modules`). Added to `[[agentic-workflow-standard]]`-equivalent personal
 practice going forward: a `data/` directory existing at `cwd` is the actual
 signal to check, not the env var.
+
+## 39. RVOS-006 P0b: attribution, roles and an audit trail — no failures
+
+**What happened:** Closed the second of the two defects Stage 0 exists for.
+`journals` recorded WHEN an entry was posted and never WHO, and `auth_users`
+had no role — so every person who could sign in could post to any client's
+books, lock a year and change a client's tax identity, and afterwards nothing
+recorded which of them had. For a firm with staff on shared client books that
+is the control gap, not a missing convenience.
+
+Migration 005 adds `journals.created_by`, `auth_users.role`
+(owner/accountant/clerk/viewer, CHECK-constrained) and an `audit_log`.
+`src/lib/roles.ts` holds the capability matrix as pure data; `dal.ts` — already
+this app's real authorization boundary — is the only thing that enforces it.
+
+**Three decisions worth keeping:**
+
+1. **The actor rides on the `Book` handle**, not on each posting function's
+   parameter list. `requireBook()` builds the handle from the session, which
+   already knows who is asking, so every write underneath inherits attribution
+   and no call site can forget to pass it. `null` stays a real value: a
+   migration, a CLI script or a test genuinely has no signed-in user, and
+   recording "unknown" is correct where inventing the only user's name would be
+   fabricating an audit trail. Reports render NULL as absent, never as a name.
+
+2. **`audit_log` is append-only via TRIGGERS**, not convention. UPDATE and
+   DELETE both `RAISE(ABORT)`. A trail the application can quietly rewrite is
+   not evidence of anything, and the app has no code path that edits history —
+   now it cannot grow one by accident either. The log write happens INSIDE the
+   posting transaction, so a rolled-back post leaves no row (tested) — a log
+   entry for a change that did not happen is a lie, and a change with no entry
+   is the gap the log exists to close.
+
+3. **Existing users default to `owner`.** Before this migration nobody's
+   authority WAS restricted, so demoting the office's existing logins would
+   silently remove access they already rely on, and on a single-user install
+   would lock them out of their own books. New users get a role explicitly.
+
+**The capability that can remove itself:** `users.manage` is unique — an owner
+demoting the last owner leaves an installation where nobody can ever add a
+user or change a client's tax identity again, with no password-reset email and
+no support channel, because this machine holds the books and nothing else
+does. `setStaffRole` refuses it outright rather than warning in the UI.
+
+**Delta (rule):** `requireBook()` defaults to `book.read` so display-only pages
+needed no edit — but that default is exactly wrong for a server action, every
+one of which mutates. A new ratchet in `test/route-guards.test.ts` asserts that
+NO `requireBook()` inside `actions.ts` is called without a capability, so a
+future action that forgets one fails a test instead of silently authorizing a
+viewer to perform it. Same shape as the tenancy ratchet: make the omission
+loud rather than trusting everyone to remember. All 24 existing actions were
+assigned a capability cut by consequence (`entry.stage` for reversible
+staging, `entry.post` for immutable journals, `accounts.manage`,
+`company.manage`).
+
+Verified: 412 tests pass (was 393), tsc/eslint/smoke/build green. The role
+matrix and the audit guarantees were mutation-tested — granting `clerk` the
+post capability fails 3 tests, and silently skipping the audit write fails 5 —
+so the coverage is real rather than vacuous.
+
+**Not done in this phase, deliberately:** there is no staff-management PAGE
+yet. `src/lib/staff.ts` (`listStaff`, `createStaff`, `setStaffRole`, with the
+lockout guard) is the mechanism and is tested, but assigning a role currently
+means calling it from a script. Noted in HANDOFF rather than left implied-done.

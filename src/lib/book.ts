@@ -46,6 +46,7 @@ export const SCOPED_TABLES = [
   "compliance_marks",
   "ledger_mappings",
   "bank_accounts",
+  "audit_log",
 ] as const;
 
 export type ScopedTable = (typeof SCOPED_TABLES)[number];
@@ -95,6 +96,20 @@ export function scopingProblem(sql: string): string | null {
 
 export interface Book {
   readonly companyId: number;
+  /**
+   * The signed-in user this handle is acting for, stamped onto
+   * `journals.created_by` and `audit_log.actor_user_id` (RVOS-006 P0b).
+   *
+   * Carried on the handle rather than passed to each posting function so that
+   * attribution cannot be forgotten at a call site: `requireBook()` builds the
+   * handle from the session, which already knows who is asking, and every
+   * write underneath inherits it.
+   *
+   * `null` is a real state, not a missing value — a migration, a CLI script or
+   * a test has no signed-in user, and recording "unknown" is correct where
+   * inventing a name would be fabricating an audit trail.
+   */
+  readonly actorUserId: number | null;
   /** The raw connection, for the few places that legitimately need it —
    * migrations, backups, and global tables. Using it for a scoped table is a
    * bug the static test will catch. */
@@ -106,7 +121,11 @@ export interface Book {
   tx<T>(fn: (book: Book) => T): T;
 }
 
-export function book(db: Database.Database, companyId: number): Book {
+export function book(
+  db: Database.Database,
+  companyId: number,
+  actorUserId: number | null = null
+): Book {
   if (!Number.isInteger(companyId) || companyId < 1) {
     throw new Error(`Invalid company id: ${String(companyId)}`);
   }
@@ -120,6 +139,7 @@ export function book(db: Database.Database, companyId: number): Book {
 
   const handle: Book = {
     companyId,
+    actorUserId,
     db,
     all<T>(sql: string, params?: Record<string, unknown>): T[] {
       guard(sql);

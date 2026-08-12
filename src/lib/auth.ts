@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { assertUsableCompany } from "./book";
-import type { AuthSessionRow, AuthUserRow } from "./types";
+import type { Role, AuthSessionRow, AuthUserRow } from "./types";
 
 /**
  * Auth — RVOS-003 P2.
@@ -217,6 +217,9 @@ export function sha256(value: string): string {
 export interface SessionUser {
   user_id: number;
   username: string;
+  /** What this login may do (RVOS-006 P0b). Resolved on every session lookup
+   * rather than stored on the session, so a demotion binds immediately. */
+  role: Role;
   /** The book this login is currently looking at. NULL = none chosen yet —
    * a real, expected state for a fresh login, not an error (RVOS-004 P3). */
   companyId: number | null;
@@ -238,11 +241,11 @@ export function lookupSession(
   const sha = sha256(token);
   const row = db
     .prepare(
-      `SELECT s.*, u.username AS username
+      `SELECT s.*, u.username AS username, u.role AS role
          FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id
         WHERE s.token_sha256 = @sha`
     )
-    .get({ sha }) as (AuthSessionRow & { username: string }) | undefined;
+    .get({ sha }) as (AuthSessionRow & { username: string; role: Role }) | undefined;
   if (!row) return null;
 
   if (row.expires_at <= now) {
@@ -256,7 +259,15 @@ export function lookupSession(
       WHERE token_sha256 = @sha`
   ).run({ now, expires, sha });
 
-  return { user_id: row.user_id, username: row.username, companyId: row.company_id };
+  return {
+    user_id: row.user_id,
+    username: row.username,
+    // Read fresh on every session lookup, never cached on the session row: a
+    // role change (or a demotion) must take effect on the user's next request,
+    // not whenever they happen to sign in again.
+    role: row.role,
+    companyId: row.company_id,
+  };
 }
 
 /**

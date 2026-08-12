@@ -67,6 +67,38 @@ chart-of-accounts ledger. `staged_rows.settle_account` → `bank_account_id`.
   genuinely lazy (it was an IIFE that ran on every import).
 - `EVOLUTION.md` #38 written (includes the GOTCHA below — read it in full).
 
+## DONE (P0b — attribution, roles, audit log)
+
+**Committed.** Migration 005: `journals.created_by`, `auth_users.role`
+(owner/accountant/clerk/viewer), append-only `audit_log`. 412/412 pass,
+tsc/eslint/smoke/build green. Full reasoning in EVOLUTION #39.
+
+- `src/lib/roles.ts` — capability matrix as pure data. `dal.ts` is the ONLY
+  enforcer (`requireBook(capability)`, `assertCan`, `userCan`).
+- The actor rides on the `Book` handle (`book(db, companyId, actorUserId)`), so
+  attribution flows from the session and no posting call site can forget it.
+  `null` = genuinely no signed-in user (migration/CLI/test), rendered as
+  "unknown", never backfilled to a guess.
+- `audit_log` append-only via SQL TRIGGERS; written INSIDE the posting
+  transaction so a rolled-back post leaves no row.
+- All 24 actions in actions.ts carry an explicit capability, and a new ratchet
+  in `test/route-guards.test.ts` fails if any future one omits it.
+- `src/lib/staff.ts` — listStaff/createStaff/setStaffRole, refusing to demote
+  the LAST owner (unrecoverable lockout: no reset email, no support channel).
+
+**REMAINING P0b work (do this first on resume):**
+- **No staff-management PAGE.** The mechanism is tested but assigning a role
+  means calling `setStaffRole` from a script. Needs `/settings/staff` +
+  actions gated on `users.manage`, and it must not let the signed-in owner
+  demote themselves past the lockout guard.
+- **No audit-log VIEWER.** `recentAudit()` exists and is tested; nothing renders
+  it. A trail nobody can read does not yet do its job.
+- Audit writes currently cover document posting and manual vouchers. Still
+  unlogged: books lock, company settings changes, bank-account add/archive,
+  TDS challan. Each is a one-line `writeAudit` inside the existing transaction.
+- Role-aware UI: buttons for actions the role cannot perform are still
+  rendered and will throw on click. `userCan()` exists for exactly this.
+
 ## GOTCHA — read before touching the dev server again
 
 `DEMO_MODE=1` only fakes the LLM call. It does NOT change `DATA_DIR`
@@ -88,9 +120,7 @@ directly via `createSession()`, never touch `data/revenueos.db`.
 
 ## NEXT (in order — see the plan file for full detail per phase)
 
-- **P0b** — journal attribution + user roles + audit log (migration 005).
-  `journals.created_by`, `auth_users.role`, append-only `audit_log`. Role
-  checks land in `dal.ts` beside `requireBook`.
+- **Finish P0b's UI** — the four items under "REMAINING P0b work" above.
 - **P0c** — cost centres (migration 006). Nullable `journal_lines.cost_centre_id`,
   threaded through both posting paths now so every later phase writes it
   natively.

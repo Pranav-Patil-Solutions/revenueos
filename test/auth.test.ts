@@ -181,7 +181,7 @@ test("a successful login clears the failure counter", () => {
 test("a session resolves to its user", () => {
   const { db, id } = withUser();
   const token = createSession(db, id, T0);
-  assert.deepEqual(lookupSession(db, token, T0), { user_id: id, username: "pranav", companyId: null });
+  assert.deepEqual(lookupSession(db, token, T0), { user_id: id, username: "pranav", role: "owner", companyId: null });
 });
 
 test("the RAW token is never stored — a copied db yields no usable cookie", () => {
@@ -218,7 +218,7 @@ test("activity slides the expiry forward", () => {
   assert.ok(lookupSession(db, token, mid));
   // Without sliding renewal this would be expired; with it, it is still live.
   const late = at(SESSION_TTL_MS + SESSION_TTL_MS / 4);
-  assert.deepEqual(lookupSession(db, token, late), { user_id: id, username: "pranav", companyId: null });
+  assert.deepEqual(lookupSession(db, token, late), { user_id: id, username: "pranav", role: "owner", companyId: null });
 });
 
 test("logout destroys exactly one session, not the others", () => {

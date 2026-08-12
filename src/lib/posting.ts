@@ -1,3 +1,4 @@
+import { writeAudit } from "./audit";
 import { getBankAccount } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
@@ -353,8 +354,8 @@ export function postDocument(
       assertBalanced(legs);
       const journalId = b.run(
         `INSERT INTO journals
-           (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at)
-         VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, @docId, @rowId, @now)`,
+           (company_id, entry_date, entry_type, memo, ref_no, source_document_id, source_row_id, created_at, created_by)
+         VALUES (@company_id, @entry_date, @entry_type, @memo, @ref_no, @docId, @rowId, @now, @createdBy)`,
         {
           entry_date: row.entry_date,
           entry_type: row.entry_type,
@@ -363,6 +364,7 @@ export function postDocument(
           docId,
           rowId: row.id,
           now,
+          createdBy: b.actorUserId,
         }
       ).lastInsertRowid as number;
       legs.forEach((l, i) => {
@@ -391,6 +393,26 @@ export function postDocument(
     b.run(
       "UPDATE documents SET status = 'posted', posted_at = @now WHERE id = @docId AND company_id = @company_id",
       { now, docId }
+    );
+
+    // One row for the document, not one per journal: the office reviewed and
+    // posted a DOCUMENT, and that is the action a reader of the log is trying
+    // to account for. The individual journals are reachable from it.
+    writeAudit(
+      b,
+      {
+        action: "document.post",
+        entity: "document",
+        entity_id: docId,
+        summary: `Posted document #${docId} — ${included.length} journal${
+          included.length === 1 ? "" : "s"
+        }`,
+        after: {
+          journals: included.length,
+          row_nos: included.map((r) => r.row_no),
+        },
+      },
+      now
     );
     return { journals: included.length };
   });

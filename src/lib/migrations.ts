@@ -380,9 +380,93 @@ const bankAccounts: Migration = {
   },
 };
 
+/**
+ * 005 — who did it, and what they may do (RVOS-006 P0b).
+ *
+ * Until now `journals` recorded WHEN an entry was posted and never WHO, and
+ * `auth_users` had no role: every person who could sign in could do everything
+ * — post to any client's books, lock a year, change a company's tax identity —
+ * and afterwards nothing recorded which of them had. For a firm with staff on
+ * shared client books that is the control gap, not a missing convenience.
+ *
+ * Three parts:
+ *
+ * 1. `journals.created_by` — nullable, and NULL is a real, honest state: every
+ *    journal posted before this migration has no recorded author, and guessing
+ *    one (the only user, the company owner) would be fabricating an audit
+ *    trail. Reports must render NULL as "unknown", never as a name.
+ *
+ * 2. `auth_users.role` — existing users default to `owner`. That is deliberate
+ *    and is the safe direction: before this migration nobody's authority WAS
+ *    restricted, so demoting the office's existing logins would silently take
+ *    away access they already rely on, and on a single-user install it would
+ *    lock them out of their own books. New users get a role chosen explicitly.
+ *
+ * 3. `audit_log` — append-only, enforced by TRIGGERS rather than by convention.
+ *    An audit trail that the application can quietly rewrite is not evidence of
+ *    anything, so UPDATE and DELETE on it raise at the SQL level; the app has
+ *    no code path that edits history, and now it cannot grow one by accident.
+ *
+ * No FK on `created_by`: SQLite's ALTER TABLE ADD COLUMN cannot carry a
+ * REFERENCES clause, the same documented asymmetry migration 001 has on its
+ * ten ALTERed tables. Users are never deleted (sessions are), so it would
+ * never fire.
+ */
+const attributionAndRoles: Migration = {
+  version: 5,
+  name: "attribution: journals.created_by, auth_users.role, audit_log",
+  up: (db: Database.Database) => {
+    db.exec(`ALTER TABLE journals ADD COLUMN created_by INTEGER`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_journals_created_by ON journals(created_by)`
+    );
+
+    db.exec(
+      `ALTER TABLE auth_users ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'
+         CHECK (role IN ('owner','accountant','clerk','viewer'))`
+    );
+
+    db.exec(`
+      CREATE TABLE audit_log (
+        id            INTEGER PRIMARY KEY,
+        company_id    INTEGER NOT NULL REFERENCES companies(id),
+        -- NULL only for an action with no signed-in actor (a migration, a CLI
+        -- script). A user action must always name its user.
+        actor_user_id INTEGER REFERENCES auth_users(id),
+        -- Dotted, stable, machine-readable: 'journal.post', 'books.lock'.
+        action        TEXT NOT NULL,
+        entity        TEXT NOT NULL,
+        entity_id     INTEGER,
+        -- One sentence a non-programmer can read in the log.
+        summary       TEXT NOT NULL,
+        -- JSON snapshots. before is NULL on create, after is NULL on delete;
+        -- both present on a change.
+        before_json   TEXT,
+        after_json    TEXT,
+        created_at    TEXT NOT NULL
+      );
+      CREATE INDEX idx_audit_log_company ON audit_log(company_id, created_at);
+      CREATE INDEX idx_audit_log_entity ON audit_log(company_id, entity, entity_id);
+
+      -- Append-only, structurally. See this migration's docstring.
+      CREATE TRIGGER audit_log_is_append_only_update
+        BEFORE UPDATE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: an audit trail the app can rewrite is not evidence');
+      END;
+      CREATE TRIGGER audit_log_is_append_only_delete
+        BEFORE DELETE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: an audit trail the app can erase is not evidence');
+      END;
+    `);
+  },
+};
+
 export const MIGRATIONS: Migration[] = [
   companies,
   sessionCompany,
   dropSettings,
   bankAccounts,
+  attributionAndRoles,
 ];
