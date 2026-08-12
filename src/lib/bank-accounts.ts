@@ -1,3 +1,4 @@
+import { writeAudit } from "./audit";
 import type { Book } from "./book";
 import type { BankAccountKind, BankAccountRow, SettleHint } from "./types";
 
@@ -216,6 +217,17 @@ export function createBankAccount(book: Book, input: NewBankAccount): number {
         now: new Date().toISOString(),
       }
     ).lastInsertRowid as number;
+    writeAudit(
+      b,
+      {
+        action: "bank_account.create",
+        entity: "bank_account",
+        entity_id: Number(id),
+        summary: `Added ${input.kind} account "${name}" on ledger ${code}`,
+        after: { name, kind: input.kind, account_code: code, is_default: isDefault },
+      },
+      new Date().toISOString()
+    );
     return Number(id);
   });
 }
@@ -248,6 +260,17 @@ export function renameBankAccount(book: Book, id: number, name: string): void {
       "UPDATE accounts SET name = @name WHERE company_id = @company_id AND id = @accountId",
       { accountId: row.account_id, name: trimmed }
     );
+    writeAudit(
+      b,
+      {
+        action: "bank_account.rename",
+        entity: "bank_account",
+        entity_id: id,
+        summary: `Renamed a bank/cash account to "${trimmed}"`,
+        after: { name: trimmed },
+      },
+      new Date().toISOString()
+    );
   });
 }
 
@@ -266,6 +289,17 @@ export function setDefaultBankAccount(book: Book, id: number): void {
     b.run(
       "UPDATE bank_accounts SET is_default = 1 WHERE company_id = @company_id AND id = @id",
       { id }
+    );
+    writeAudit(
+      b,
+      {
+        action: "bank_account.set_default",
+        entity: "bank_account",
+        entity_id: id,
+        summary: `Made account #${id} the default ${row.kind} account`,
+        after: { kind: row.kind, is_default: true },
+      },
+      new Date().toISOString()
     );
   });
 }
@@ -316,5 +350,17 @@ export function archiveBankAccount(book: Book, id: number, now: string): void {
         { sibling: siblings[0].id }
       );
     }
+    writeAudit(
+      b,
+      {
+        action: "bank_account.archive",
+        entity: "bank_account",
+        entity_id: id,
+        summary: `Archived ${row.kind} account "${row.name}"`,
+        before: { name: row.name, kind: row.kind, archived_at: null },
+        after: { name: row.name, kind: row.kind, archived_at: now },
+      },
+      now
+    );
   });
 }

@@ -59,7 +59,14 @@ test("EVERY page requires a session, except the declared public ones", () => {
     // source — see HANDOFF.md's gotcha on this exact test. Either guard
     // proves a session is required; requireBook() additionally requires an
     // active company.
-    const guarded = src.includes("requireSession()") || src.includes("requireBook()");
+    //
+    // Match the CALL, not one exact arity: since RVOS-006 P0b requireBook
+    // takes an optional capability, so `requireBook("users.manage")` is still
+    // a guard. A detector that insisted on empty parens reported two correctly
+    // guarded pages as unguarded — a false alarm that, believed, would have
+    // sent someone to "fix" pages that were already safe.
+    const guarded =
+        /require(?:Session|Book)\s*\(/.test(src);
     if (PUBLIC_PAGES.has(name)) {
       assert.equal(
         guarded,
@@ -80,7 +87,7 @@ test("EVERY route handler returns 401 rather than redirecting", () => {
     // requireApiBook() (RVOS-004 P4) is requireApiSession()'s counterpart for
     // handlers that also need an active company — it still answers with a
     // Response (401/409), never a redirect. See requireApiSession() below.
-    if (!src.includes("requireApiSession()") && !src.includes("requireApiBook()")) {
+    if (!/requireApi(?:Session|Book)\s*\(/.test(src)) {
       unguarded.push(rel(file));
     }
   }

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { writeAudit } from "./audit";
 import { setSessionCompany } from "./auth";
 import type { Book } from "./book";
 import { groupFor } from "./coa";
@@ -25,6 +26,7 @@ import {
 } from "./bank-accounts";
 import { getDb, seedAccountsForCompany, UPLOADS_DIR } from "./db";
 import { readSessionToken } from "./session";
+import { createStaff, listStaff, setStaffRole } from "./staff";
 import { extractDocument } from "./extraction";
 import { rupeeStringToPaise, todayIso } from "./format";
 import { fyEnd, fyLabel, fyList, fyStart } from "./fy";
@@ -198,6 +200,10 @@ export async function updateSettings(formData: FormData): Promise<void> {
     throw new Error("Books-locked-through must be a date (YYYY-MM-DD) or blank.");
   }
   const companyName = String(formData.get("company_name") ?? "").trim() || "My Company";
+  // Snapshot BEFORE, so the log shows what a wrong GSTIN/PAN/regime was changed
+  // FROM as well as to — a tax identity is exactly the field where "who set it
+  // to that, and what was it before?" is the question someone later asks.
+  const before = getCompany(book.db, book.companyId);
   updateCompanySettings(book.db, book.companyId, {
     companyName,
     gstin: String(formData.get("gstin") ?? "").trim().toUpperCase(),
@@ -214,6 +220,23 @@ export async function updateSettings(formData: FormData): Promise<void> {
     lockedThrough,
     fyAuditCase: formData.get("fy_audit_case") === "on" ? 1 : 0,
   });
+  const after = getCompany(book.db, book.companyId);
+  const lockChanged =
+    (before?.books_locked_through ?? "") !== (after?.books_locked_through ?? "");
+  writeAudit(
+    book,
+    {
+      action: lockChanged ? "books.lock" : "company.settings",
+      entity: "company",
+      entity_id: book.companyId,
+      summary: lockChanged
+        ? `Books locked through ${after?.books_locked_through || "(cleared)"}`
+        : `Changed company settings for ${companyName}`,
+      before,
+      after,
+    },
+    new Date().toISOString()
+  );
   revalidatePath("/settings");
   redirect("/settings");
 }
@@ -1068,4 +1091,84 @@ export async function archiveBankAccountAction(formData: FormData): Promise<void
   archiveBankAccount(book, Number(formData.get("id")), new Date().toISOString());
   revalidatePath("/settings/bank-accounts");
   redirect("/settings/bank-accounts");
+}
+
+// ---------------------------------------------------------------------------
+// Staff and roles — RVOS-006 P0b
+// ---------------------------------------------------------------------------
+
+export async function createStaffAction(formData: FormData): Promise<void> {
+  const { book, user } = await requireBook("users.manage");
+  const username = String(formData.get("username") ?? "").trim();
+  const role = String(formData.get("role") ?? "");
+  const id = createStaff(
+    book.db,
+    {
+      username,
+      password: String(formData.get("password") ?? ""),
+      role,
+    },
+    new Date().toISOString()
+  );
+  // Logged against the ACTIVE company even though auth_users is global: the
+  // audit_log is per-book, and "who was given access, by whom" is a question
+  // asked while looking at a client's books. The alternative — an unscoped
+  // second log — would be a table nobody opens.
+  writeAudit(
+    book,
+    {
+      action: "staff.create",
+      entity: "auth_user",
+      entity_id: id,
+      summary: `${user.username} added "${username}" as ${role}`,
+      after: { username, role },
+    },
+    new Date().toISOString()
+  );
+  revalidatePath("/settings/staff");
+  redirect("/settings/staff");
+}
+
+export async function setStaffRoleAction(formData: FormData): Promise<void> {
+  const { book, user } = await requireBook("users.manage");
+  const targetId = Number(formData.get("id"));
+  const role = String(formData.get("role") ?? "");
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    throw new Error("Pick a staff member.");
+  }
+  /**
+   * Refuse self-demotion explicitly, on top of `setStaffRole`'s last-owner
+   * guard.
+   *
+   * The two catch different mistakes. The lockout guard protects the
+   * INSTALLATION (never zero owners). This protects the PERSON: with two owners
+   * present, an owner demoting themselves is permitted by that guard and is
+   * almost never what they meant to click — and they cannot undo it, because
+   * undoing it needs the capability they just gave away. Changing your own role
+   * is therefore something the other owner does for you.
+   */
+  if (targetId === user.user_id) {
+    throw new Error(
+      "You cannot change your own role — ask the other owner to do it. " +
+        "Undoing it would need the very permission you would be giving away."
+    );
+  }
+  const before = listStaff(book.db).find((s) => s.id === targetId);
+  setStaffRole(book.db, targetId, role);
+  writeAudit(
+    book,
+    {
+      action: "staff.role_change",
+      entity: "auth_user",
+      entity_id: targetId,
+      summary: `${user.username} changed ${before?.username ?? `#${targetId}`} from ${
+        before?.role ?? "?"
+      } to ${role}`,
+      before: before ? { role: before.role } : undefined,
+      after: { role },
+    },
+    new Date().toISOString()
+  );
+  revalidatePath("/settings/staff");
+  redirect("/settings/staff");
 }

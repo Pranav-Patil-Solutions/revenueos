@@ -1303,3 +1303,46 @@ so the coverage is real rather than vacuous.
 yet. `src/lib/staff.ts` (`listStaff`, `createStaff`, `setStaffRole`, with the
 lockout guard) is the mechanism and is tested, but assigning a role currently
 means calling it from a script. Noted in HANDOFF rather than left implied-done.
+
+## 40. RVOS-006 P0b UI: two stale string-matching guards, and a 500 that should have been a sentence
+
+**What happened:** Built the staff page, the audit viewer, and the remaining
+audit writes. Three things worth recording, all found by running it rather than
+by reading it.
+
+**1. The same stale-detector bug twice.** `test/route-guards.test.ts` proves
+every page and every server action is guarded, by string-matching
+`requireBook()` — with empty parens. P0b gave `requireBook` an optional
+capability argument, so `requireBook("users.manage")` stopped matching and the
+test reported two correctly-guarded pages as UNGUARDED. That is the dangerous
+direction for a security test to fail in: believed, it sends someone to "fix"
+pages that were already safe, and it trains people to dismiss the alarm. Both
+detectors now match the CALL (`/require(?:Session|Book)\s*\(/`) rather than one
+exact arity, and I mutation-tested the loosened version by deleting a real
+guard to confirm it still fails. **Rule: a guard that string-matches source
+must match the call, not a signature — signatures change, and the test must
+fail only when the guarantee is actually gone.**
+
+**2. A 500 is not a refusal.** `requireBook(capability)` throws, which is right
+for a Server Action (silently redirecting a POST would look like success to the
+caller) but wrong for a page: a clerk following a stale link to
+`/settings/staff` got Next's generic "Application error" 500, which reads as a
+broken app rather than as "this is not for you." Next's `forbidden()` is the
+idiomatic fix but is gated behind the experimental `authInterrupts` flag, and
+enabling an experimental flag in an accounting app to improve one settings page
+is the wrong trade. The page now checks `userCan` itself and renders an
+owners-only panel, loading no staff data unless the check passes — verified in
+a browser that the refusal shows and the staff table is absent from the DOM.
+The ACTIONS still enforce independently; the page branch is presentation.
+
+**3. A duplicate username surfaced as `SqliteError: UNIQUE constraint failed`.**
+Invisible while the only way to create a user was the one-time first-run form;
+the moment staff can be added routinely, typing a taken name is an ordinary
+mistake and must not look like a crash. `createStaff` now checks first and
+throws a sentence. The UNIQUE constraint remains the actual guarantee — the
+check is a better message in front of it, not a replacement (two simultaneous
+requests still race, and the constraint still wins). Tested including the
+case-insensitive path, which works because the column is `COLLATE NOCASE`.
+
+Verified: 413 tests, tsc/eslint/smoke/build green, plus a two-login browser
+pass (owner and clerk) proving enforcement from both sides.

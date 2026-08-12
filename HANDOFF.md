@@ -86,18 +86,28 @@ tsc/eslint/smoke/build green. Full reasoning in EVOLUTION #39.
 - `src/lib/staff.ts` — listStaff/createStaff/setStaffRole, refusing to demote
   the LAST owner (unrecoverable lockout: no reset email, no support channel).
 
-**REMAINING P0b work (do this first on resume):**
-- **No staff-management PAGE.** The mechanism is tested but assigning a role
-  means calling `setStaffRole` from a script. Needs `/settings/staff` +
-  actions gated on `users.manage`, and it must not let the signed-in owner
-  demote themselves past the lockout guard.
-- **No audit-log VIEWER.** `recentAudit()` exists and is tested; nothing renders
-  it. A trail nobody can read does not yet do its job.
-- Audit writes currently cover document posting and manual vouchers. Still
-  unlogged: books lock, company settings changes, bank-account add/archive,
-  TDS challan. Each is a one-line `writeAudit` inside the existing transaction.
-- Role-aware UI: buttons for actions the role cannot perform are still
-  rendered and will throw on click. `userCan()` exists for exactly this.
+**P0b UI — DONE (second commit).** 413/413 pass, browser-verified.
+- `/settings/staff` — add staff, change roles, role legend. Self-role is frozen
+  (you cannot demote yourself: undoing it needs the permission you'd give away)
+  and so is the last owner, each with the reason shown in the row.
+- `/settings/audit` — the trail, newest first, NULL actor rendered "unknown".
+- Audit now also covers company settings, books lock, and all four
+  bank-account mutations (written inside their existing transactions).
+- Settings nav gates the Staff card on `userCan(user, "users.manage")`, and the
+  page itself renders an owners-only panel rather than throwing a 500 — Next's
+  `forbidden()` is still behind the experimental `authInterrupts` flag, which
+  is not a trade worth making here.
+- Browser-verified with two real logins: a clerk sees no Staff card, gets the
+  refusal panel on direct navigation with NO staff data in the DOM, and can
+  still read the audit trail.
+
+**STILL OPEN from P0b:**
+- TDS challan (`createTdsChallan`) posts a journal but writes no audit row —
+  the one remaining unlogged mutation. One `writeAudit` inside its transaction.
+- Role-aware hiding is done for the Staff card only. Post buttons (Vouchers,
+  the review grid's Post, depreciation) still render for a `clerk` and will
+  throw a readable error on click rather than being hidden. `userCan()` is
+  there for it.
 
 ## GOTCHA — read before touching the dev server again
 

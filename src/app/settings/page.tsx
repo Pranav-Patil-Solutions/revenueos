@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getCompany } from "@/lib/companies";
 import { updateSettings } from "@/lib/actions";
 import { GST_RATES } from "@/lib/tax/india-gst";
-import { requireBook } from "@/lib/dal";
+import { requireBook, userCan } from "@/lib/dal";
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-ink-3 focus:border-accent";
@@ -11,7 +11,7 @@ const label = "mb-1.5 block text-[12.5px] font-medium text-ink-3";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const { book } = await requireBook();
+  const { book, user } = await requireBook();
 
   const s = getCompany(book.db, book.companyId)!;
 
@@ -159,6 +159,41 @@ export default async function SettingsPage() {
           </Link>
         </div>
       </div>
+
+      <div className="mt-4 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-[13.5px] font-semibold">Audit trail</p>
+            <p className="mt-0.5 text-[12.5px] text-ink-3">
+              Who posted, locked or changed what on this book. Append-only.
+            </p>
+          </div>
+          <Link href="/settings/audit" className="btn-quiet btn shrink-0">
+            Open
+          </Link>
+        </div>
+      </div>
+
+      {/*
+        Gated on the SAME capability the page and its actions require, via
+        userCan — so a clerk is never shown a door that throws when opened.
+        This is presentation only; /settings/staff guards itself.
+      */}
+      {userCan(user, "users.manage") && (
+        <div className="mt-4 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[13.5px] font-semibold">Staff &amp; roles</p>
+              <p className="mt-0.5 text-[12.5px] text-ink-3">
+                Who can open the books, and what each of them may do.
+              </p>
+            </div>
+            <Link href="/settings/staff" className="btn-quiet btn shrink-0">
+              Open
+            </Link>
+          </div>
+        </div>
+      )}
 
       <p className="mt-4 max-w-2xl text-[12px] leading-relaxed text-ink-3">
         Country and currency are carried on every report; tax logic itself is a

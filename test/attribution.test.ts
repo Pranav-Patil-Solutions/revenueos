@@ -275,3 +275,19 @@ test("an unknown role is refused before it reaches the database", () => {
     /is not a role/
   );
 });
+
+test("a duplicate username reads as a sentence, not a raw SQLite error", () => {
+  const db = stagedDb();
+  createStaff(db, { username: "asha", password: "aValidPass1", role: "clerk" }, NOW);
+  assert.throws(
+    () => createStaff(db, { username: "asha", password: "aValidPass1", role: "clerk" }, NOW),
+    /already has an account/
+  );
+  // Case-insensitively too — the column is UNIQUE COLLATE NOCASE, so "Asha"
+  // would also be refused by the constraint, and must be refused with the same
+  // readable message rather than a 500.
+  assert.throws(
+    () => createStaff(db, { username: "ASHA", password: "aValidPass1", role: "clerk" }, NOW),
+    /already has an account/
+  );
+});

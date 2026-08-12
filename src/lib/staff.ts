@@ -59,6 +59,28 @@ export function createStaff(
   now: string
 ): number {
   assertRole(input.role);
+  /**
+   * Check the name BEFORE inserting, so a taken username reads as a sentence.
+   *
+   * `auth_users.username` is UNIQUE COLLATE NOCASE, so the insert would fail
+   * anyway — but it fails as a raw `SqliteError: UNIQUE constraint failed`,
+   * which Next renders as a 500 "Application error". That was invisible while
+   * the only way to create a user was the one-time first-run form; now that
+   * staff can be added routinely, typing a name that already exists is an
+   * ordinary mistake and must not look like the app broke.
+   *
+   * The UNIQUE constraint stays the actual guarantee — this is a better
+   * message in front of it, not a replacement for it (two simultaneous
+   * requests would still race, and the constraint still wins).
+   */
+  const taken = db
+    .prepare("SELECT username FROM auth_users WHERE username = @name")
+    .get({ name: input.username.trim() }) as { username: string } | undefined;
+  if (taken) {
+    throw new Error(
+      `"${taken.username}" already has an account. Pick a different username.`
+    );
+  }
   const id = createUser(db, input.username, input.password, now);
   // createUser predates roles and defaults to 'owner' (migration 005's chosen
   // direction for EXISTING rows). A deliberately-created user must get the role
