@@ -81,6 +81,7 @@ async function main(): Promise<void> {
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: r.row_no === 10 ? false : r.include === 1,
   }));
   const { journals } = postDocument(book, docId, drafts);
@@ -228,6 +229,7 @@ async function main(): Promise<void> {
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: r.include === 1,
   })));
   assert.equal(importJournals.journals, 2, "2 import journals posted");
@@ -345,6 +347,7 @@ async function main(): Promise<void> {
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: r.include === 1,
   })));
   assert.equal(tallyPosted.journals, 2, "2 tally journals posted");
@@ -537,6 +540,39 @@ async function main(): Promise<void> {
   assert.equal(sept.status, "overdue", "unmarked sibling derives overdue");
   assert.equal(trialBalance(book).balanced, true, "TB untouched by marks");
   ok("Compliance: 21-item board (TDS auto-on, GST off) · Oct deposit marked done · regenerate shows it · sibling overdue");
+
+  // Posted here, AFTER the depreciation and computation legs have pinned
+  // their FY figures — an expense booked earlier would shift them, the same
+  // reason the TDS leg posts in Q3.
+  step = "cost centre: tag a voucher, tag only the P&L leg";
+  const { createCostCentre, listCostCentres } = await import("../src/lib/cost-centres");
+  const shopA = createCostCentre(book, { name: "Shop A" });
+  assert.equal(listCostCentres(book).length, 1, "the centre is listed for this book");
+  const tagged = postManualVoucher(book, {
+    kind: "journal",
+    entry_date: "2026-12-01",
+    memo: "Shop A rent",
+    ref_no: "RENT-12",
+    legs: [
+      { account_code: "5900", party_id: null, debit_paise: 100_000, credit_paise: 0 },
+      { account_code: "1100", party_id: null, debit_paise: 0, credit_paise: 100_000 },
+    ],
+    cost_centre_id: shopA,
+  });
+  const taggedLegs = book.all(
+    `SELECT a.code, jl.cost_centre_id FROM journal_lines jl
+     JOIN accounts a ON a.id = jl.account_id AND a.company_id = @company_id
+     WHERE jl.company_id = @company_id AND jl.journal_id = @journalId
+     ORDER BY jl.line_no`,
+    { journalId: tagged.journalId }
+  ) as { code: string; cost_centre_id: number | null }[];
+  assert.deepEqual(
+    taggedLegs.filter((l) => l.cost_centre_id !== null).map((l) => l.code),
+    ["5900"],
+    "a cost centre reaches the expense leg and NOT the bank leg"
+  );
+  assert.equal(trialBalance(book).balanced, true, "TB zero after a tagged voucher");
+  ok(`cost centre #${shopA} tagged the 5900 leg only · TB still zero`);
 
   step = "ca pack: composition + reconciliations";
   // The pack composes the SAME functions the pages use, so this leg asserts

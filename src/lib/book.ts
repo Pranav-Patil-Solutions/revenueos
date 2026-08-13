@@ -47,6 +47,7 @@ export const SCOPED_TABLES = [
   "ledger_mappings",
   "bank_accounts",
   "audit_log",
+  "cost_centres",
 ] as const;
 
 export type ScopedTable = (typeof SCOPED_TABLES)[number];

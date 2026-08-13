@@ -463,10 +463,80 @@ const attributionAndRoles: Migration = {
   },
 };
 
+/**
+ * 006 — cost centres (RVOS-006 P0c).
+ *
+ * The books can say WHAT was earned and spent and WHO it was with. They cannot
+ * say WHICH PART OF THE BUSINESS did it: one P&L for a firm running two shops,
+ * three sites or a service arm beside a trading arm answers none of the
+ * questions an owner actually asks. That dimension is the thing budgets
+ * (Stage 4 P15) are sliced by, so it has to exist before the phases that write
+ * journals, not after.
+ *
+ * Why now, with nothing yet using it: this adds a column to `journal_lines`
+ * that every later phase writes. There are TWO posting paths today
+ * (`postDocument`, `postManualVoucher`/`postVoucherWithTds`); after orders,
+ * disposal and payroll there will be five. Threading a dimension through two
+ * paths costs a day, through five it costs a week and gets missed in one.
+ *
+ * Three deliberate choices:
+ *
+ * 1. **Nullable, and NULL is the normal case.** Most lines have no cost centre
+ *    and never will — a bank leg, a GST leg, a control-account leg. A NOT NULL
+ *    column with an "Unallocated" sentinel row would force every book to carry
+ *    a fiction and every report to special-case it.
+ *
+ * 2. **On the LINE, not the journal.** One purchase can split across two sites;
+ *    a journal-level column could not express that without a second journal,
+ *    which would misstate the document trail to satisfy a reporting dimension.
+ *
+ * 3. **`staged_rows` gets it too.** Otherwise the document path — the app's
+ *    primary way of getting entries into the books — could never set one, and
+ *    "threaded through both posting paths" would be true only on paper.
+ *
+ * No FK on either ALTERed column: SQLite's ALTER TABLE ADD COLUMN cannot carry
+ * a REFERENCES clause, the same documented asymmetry migrations 001 and 005
+ * carry. Cost centres are archived, never deleted (the house rule), so a
+ * dangling id cannot arise from this app.
+ */
+const costCentres: Migration = {
+  version: 6,
+  name: "cost_centres: which part of the business earned or spent it",
+  up: (db: Database.Database) => {
+    db.exec(`
+      CREATE TABLE cost_centres (
+        id          INTEGER PRIMARY KEY,
+        company_id  INTEGER NOT NULL REFERENCES companies(id),
+        -- Short and stable: what a budget line, an MIS column header and a CSV
+        -- export are keyed by. The name can be re-worded; the code should not.
+        code        TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        -- Archive, never delete — journals already point at it.
+        archived_at TEXT,
+        created_at  TEXT NOT NULL,
+        UNIQUE (company_id, code)
+      );
+      CREATE INDEX idx_cost_centres_company ON cost_centres(company_id);
+    `);
+
+    db.exec(`ALTER TABLE journal_lines ADD COLUMN cost_centre_id INTEGER`);
+    // Partial: the great majority of lines carry no cost centre, and an index
+    // over those NULLs would be mostly dead weight on every insert.
+    db.exec(`
+      CREATE INDEX idx_journal_lines_cost_centre
+        ON journal_lines(company_id, cost_centre_id)
+        WHERE cost_centre_id IS NOT NULL
+    `);
+
+    db.exec(`ALTER TABLE staged_rows ADD COLUMN cost_centre_id INTEGER`);
+  },
+};
+
 export const MIGRATIONS: Migration[] = [
   companies,
   sessionCompany,
   dropSettings,
   bankAccounts,
   attributionAndRoles,
+  costCentres,
 ];

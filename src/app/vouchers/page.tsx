@@ -1,5 +1,6 @@
 import { VoucherForm } from "@/components/voucher-form";
 import { listBankAccounts } from "@/lib/bank-accounts";
+import { listCostCentres } from "@/lib/cost-centres";
 import { getCompany } from "@/lib/companies";
 import { formatDate, inr, todayIso } from "@/lib/format";
 import { KEY_HINTS, type VoucherNavKind } from "@/lib/keymap";
@@ -65,6 +66,13 @@ export default async function VouchersPage({
     kind: ba.kind,
     account_code: ba.account_code,
   }));
+  // Active only — an archived centre must not be offered for a fresh entry
+  // (postManualVoucher refuses one anyway; this is so the list never lies).
+  const costCentres = listCostCentres(book).map((cc) => ({
+    id: cc.id,
+    code: cc.code,
+    name: cc.name,
+  }));
   const recent = book.all(
     `SELECT j.id, j.entry_date, j.entry_type, j.memo, j.ref_no,
             (SELECT SUM(debit_paise) FROM journal_lines
@@ -94,6 +102,7 @@ export default async function VouchersPage({
           accounts={accounts}
           canPost={userCan(user, "entry.post")}
           bankAccounts={bankAccounts}
+          costCentres={costCentres}
           today={todayIso()}
           defaultGstRate={settings.default_gst_rate}
           postedId={postedId}

@@ -25,6 +25,11 @@ import {
   renameBankAccount,
   setDefaultBankAccount,
 } from "./bank-accounts";
+import {
+  archiveCostCentre,
+  createCostCentre,
+  renameCostCentre,
+} from "./cost-centres";
 import { getDb, seedAccountsForCompany, UPLOADS_DIR } from "./db";
 import { readSessionToken } from "./session";
 import { createStaff, listStaff, setStaffRole } from "./staff";
@@ -93,6 +98,22 @@ function formBankAccountId(formData: FormData, field: string): number {
   return v;
 }
 
+/** An optional cost centre id (RVOS-006 P0c). Blank is the normal answer, so
+ * "" and absent both mean null; OWNERSHIP is checked by the posting path
+ * through the Book handle, which scopes the lookup. */
+function optionalCostCentreId(v: unknown, label: string): number | null {
+  if (v === null || v === undefined || v === "" || v === 0) return null;
+  const n = typeof v === "string" ? Number(v) : v;
+  if (typeof n !== "number" || !Number.isInteger(n) || n <= 0) {
+    throw new Error(`${label}: invalid cost centre`);
+  }
+  return n;
+}
+
+function formCostCentreId(formData: FormData, field: string): number | null {
+  return optionalCostCentreId(formData.get(field), "cost centre");
+}
+
 function parseDraftRows(rowsJson: string): DraftRowInput[] {
   const parsed: unknown = JSON.parse(rowsJson);
   if (!Array.isArray(parsed)) throw new Error("rows payload must be an array");
@@ -136,6 +157,7 @@ function parseDraftRows(rowsJson: string): DraftRowInput[] {
       entry_type: r.entry_type as EntryType,
       gst_rate,
       bank_account_id: bankAccountId(r.bank_account_id, label),
+      cost_centre_id: optionalCostCentreId(r.cost_centre_id, label),
       include: r.include === true,
     };
   });
@@ -371,6 +393,10 @@ export async function renameAccount(formData: FormData): Promise<void> {
   redirect("/settings/accounts");
 }
 
+/** The structured kinds that settle through a cash/bank account — the same set
+ * `voucher-form.tsx` renders the "Settled via" select for. */
+const SETTLE_KINDS = new Set<StructuredKind>(["receipt", "payment"]);
+
 const STRUCTURED_KINDS: StructuredKind[] = [
   "sale",
   "purchase",
@@ -442,6 +468,7 @@ export async function createVoucher(formData: FormData): Promise<void> {
       memo,
       ref_no,
       legs: parseVoucherLegs(String(formData.get("legs") ?? "[]")),
+      cost_centre_id: formCostCentreId(formData, "cost_centre_id"),
     };
   } else if (STRUCTURED_KINDS.includes(kind as StructuredKind)) {
     const party_id = Number(formData.get("party_id"));
@@ -465,7 +492,15 @@ export async function createVoucher(formData: FormData): Promise<void> {
       party_id,
       amount_paise: amount(),
       gst_rate,
-      bank_account_id: formBankAccountId(formData, "bank_account_id"),
+      // Only receipt and payment carry this field on the form — they are the
+      // kinds that move money. Demanding it for every structured kind is what
+      // made manual sales, purchases and notes un-postable after P0a: the
+      // select was never rendered for them, so the action read nothing and
+      // threw "Pick a cash or bank account" on a voucher with no such field.
+      bank_account_id: SETTLE_KINDS.has(kind as StructuredKind)
+        ? formBankAccountId(formData, "bank_account_id")
+        : null,
+      cost_centre_id: formCostCentreId(formData, "cost_centre_id"),
     };
   } else {
     throw new Error("Unknown voucher kind.");
@@ -847,6 +882,7 @@ export async function createTdsVoucher(formData: FormData): Promise<void> {
     section,
     use_alt: formData.get("use_alt") === "on",
     bank_account_id: formBankAccountId(formData, "bank_account_id"),
+    cost_centre_id: formCostCentreId(formData, "cost_centre_id"),
     tds_paise_override,
   });
   revalidatePath("/tax/tds");
@@ -1119,6 +1155,39 @@ export async function archiveBankAccountAction(formData: FormData): Promise<void
   archiveBankAccount(book, Number(formData.get("id")), new Date().toISOString());
   revalidatePath("/settings/bank-accounts");
   redirect("/settings/bank-accounts");
+}
+
+// ---------------------------------------------------------------------------
+// Cost centres — RVOS-006 P0c
+// ---------------------------------------------------------------------------
+//
+// `accounts.manage`, the same capability as the chart of accounts and the bank
+// accounts: a cost centre is a reporting dimension of the books, so an
+// accountant shapes it and a clerk tags entries with it but cannot invent one.
+
+export async function createCostCentreAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook("accounts.manage");
+  createCostCentre(book, {
+    name: String(formData.get("name") ?? ""),
+    code: String(formData.get("code") ?? ""),
+  });
+  revalidatePath("/settings/cost-centres");
+  revalidatePath("/vouchers");
+  redirect("/settings/cost-centres");
+}
+
+export async function renameCostCentreAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook("accounts.manage");
+  renameCostCentre(book, Number(formData.get("id")), String(formData.get("name") ?? ""));
+  revalidatePath("/settings/cost-centres");
+  redirect("/settings/cost-centres");
+}
+
+export async function archiveCostCentreAction(formData: FormData): Promise<void> {
+  const { book } = await requireBook("accounts.manage");
+  archiveCostCentre(book, Number(formData.get("id")), new Date().toISOString());
+  revalidatePath("/settings/cost-centres");
+  redirect("/settings/cost-centres");
 }
 
 // ---------------------------------------------------------------------------

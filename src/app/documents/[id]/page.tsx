@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { deleteDocument, runExtraction } from "@/lib/actions";
 import { listBankAccounts } from "@/lib/bank-accounts";
+import { listCostCentres } from "@/lib/cost-centres";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { LedgerImage } from "@/components/ledger-image";
 import { ReviewTable } from "@/components/review-table";
@@ -40,6 +41,12 @@ export default async function DocumentReviewPage({
   const bankAccounts = listBankAccounts(book).map((ba) => ({
     id: ba.id,
     name: ba.name,
+  }));
+  // Same rule for the cost-centre column (RVOS-006 P0c): active ones only.
+  const costCentres = listCostCentres(book).map((cc) => ({
+    id: cc.id,
+    code: cc.code,
+    name: cc.name,
   }));
   // Imports carry a party per row — the review grid shows who each row books to.
   const partyNames = isPhoto
@@ -193,6 +200,7 @@ export default async function DocumentReviewPage({
               readOnly={doc.status === "posted"}
               canPost={userCan(user, "entry.post")}
               bankAccounts={bankAccounts}
+              costCentres={costCentres}
               partyNames={partyNames}
               defaultPartyName={isPhoto ? undefined : doc.party_name}
             />

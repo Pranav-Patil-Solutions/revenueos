@@ -24,6 +24,20 @@ const ENTRY_TYPES: EntryType[] = [
 ];
 const RATES = ["", "0", "5", "12", "18", "28"];
 
+/**
+ * Row types with an income or expense leg — the only ones a cost centre can
+ * reach (RVOS-006 P0c). A receipt, payment or opening row moves money between
+ * control, settlement and equity accounts, so the posting engine would drop a
+ * centre chosen on one; the cell is disabled there rather than accepting a
+ * choice that silently goes nowhere. See `stampCostCentre` in posting.ts.
+ */
+const COST_CENTRE_TYPES = new Set<EntryType>([
+  "sale",
+  "purchase",
+  "credit_note",
+  "debit_note",
+]);
+
 interface EditRow {
   id: number;
   row_no: number;
@@ -36,6 +50,7 @@ interface EditRow {
   entry_type: EntryType;
   gst_rate: string; // "" = null
   bank_account_id: number;
+  cost_centre_id: number | null;
   include: boolean;
   confidence: number;
   is_balance_row: boolean;
@@ -71,6 +86,7 @@ export function ReviewTable({
   readOnly,
   canPost,
   bankAccounts,
+  costCentres,
   partyNames,
   defaultPartyName,
 }: {
@@ -89,6 +105,9 @@ export function ReviewTable({
    * Ingestion resolved a coarse cash-vs-bank hint to a default; this is where a
    * human corrects it to the account the money actually moved through. */
   bankAccounts: { id: number; name: string }[];
+  /** The book's active cost centres (RVOS-006 P0c). Empty for a book that does
+   * not use the dimension, in which case the column is not rendered at all. */
+  costCentres: { id: number; code: string; name: string }[];
   /** id → name for the per-row party column (imports only). The column is
    * hidden when absent, keeping the photo path's layout untouched. */
   partyNames?: Record<number, string>;
@@ -99,6 +118,9 @@ export function ReviewTable({
   // is a client component and the account set is small and already loaded.
   const bankAccountName = (id: number): string =>
     bankAccounts.find((ba) => ba.id === id)?.name ?? "—";
+  const showCostCentre = costCentres.length > 0;
+  const costCentreCode = (id: number | null): string =>
+    id === null ? "—" : costCentres.find((cc) => cc.id === id)?.code ?? "—";
   const [edit, setEdit] = useState<EditRow[]>(() =>
     rows.map((r) => ({
       id: r.id,
@@ -112,6 +134,7 @@ export function ReviewTable({
       entry_type: r.entry_type,
       gst_rate: r.gst_rate === null ? "" : String(r.gst_rate),
       bank_account_id: r.bank_account_id,
+      cost_centre_id: r.cost_centre_id,
       include: r.include === 1,
       confidence: r.confidence,
       is_balance_row: r.is_balance_row === 1,
@@ -187,6 +210,7 @@ export function ReviewTable({
         entry_type: r.entry_type,
         gst_rate: r.gst_rate === "" ? null : Number(r.gst_rate),
         bank_account_id: r.bank_account_id,
+        cost_centre_id: r.cost_centre_id,
         include: r.include,
       }))
     );
@@ -260,7 +284,17 @@ export function ReviewTable({
         </div>
       )}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[920px] text-left text-[12.5px]">
+        {/* The centre column is only 76px, but the grid was ALREADY at its
+            920px floor in the review layout's ~700px pane, so adding one
+            column crushed "Type" and "Via" into truncated selects rather than
+            widening anything. The floor rises only when the column is
+            actually rendered, so a book that does not use cost centres keeps
+            exactly the scroll distance it had. */}
+        <table
+          className={`w-full text-left text-[12.5px] ${
+            showCostCentre ? "min-w-[1010px]" : "min-w-[920px]"
+          }`}
+        >
           <thead>
             <tr className="border-b border-hairline text-[11.5px] uppercase tracking-wide text-ink-3">
               <th className="px-3 py-3 font-medium">#</th>
@@ -273,6 +307,7 @@ export function ReviewTable({
               <th className="px-2 py-3 font-medium">Type</th>
               <th className="px-2 py-3 font-medium">GST</th>
               <th className="px-2 py-3 font-medium">Via</th>
+              {showCostCentre && <th className="px-2 py-3 font-medium">Centre</th>}
               <th className="px-2 py-3 font-medium">Conf</th>
               <th className="px-3 py-3 text-center font-medium">Post</th>
             </tr>
@@ -303,6 +338,11 @@ export function ReviewTable({
                     <td className="px-2 py-1.5">
                       {bankAccountName(r.bank_account_id)}
                     </td>
+                    {showCostCentre && (
+                      <td className="px-2 py-1.5">
+                        {costCentreCode(r.cost_centre_id)}
+                      </td>
+                    )}
                   </>
                 ) : (
                   <>
@@ -359,7 +399,18 @@ export function ReviewTable({
                     <td className="px-1 py-1">
                       <select
                         value={r.entry_type}
-                        onChange={(e) => set(i, { entry_type: e.target.value as EntryType })}
+                        onChange={(e) => {
+                          const entry_type = e.target.value as EntryType;
+                          // Drop a centre the new type cannot carry, rather
+                          // than saving one on the staged row that posting
+                          // would silently discard.
+                          set(i, {
+                            entry_type,
+                            ...(COST_CENTRE_TYPES.has(entry_type)
+                              ? {}
+                              : { cost_centre_id: null }),
+                          });
+                        }}
                         className={`${cellInput} w-28`}
                       >
                         {ENTRY_TYPES.map((t) => (
@@ -397,6 +448,34 @@ export function ReviewTable({
                         ))}
                       </select>
                     </td>
+                    {showCostCentre && (
+                      <td className="px-1 py-1">
+                        <select
+                          aria-label={`Row ${r.row_no} cost centre`}
+                          value={r.cost_centre_id ?? ""}
+                          disabled={!COST_CENTRE_TYPES.has(r.entry_type)}
+                          title={
+                            COST_CENTRE_TYPES.has(r.entry_type)
+                              ? undefined
+                              : "Only sales, purchases and notes have an income or expense leg to attribute."
+                          }
+                          onChange={(e) =>
+                            set(i, {
+                              cost_centre_id:
+                                e.target.value === "" ? null : Number(e.target.value),
+                            })
+                          }
+                          className={`${cellInput} w-24 disabled:opacity-40`}
+                        >
+                          <option value="">—</option>
+                          {costCentres.map((cc) => (
+                            <option key={cc.id} value={cc.id}>
+                              {cc.code}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    )}
                   </>
                 )}
                 <td className="px-2 py-1.5">
@@ -424,7 +503,7 @@ export function ReviewTable({
               </td>
               <td className="px-2 py-3 text-right">{inr(totals.dr)}</td>
               <td className="px-2 py-3 text-right">{inr(totals.cr)}</td>
-              <td colSpan={5} />
+              <td colSpan={showCostCentre ? 6 : 5} />
             </tr>
           </tfoot>
         </table>

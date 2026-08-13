@@ -488,6 +488,7 @@ test("end-to-end: parse → map → stage (frozen CHECK holds) → post → TB z
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: r.include === 1,
   }));
   const { journals } = postDocument(book(db, 1), 1, drafts);

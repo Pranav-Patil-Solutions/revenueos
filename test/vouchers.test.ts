@@ -31,6 +31,61 @@ function legsOf(db: Database.Database, journalId: number) {
   }[];
 }
 
+/**
+ * Regression — found in a browser, not by any gate here (RVOS-006 P0c).
+ *
+ * P0a replaced a lenient `settle_account` parse (a missing field silently
+ * defaulted to 'cash') with one that DEMANDS a `bank_account_id` for every
+ * structured voucher. But the form only renders that select for receipt and
+ * payment, because those are the only kinds that settle through an account —
+ * so from P0a until this fix, every manual sale, purchase, credit note and
+ * debit note threw "Pick a cash or bank account for this voucher" and could
+ * not be posted at all.
+ *
+ * No unit test could see it: they all pass a real id straight to
+ * postManualVoucher, and the smoke's manual legs are journal/contra kinds. The
+ * defect lived in the seam between the form and the action. These two tests
+ * pin both halves of the rule.
+ */
+test("a sale, purchase or note posts with NO settlement account — they settle nothing", () => {
+  const db = postedDb();
+  const b = book(db, 1);
+  const before = journalCount(db);
+  const { journalId } = postManualVoucher(b, {
+    kind: "sale",
+    entry_date: "2026-07-21",
+    memo: "Credit sale",
+    ref_no: "MV-NOBANK",
+    party_id: 1,
+    amount_paise: 118_000,
+    gst_rate: 18,
+    bank_account_id: null,
+  });
+  assert.equal(journalCount(db), before + 1);
+  const codes = legsOf(db, journalId).map((l) => l.code);
+  assert.deepEqual(codes, ["1200", "4000", "2200", "2210"]);
+  assert.equal(trialBalance(b).balanced, true);
+});
+
+test("a receipt without a settlement account is refused, naming what is missing", () => {
+  const db = postedDb();
+  assert.throws(
+    () =>
+      postManualVoucher(book(db, 1), {
+        kind: "receipt",
+        entry_date: "2026-07-21",
+        memo: "Cash in",
+        ref_no: "MV-R",
+        party_id: 1,
+        amount_paise: 50_000,
+        gst_rate: null,
+        bank_account_id: null,
+      }),
+    /receipt needs the cash or bank account/
+  );
+  assert.equal(journalCount(db), 9, "the refusal left the books untouched");
+});
+
 test("structured sale voucher posts exactly buildLegs' output", () => {
   const db = postedDb();
   const b = book(db, 1);

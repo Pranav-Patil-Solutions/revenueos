@@ -27,6 +27,11 @@ interface BankAccountOption {
   kind: BankAccountKind;
   account_code: string;
 }
+interface CostCentreOption {
+  id: number;
+  code: string;
+  name: string;
+}
 
 const KIND_TABS: { kind: VoucherNavKind; label: string; fkey: string }[] = [
   { kind: "contra", label: "Contra", fkey: "F4" },
@@ -42,6 +47,20 @@ const KIND_TABS: { kind: VoucherNavKind; label: string; fkey: string }[] = [
 const CUSTOMER_KINDS = new Set(["sale", "receipt", "credit_note"]);
 const GST_KINDS = new Set(["sale", "purchase", "credit_note", "debit_note"]);
 const SETTLE_KINDS = new Set(["receipt", "payment"]);
+/**
+ * Which voucher kinds may carry a cost centre (RVOS-006 P0c) — exactly those
+ * with an income or expense leg for it to land on. A receipt, payment or contra
+ * moves money between the book's own accounts and a control account; offering a
+ * cost centre there would accept a choice the posting engine then drops, which
+ * is worse than not offering it. See `stampCostCentre` in posting.ts.
+ */
+const COST_CENTRE_KINDS = new Set([
+  "sale",
+  "purchase",
+  "credit_note",
+  "debit_note",
+  "journal",
+]);
 
 const field =
   "w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -68,6 +87,7 @@ export function VoucherForm({
   accounts,
   canPost,
   bankAccounts,
+  costCentres,
   today,
   defaultGstRate,
   postedId,
@@ -87,6 +107,10 @@ export function VoucherForm({
    * now move money bank→bank, not just cash↔bank, so both ends of a contra and
    * every settlement pick from this list. */
   bankAccounts: BankAccountOption[];
+  /** The book's active cost centres (RVOS-006 P0c). Empty is the normal state
+   * for a book that does not use the dimension — the field then does not
+   * render at all rather than showing an empty select. */
+  costCentres: CostCentreOption[];
   today: string;
   defaultGstRate: number;
   postedId: number | null;
@@ -118,6 +142,24 @@ export function VoucherForm({
   );
   const bankFirstId = String(
     (bankAccounts.find((ba) => ba.kind === "bank") ?? bankAccounts[0])?.id ?? ""
+  );
+  const showCostCentre = costCentres.length > 0 && COST_CENTRE_KINDS.has(kind);
+  // Blank is the default and a legitimate answer: most entries belong to the
+  // business as a whole, so nothing is pre-selected.
+  const costCentreField = (
+    <div>
+      <label className={label} htmlFor="v-cc">
+        Cost centre <span className="normal-case text-ink-3">(optional)</span>
+      </label>
+      <select id="v-cc" name="cost_centre_id" className={field} defaultValue="">
+        <option value="">— none —</option>
+        {costCentres.map((cc) => (
+          <option key={cc.id} value={cc.id}>
+            {cc.code} · {cc.name}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 
   const partyKind = CUSTOMER_KINDS.has(kind) ? "customer" : "supplier";
@@ -349,6 +391,7 @@ export function VoucherForm({
                   </select>
                 </div>
               )}
+              {showCostCentre && costCentreField}
             </div>
             {inlineParty && (
               <div className="mt-4 flex items-end gap-3 rounded-lg border border-accent/40 bg-accent-soft/40 p-3">
@@ -392,6 +435,14 @@ export function VoucherForm({
 
         {kind === "journal" && (
           <div className="mt-4">
+            {showCostCentre && (
+              <div className="mb-4 max-w-xs">
+                {costCentreField}
+                <p className="mt-1 text-[11.5px] text-ink-3">
+                  Applied to this voucher&apos;s income and expense legs only.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-[1fr_120px_120px_32px] gap-2 px-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3">
               <span>Account</span>
               <span className="text-right">Debit ₹</span>

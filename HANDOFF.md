@@ -10,145 +10,100 @@ GOTCHAS, `DEMO_MODE` does NOT sandbox the database.** Never point a dev server
 at `~/revenueos` as `cwd` for throwaway QA; use a genuinely separate directory.
 
 Branch: `feat/rvos-006-finance-foundation`, off `feat/companies-visual-redesign`
-@ `e4803d4` (that redesign is committed, not part of this branch's own work).
-`master` is further behind still (pre-multi-company) — not this ticket's problem.
+@ `e4803d4`. `master` is further behind still (pre-multi-company) — not this
+ticket's problem.
 
-## DONE (P0a — real bank accounts, RVOS-006 Stage 0)
+## STAGE 0 IS COMPLETE — P0a, P0b, P0c all committed
 
-**Committed.** Ship gate closed: `code-reviewer` returned 0 blockers + 2
-warnings (both fixed, see below); `qa-runner` added two multi-account posting
-tests before being cut off by an API session limit, so the remainder of its
-sweep was completed directly instead of re-dispatching an agent.
+Stage 0 was the three foundations that rewrite columns every later phase writes
+to. All three are in. Details of P0a (bank accounts) and P0b (attribution,
+roles, audit log) are in EVOLUTION #38–#43; they are done and browser-verified.
 
-Replaced the hardcoded `settle_account TEXT CHECK (IN ('cash','bank'))` enum
-— 58 call sites, exactly two ledger codes — with a real `bank_accounts` table
-(migration 004 in `src/lib/migrations.ts`), each account owning its own
-chart-of-accounts ledger. `staged_rows.settle_account` → `bank_account_id`.
+## DONE (P0c — cost centres, migration 006)
 
-- New `src/lib/bank-accounts.ts`: `listBankAccounts`, `createBankAccount`,
-  `renameBankAccount`, `setDefaultBankAccount`, `archiveBankAccount`,
-  `resolveSettleCode`, `defaultForHint`. Archive-only (house rule), refused on
-  the LAST account of a kind — a future import would have nowhere to resolve.
-- Ingestion paths (LLM photo, CSV template) still only produce a coarse
-  cash-vs-bank `SettleHint` — nothing upstream can know WHICH account a khata
-  line means — resolved at staging time via `defaultForHint`. **Tally is the
-  exception**: it names the real ledger a voucher settled through, so
-  `import-tally.ts` resolves an actual `bank_account_id` via
-  `MappedAccount.bank_account_id`, not a hint.
-- `buildLegs` (`posting.ts`) now takes a resolved ledger code as a 4th
-  argument instead of reading an enum — stays pure/testable.
-- `seedAccountsForCompany` (`db.ts`) now also wraps a NEW company's seeded
-  Cash/Bank in `bank_accounts` rows, so onboarding post-migration doesn't
-  strand a book with nothing to resolve to.
-- New `/settings/bank-accounts` page (add/rename/set-default/archive), wired
-  into voucher-form.tsx (contra + structured + TDS voucher selects) and
-  review-table.tsx (per-row account picker in the review grid).
-- Tests: `test/bank-accounts.test.ts` (new, 12 cases — isolation, defaults,
-  archive-refusal, ledger-naming) plus two `postDocument` cases proving three
-  rows on three different accounts each hit their OWN ledger, and that an
-  account archived between staging and posting still posts. **391/391 pass**,
-  tsc/eslint/build/smoke all green.
-- Real browser pass on an isolated scratch instance: created a second account
-  (ledger 1110), renamed it, made it default, archived the now-non-default
-  seeded "Bank", and confirmed the voucher "Settled via" list then showed
-  exactly `1110 …` + `1000 Cash` with the archived account absent. It caught a
-  layout defect no gate here could: the name `<input className="w-full">` in a
-  flex row collapsed to 18px (flex items default to `min-width:auto`), leaving
-  the name unreadable — fixed via `min-w-0 flex-1` + `shrink-0`, re-measured at
-  164px with no table overflow.
-- ~~Known verification gap: contra between two real bank accounts~~ **CLOSED**
-  — two tests added (bank→bank across two ledgers with totals provably
-  unchanged, plus cross-company refusal), mutation-tested to confirm they
-  actually catch a leg-collapse regression. **393/393 pass.**
-- Code-reviewer warnings fixed: (1) `applyDraftRows` now checks
-  `bank_account_id` OWNERSHIP via `getBankAccount` for every draft row, since
-  `saveDraft` never reaches `postDocument`'s scoped check and would otherwise
-  persist another company's account id; (2) the Tally fallback account is now
-  genuinely lazy (it was an IIFE that ran on every import).
-- `EVOLUTION.md` #38 written (includes the GOTCHA below — read it in full).
+**Committed.** 435/435 tests pass; tsc, eslint, `DEMO_MODE=1 npm run smoke` and
+`npm run build` all green. Full reasoning in EVOLUTION **#44**.
 
-## DONE (P0b — attribution, roles, audit log)
+- Migration 006: `cost_centres` (company-scoped, code UNIQUE per company,
+  archive-only) + nullable `journal_lines.cost_centre_id` and
+  `staged_rows.cost_centre_id`. `cost_centres` is in `SCOPED_TABLES`;
+  `exportCompany` carries it (verified by an actual export round trip, ids
+  preserved).
+- `src/lib/cost-centres.ts` — list/get/create/rename/archive, `codeFromName`,
+  `costCentreUsage`, and the two validators: `resolveCostCentre` (strict — for
+  a choice made NOW, refuses archived) vs `assertOwnedCostCentre` (ownership
+  only — for an id already saved on a staged row, so archiving a centre cannot
+  strand an already-reviewed document). Same split posting.ts uses for bank
+  accounts.
+- **The rule that keeps it small: a cost centre lands on income and expense
+  legs ONLY** (`stampCostCentre` in posting.ts). Tagging every leg would make
+  any later sum-by-centre report double-count the same rupee. Mutation-tested —
+  making the predicate always-true fails five tests.
+- Threaded through BOTH posting paths: `postDocument` (from the staged row) and
+  `postManualVoucher` / `postVoucherWithTds`. Receipt/payment/contra have no
+  eligible leg, so the UI does not offer the field there rather than accepting a
+  choice the engine discards.
+- Actions gated on `accounts.manage`, each writing an audit row inside its own
+  transaction. New `/settings/cost-centres` (add/rename/archive + a "Lines"
+  count so archiving is a decision made with its consequence visible), a
+  "Centre" column in the review grid (disabled on rows whose type has no P&L
+  leg), and selects on the voucher form + TDS voucher.
+- Smoke exercises it, posting AFTER the depreciation/computation legs have
+  pinned their FY figures (an earlier expense would shift them — same reason
+  the TDS leg posts in Q3).
 
-**Committed.** Migration 005: `journals.created_by`, `auth_users.role`
-(owner/accountant/clerk/viewer), append-only `audit_log`. 412/412 pass,
-tsc/eslint/smoke/build green. Full reasoning in EVOLUTION #39.
+### The real find: manual sales/purchases were un-postable since P0a
 
-- `src/lib/roles.ts` — capability matrix as pure data. `dal.ts` is the ONLY
-  enforcer (`requireBook(capability)`, `assertCan`, `userCan`).
-- The actor rides on the `Book` handle (`book(db, companyId, actorUserId)`), so
-  attribution flows from the session and no posting call site can forget it.
-  `null` = genuinely no signed-in user (migration/CLI/test), rendered as
-  "unknown", never backfilled to a guess.
-- `audit_log` append-only via SQL TRIGGERS; written INSIDE the posting
-  transaction so a rolled-back post leaves no row.
-- All 24 actions in actions.ts carry an explicit capability, and a new ratchet
-  in `test/route-guards.test.ts` fails if any future one omits it.
-- `src/lib/staff.ts` — listStaff/createStaff/setStaffRole, refusing to demote
-  the LAST owner (unrecoverable lockout: no reset email, no support channel).
+The browser pass caught a 500 on posting a **purchase** voucher: "Pick a cash
+or bank account for this voucher." P0a's strict `formBankAccountId` demanded a
+field the form only renders for receipt/payment, so **every manual sale,
+purchase, credit note and debit note has been un-postable from the voucher form
+since `1936ab7`** — invisible to every unit test (they pass an id straight to
+`postManualVoucher`) and to smoke (its manual legs are journal/contra kinds).
 
-**P0b UI — DONE (second commit).** 413/413 pass, browser-verified.
-- `/settings/staff` — add staff, change roles, role legend. Self-role is frozen
-  (you cannot demote yourself: undoing it needs the permission you'd give away)
-  and so is the last owner, each with the reason shown in the row.
-- `/settings/audit` — the trail, newest first, NULL actor rendered "unknown".
-- Audit now also covers company settings, books lock, and all four
-  bank-account mutations (written inside their existing transactions).
-- Settings nav gates the Staff card on `userCan(user, "users.manage")`, and the
-  page itself renders an owners-only panel rather than throwing a 500 — Next's
-  `forbidden()` is still behind the experimental `authInterrupts` flag, which
-  is not a trade worth making here.
-- Browser-verified with two real logins: a clerk sees no Staff card, gets the
-  refusal panel on direct navigation with NO staff data in the DOM, and can
-  still read the audit trail.
+Fixed at the rule, not the symptom: `buildLegs` now takes
+`settleCode: string | null` and refuses null only for the kinds that actually
+settle; the action passes null for the other four. Two regression tests in
+`test/vouchers.test.ts` pin both halves. **Take the lesson in EVOLUTION #44
+delta 2 into every later phase: when a lenient parse becomes strict, enumerate
+its callers by FORM FIELD, not by function signature.**
 
-**P0b leftovers — DONE (third commit).** 414/414 pass.
-- `createTdsChallan` now writes a `tds.challan` audit row, AND had a real P0a
-  hole fixed: its bank leg was a hardcoded `account_code: "1100"`, so every TDS
-  deposit appeared to leave the first bank account whichever one it came from.
-  It now takes a "Paid from" account. New ratchet in route-guards.test.ts fails
-  if any leg in actions.ts names ledger 1000/1100 inline again.
-- Post controls are role-gated: the review grid keeps "Save draft" for a clerk
-  (staging is their job, and reversible) and replaces "Save & post" with "An
-  accountant posts this to the books"; the voucher form disables Post with the
-  reason shown. Browser-verified with a valid amount filled, so the check is
-  role and not form validity: owner enabled, clerk still blocked.
+## Verified in a real browser (isolated scratch instance)
 
-**Role-gating COMPLETE (fourth commit).** 415/415 pass.
-Every privileged control across the app is now gated, verified per role in a
-browser: on /compliance, /settings/accounts, /settings/bank-accounts,
-/tax/computation and /tax/depreciation an owner has every submit enabled and a
-clerk has exactly ONE — "Sign out", which must stay enabled for everyone.
+Scratch at `~/rvos-p0c-scratch` (copied `src` + copied `node_modules`, its own
+`data/`), Playwright, owner and clerk logins. Delete it when you no longer want
+it — it is ~480MB and NOT gitignored anywhere useful.
 
-The ratchet in route-guards.test.ts now covers ALL privileged capabilities
-(entry.post, accounts.manage, company.manage, users.manage), not just posting —
-it was the narrow version that hid "Add asset"/"Dispose" being offered to
-clerks. It reads the capability per action out of actions.ts, so a new
-privileged action is covered without touching the test.
+- Added/renamed/archived a centre through the real forms; duplicate code refused
+  as a sentence; audit rows written with the owner as actor.
+- Posted a purchase with a centre: `5000` expense leg carries it, `1300` ITC and
+  `2100` AP do not. Verified in the DB, not in the UI.
+- Review grid: tagged a sale row, saved the draft, reloaded, tag persisted.
+  Cells disabled on `opening/receipt/payment/other` rows, enabled on
+  `sale/purchase/credit_note`.
+- Clerk: every submit on `/settings/cost-centres` disabled, keeps "Save draft"
+  and no "Save & post", still sees the settings card (same as the chart of
+  accounts — read-only, not hidden).
 
-## DONE (extras, committed 4394759)
+## OPEN / next
 
-- **`npm run reset-password`** — the lockout escape hatch DAY-ONE §1 documents.
-  `changePassword` had had no caller at all. Verified by RUNNING it against a
-  scratch copy through a pseudo-terminal (it refuses a piped password by
-  design): backup-then-write, NULL-actor audit row, old password refused and
-  new one accepted afterwards.
-- **layout.tsx sidebar boot script** — was `<Script beforeInteractive>`, whose
-  inline branch defers through `self.__next_s` until after the document is up,
-  so the no-flash snippet ran after the flash. Now a plain `<script>` from a
-  Server Component. Verified: `dataset.sidebar` is "rail" at DOMContentLoaded
-  and the sidebar measures 72px on every sampled frame, never 310.
-
-## NEXT UP: P0c — cost centres (migration 006)
-
-Nothing is broken; this is forward work. The shape, from the plan:
-- `cost_centres` table (company-scoped → add to `SCOPED_TABLES`), archive-only.
-- Nullable `journal_lines.cost_centre_id`, threaded through BOTH posting paths
-  (`postDocument` in posting.ts, `postManualVoucher`/`postVoucherWithTds` in
-  vouchers.ts) NOW, while there are only two — after payroll there will be five.
-- It is nullable on purpose: most lines have no cost centre, and P15's budgets
-  slice by it, so the dimension must exist before Stage 1 writes journals.
-- Same standing rules: SCOPED_TABLES + isolation test, capability on any new
-  action (`accounts.manage` fits), audit the mutations, ship gate, EVOLUTION.
+- **Ship-gate agents not run for P0c** — the mechanical gate (tsc, eslint,
+  tests, smoke, build) is green and the browser pass is done, but
+  `code-reviewer` and `qa-runner` were not dispatched this session. Run both
+  against the P0c commit before treating Stage 0 as closed.
+- **Stage 0 end-to-end check from the plan** (§Verification) is only partly
+  done: two bank accounts + petty cash posting independently, and the
+  balance-sheet listing them separately, has not been re-run since P0a.
+- Review grid needs horizontal scrolling in the photo-review pane (~700px
+  wide, table floor now 1010px with the centre column, 920px without). It was
+  already scrolling before P0c. If it starts to annoy, the fix is the document
+  page's `lg:grid-cols-[minmax(260px,340px)_1fr]`, not the table.
+- **NEXT PHASE: Stage 1, P1 — bill-wise allocation** (`src/lib/bills.ts`,
+  migration 007). `bills` written INSIDE the existing posting transactions — no
+  third posting path — plus `bill_allocations`, `assertAllocationSane`'s two
+  guards, and a backfill of bills for existing sale/purchase/opening journals so
+  aging works on the real book. Then P2 (aging/bank rec/account ledger), P3
+  (items), P4 (orders — never post), P5 (conversion), P6 (print).
 
 ## GOTCHA — read before touching the dev server again
 
@@ -156,38 +111,36 @@ Nothing is broken; this is forward work. The shape, from the plan:
 (`db.ts` resolves it from `process.cwd()`). Running `npm run dev` from
 `~/revenueos` itself, even with `DEMO_MODE=1`, boots against the REAL
 `data/revenueos.db` and runs any pending migration on it in-process with no
-pre-migration backup — this happened once already this session (migration
-004 applied to the live ledger by accident; verified intact afterward —
-integrity_check ok, fk_check clean, journal balance 0 paise, all 48 staged
-rows mapped). A snapshot dated ~2 min AFTER the migration exists at
-`data/backups/revenueos-20260810-114804`; the genuine pre-004 rollback point
-is the older `revenueos-20260808-005733`. Full account in EVOLUTION #38.
+pre-migration backup.
 
-**For any future "let me just check this in a browser":** use a fully
-separate directory, real `npm ci` install there, `src`/config files COPIED
-not symlinked (Turbopack's root-escape check rejects a symlinked `src` or
-config file even though a symlinked `node_modules` is fine). Mint a session
-directly via `createSession()`, never touch `data/revenueos.db`.
+**This session:** a dev server from a PREVIOUS session was found still running
+with `cwd = ~/revenueos` (`next dev -p 3322 -p 3323`), serving page loads
+against the live book. A fresh backup was taken before migration 006 was
+written — `data/backups/revenueos-20260812-224657`, sha256 `e9c0f5e5…` — and
+the live db was still at migration 005 when last checked, so 006 has NOT been
+applied to it. Migration 006 is purely additive, but **stop that server before
+booting anything else against the repo**.
 
-## NEXT (in order — see the plan file for full detail per phase)
+The genuine pre-004 rollback point is `revenueos-20260808-005733`. Full account
+of the earlier 004-on-the-live-ledger incident in EVOLUTION #38.
 
-- **Finish P0b's UI** — the four items under "REMAINING P0b work" above.
-- **P0c** — cost centres (migration 006). Nullable `journal_lines.cost_centre_id`,
-  threaded through both posting paths now so every later phase writes it
-  natively.
-- Then Stage 1 (P1–P6, bill-wise/aging/items/orders — the original RVOS-006
-  ask), Stage 2 (P7–P11, treasury/void/disposal), Stage 3 (P12–P14, GSTR-2B/
-  ITC recon), Stage 4 (P15–P16, budgets/MIS), Stage 5 (P17–P20, payroll).
+**For any future "let me just check this in a browser":** use a fully separate
+directory. Turbopack rejects a SYMLINKED `node_modules` ("points out of the
+filesystem root") — copy it, or `npm ci` there; `src` and config files must be
+copied, not symlinked, either way. Mint a session directly via `createSession()`
+and never touch `data/revenueos.db`.
 
 ## Standing rules for every remaining phase
 
 - New table → `SCOPED_TABLES` in `book.ts` immediately + a cross-company
-  isolation test shaped like `test/import-isolation.test.ts` or the new
-  `test/bank-accounts.test.ts`.
+  isolation test shaped like `test/import-isolation.test.ts`,
+  `test/bank-accounts.test.ts` or `test/cost-centres.test.ts`.
 - `exportCompany` (`backup.ts`) iterates `SCOPED_TABLES` automatically — new
-  tables export for free, confirmed this phase. Still verify per phase.
+  tables export for free. Still verify per phase with a real round trip.
 - Ship gate per phase: tsc, eslint, `npm test`, `DEMO_MODE=1 npm run smoke`,
   `npm run build`, then code-reviewer + qa-runner, zero blockers both.
+- **A browser pass on any phase that touches a form.** Three phases, three
+  defects no other gate could see (EVOLUTION #38, #40, #44).
 - One `EVOLUTION.md` entry per phase, or an explicit "no failures."
 - Orders never post (P4) — pinning test required when that phase lands.
 - Rewrite THIS file at every phase boundary; hard-stop at ~60% context for a

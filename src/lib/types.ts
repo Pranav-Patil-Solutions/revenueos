@@ -113,6 +113,10 @@ export interface StagedRow {
   /** Which cash/bank/wallet account this settles through — resolved from a
    * `SettleHint` at staging time, overridable at review. */
   bank_account_id: number;
+  /** Which part of the business this row belongs to (RVOS-006 P0c). NULL is
+   * the normal case — ingestion never infers one, a human tags it at review,
+   * and it only reaches the books on an income or expense leg. */
+  cost_centre_id: number | null;
   confidence: number; // 0–1
   is_balance_row: number; // 0 | 1
   include: number; // 0 | 1
@@ -171,6 +175,7 @@ export interface DraftRowInput {
   entry_type: EntryType;
   gst_rate: number | null;
   bank_account_id: number;
+  cost_centre_id: number | null;
   include: boolean;
 }
 
@@ -294,6 +299,20 @@ export interface JournalLineRow {
   party_id: number | null;
   debit_paise: number;
   credit_paise: number;
+  /** The management-accounting dimension (RVOS-006 P0c). Set only on income
+   * and expense lines — see `stampCostCentre` in posting.ts for why a control
+   * or settlement leg must not carry one. */
+  cost_centre_id: number | null;
+}
+
+/** One cost centre: a part of the business a P&L line can be attributed to —
+ * a shop, a site, a division. Flat, not a hierarchy. */
+export interface CostCentreRow {
+  id: number;
+  code: string;
+  name: string;
+  archived_at: string | null;
+  created_at: string;
 }
 
 /** Auth (RVOS-003 P2). `locked_until` and `last_login_at` are ISO strings or

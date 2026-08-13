@@ -9,7 +9,9 @@ import {
   splitInclusive,
 } from "./tax/india-gst";
 import { assertNotLocked } from "./vouchers";
+import { assertOwnedCostCentre } from "./cost-centres";
 import type {
+  AccountType,
   CompanyRow,
   DocumentRow,
   DraftRowInput,
@@ -58,6 +60,48 @@ export interface Leg {
   partyId: number | null;
   debitPaise: number;
   creditPaise: number;
+  /** Set by `stampCostCentre`, never by leg construction — see its docstring.
+   * Absent and null mean the same thing: this line carries no cost centre. */
+  costCentreId?: number | null;
+}
+
+/**
+ * Where a cost centre may land — RVOS-006 P0c.
+ *
+ * A cost centre answers "which part of the business EARNED or CONSUMED this",
+ * so it belongs on income and expense lines and nowhere else. The alternative —
+ * tagging every leg of the voucher — reads as more information and is worse:
+ * a receipt's bank leg and its AR leg would both carry "Shop A", so any report
+ * that sums tagged lines would count the same rupee two or three times, and a
+ * budget-vs-actual built on it would be quietly wrong rather than visibly
+ * empty. The control accounts, GST accounts and settlement accounts are the
+ * book's plumbing; they belong to the business as a whole.
+ *
+ * Consequence worth stating: a receipt, payment or contra voucher has no
+ * income/expense leg at all, so a cost centre chosen on one has nowhere to go.
+ * The UI does not offer one there rather than accepting it and dropping it.
+ */
+export function acceptsCostCentre(type: AccountType): boolean {
+  return type === "income" || type === "expense";
+}
+
+/**
+ * Attach a cost centre to the legs that may carry one. Applied AFTER leg
+ * construction, in the two posting paths, because it needs each account's TYPE
+ * — which `buildLegs` deliberately does not know, so it can stay pure.
+ */
+export function stampCostCentre(
+  legs: Leg[],
+  costCentreId: number | null,
+  typeOf: (accountCode: string) => AccountType | undefined
+): Leg[] {
+  if (costCentreId === null) return legs;
+  return legs.map((l) => {
+    const type = typeOf(l.accountCode);
+    return type !== undefined && acceptsCostCentre(type)
+      ? { ...l, costCentreId }
+      : l;
+  });
 }
 
 function leg(
@@ -133,12 +177,20 @@ function outputTaxLegs(
  * `bank_account_id` — RVOS-006 P0a. It is passed in rather than looked up here
  * so this function stays pure and unit-testable, which is how the tax-split
  * arithmetic has always been verified.
+ *
+ * It is nullable because most kinds do not settle through anything: a credit
+ * sale moves AR against income, a purchase moves expense against AP, and
+ * nothing about them names a bank. Only receipt and payment do, and they say
+ * so here — loudly — rather than the caller being obliged to invent an account
+ * for a voucher that never touches one. (Before P0c this parameter was
+ * required, which made every manual sale, purchase and note un-postable from
+ * the voucher form; see EVOLUTION #40.)
  */
 export function buildLegs(
   row: PostableRow,
   party: PartyLike,
   settings: SettingsLike,
-  settleCode: string
+  settleCode: string | null
 ): Leg[] {
   const debit = row.debit_paise ?? 0;
   const credit = row.credit_paise ?? 0;
@@ -150,7 +202,17 @@ export function buildLegs(
   const G = debit > 0 ? debit : credit;
   const rate = row.gst_rate ?? settings.default_gst_rate;
   const interState = isInterState(party.state_code, settings.state_code);
-  const settle = settleCode;
+  /** The account money actually moved through — demanded only by the kinds
+   * that move money, and named in the error so the office knows what to fix. */
+  const settleAccount = (): string => {
+    if (settleCode === null) {
+      throw new Error(
+        `row ${row.row_no}: a ${row.entry_type} needs the cash or bank account ` +
+          `it settles through.`
+      );
+    }
+    return settleCode;
+  };
 
   switch (row.entry_type) {
     case "sale": {
@@ -171,7 +233,7 @@ export function buildLegs(
       ];
     }
     case "receipt":
-      return [leg(settle, "dr", G), leg(ACC.ar, "cr", G, party.id)];
+      return [leg(settleAccount(), "dr", G), leg(ACC.ar, "cr", G, party.id)];
     case "purchase": {
       const s = taxSplit(G, rate, settings);
       const legs = [leg(ACC.purchases, "dr", s.taxablePaise)];
@@ -188,7 +250,7 @@ export function buildLegs(
       return legs;
     }
     case "payment":
-      return [leg(ACC.ap, "dr", G, party.id), leg(settle, "cr", G)];
+      return [leg(ACC.ap, "dr", G, party.id), leg(settleAccount(), "cr", G)];
     case "opening": {
       // Control account by party kind; direction by which ledger column held
       // the amount; contra to Opening Balance Equity.
@@ -233,12 +295,16 @@ export function applyDraftRows(
         `row ${r.id}: that bank/cash account is not in this book.`
       );
     }
+    // Same reasoning as the bank account above: a draft is untrusted input the
+    // moment it is written, so a cross-company cost centre id is refused here
+    // rather than at posting time.
+    assertOwnedCostCentre(book, r.cost_centre_id);
     book.run(
       `UPDATE staged_rows SET
          entry_date = @entry_date, particulars = @particulars, ref_no = @ref_no,
          debit_paise = @debit_paise, credit_paise = @credit_paise,
          entry_type = @entry_type, gst_rate = @gst_rate, bank_account_id = @bank_account_id,
-         include = @include
+         cost_centre_id = @cost_centre_id, include = @include
        WHERE id = @id AND document_id = @docId AND company_id = @company_id`,
       {
         entry_date: r.entry_date,
@@ -249,6 +315,7 @@ export function applyDraftRows(
         entry_type: r.entry_type,
         gst_rate: r.gst_rate,
         bank_account_id: r.bank_account_id,
+        cost_centre_id: r.cost_centre_id,
         include: r.include ? 1 : 0,
         id: r.id,
         docId,
@@ -299,9 +366,11 @@ export function postDocument(
     };
     const settings = getCompany(b.db, b.companyId) as CompanyRow;
     const accounts = b.all(
-      "SELECT id, code FROM accounts WHERE company_id = @company_id"
-    ) as { id: number; code: string }[];
+      "SELECT id, code, type FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string; type: AccountType }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
+    // Type by code, for the cost-centre stamp — see stampCostCentre.
+    const accountType = new Map(accounts.map((a) => [a.code, a.type]));
 
     // bank_account_id → its ledger code, once for the whole document rather
     // than per row. Archived accounts ARE resolved here on purpose: archiving
@@ -345,11 +414,15 @@ export function postDocument(
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
       assertNotLocked(b, row.entry_date);
-      const legs = buildLegs(
-        row,
-        partyFor(row.party_id ?? doc.party_id),
-        settings,
-        settleCodeFor(row)
+      const legs = stampCostCentre(
+        buildLegs(
+          row,
+          partyFor(row.party_id ?? doc.party_id),
+          settings,
+          settleCodeFor(row)
+        ),
+        row.cost_centre_id,
+        (code) => accountType.get(code)
       );
       assertBalanced(legs);
       const journalId = b.run(
@@ -372,8 +445,8 @@ export function postDocument(
         if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
         b.run(
           `INSERT INTO journal_lines
-             (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-           VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+             (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise, cost_centre_id)
+           VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise, @costCentreId)`,
           {
             journalId,
             lineNo: i + 1,
@@ -381,6 +454,7 @@ export function postDocument(
             partyId: l.partyId,
             debitPaise: l.debitPaise,
             creditPaise: l.creditPaise,
+            costCentreId: l.costCentreId ?? null,
           }
         );
       });

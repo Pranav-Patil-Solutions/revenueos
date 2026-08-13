@@ -163,6 +163,21 @@ export default async function SettingsPage() {
       <div className="mt-4 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
+            <p className="text-[13.5px] font-semibold">Cost centres</p>
+            <p className="mt-0.5 text-[12.5px] text-ink-3">
+              The parts of the business — shops, sites, divisions — income and
+              spend can be attributed to. Optional.
+            </p>
+          </div>
+          <Link href="/settings/cost-centres" className="btn-quiet btn shrink-0">
+            Open
+          </Link>
+        </div>
+      </div>
+
+      <div className="mt-4 max-w-2xl rounded-xl border border-hairline bg-surface p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
             <p className="text-[13.5px] font-semibold">Audit trail</p>
             <p className="mt-0.5 text-[12.5px] text-ink-3">
               Who posted, locked or changed what on this book. Append-only.

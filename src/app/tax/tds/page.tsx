@@ -8,6 +8,7 @@ import { q24Summary, q26Summary, TDS_SECTIONS, tdsRegister } from "@/lib/tax/tds
 import type { PartyRow, TdsChallanRow } from "@/lib/types";
 import { requireBook, userCan } from "@/lib/dal";
 import { listBankAccounts } from "@/lib/bank-accounts";
+import { listCostCentres } from "@/lib/cost-centres";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,7 @@ export default async function TdsPage({
     "SELECT * FROM parties WHERE company_id = @company_id ORDER BY name COLLATE NOCASE"
   ) as PartyRow[];
   const bankAccounts = listBankAccounts(book);
+  const costCentres = listCostCentres(book);
   // A TDS-deducted bill is almost always paid by bank, so default there — but
   // fall back rather than render an empty select on a cash-only book.
   const defaultPayFrom = String(
@@ -167,6 +169,23 @@ export default async function TdsPage({
               ))}
             </select>
           </div>
+          {/* Only the expense leg of this voucher can carry it — the TDS
+              payable and bank legs are the book's plumbing (RVOS-006 P0c). */}
+          {costCentres.length > 0 && (
+            <div>
+              <label className="mb-1.5 block text-[12px] font-medium text-ink-3" htmlFor="tds-cc">
+                Cost centre
+              </label>
+              <select id="tds-cc" name="cost_centre_id" className={field} defaultValue="">
+                <option value="">— none —</option>
+                {costCentres.map((cc) => (
+                  <option key={cc.id} value={cc.id}>
+                    {cc.code} · {cc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label className="mb-1.5 block text-[12px] font-medium text-ink-3" htmlFor="tds-override">
               TDS ₹ override

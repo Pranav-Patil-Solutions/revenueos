@@ -2,10 +2,12 @@ import { writeAudit } from "./audit";
 import { resolveSettleCode } from "./bank-accounts";
 import type { Book } from "./book";
 import { getCompany } from "./companies";
-import { assertBalanced, buildLegs, type Leg } from "./posting";
+import { resolveCostCentre } from "./cost-centres";
+import { assertBalanced, buildLegs, stampCostCentre, type Leg } from "./posting";
 import { roundHalfUp } from "./tax/india-gst";
 import { computeTds, type TdsComputation } from "./tax/tds";
 import type {
+  AccountType,
   CompanyRow,
   JournalKind,
   PartyRow,
@@ -37,7 +39,18 @@ export interface StructuredVoucherInput {
   party_id: number;
   amount_paise: number; // gross (ledger column) amount
   gst_rate: number | null;
-  bank_account_id: number;
+  /**
+   * Required for `receipt` and `payment` — they move money and must name the
+   * account it moved through. NULL for the other four kinds, which settle
+   * nothing: a credit sale is AR against income and names no bank at all.
+   * `buildLegs` is what refuses a missing one, so the rule lives in exactly
+   * one place.
+   */
+  bank_account_id: number | null;
+  /** Which part of the business this belongs to (RVOS-006 P0c). Reaches only
+   * the income/expense leg — a sale's or purchase's — so receipt and payment
+   * kinds have nowhere to put one and the form does not offer it there. */
+  cost_centre_id?: number | null;
 }
 
 /** Contra moves money between two of the book's own accounts — since RVOS-006
@@ -70,6 +83,9 @@ export interface JournalVoucherInput {
    * still posting through the one audited journal path. journals.entry_type
    * has no CHECK; the frozen 8-value enum is staged_rows only. */
   entry_type?: JournalKind;
+  /** Applied to whichever legs are income or expense accounts; the rest of a
+   * free-form journal's legs are unaffected. */
+  cost_centre_id?: number | null;
 }
 
 export type VoucherInput =
@@ -199,7 +215,11 @@ function legsFor(book: Book, input: VoucherInput): Leg[] {
         row,
         party,
         settings,
-        resolveSettleCode(book, input.bank_account_id)
+        // Resolved when given (which validates ownership and that it is
+        // active), null when the kind does not settle through anything.
+        input.bank_account_id === null
+          ? null
+          : resolveSettleCode(book, input.bank_account_id)
       );
     }
   }
@@ -216,13 +236,23 @@ export function postManualVoucher(
   return book.tx((b): { journalId: number } => {
     assertDate(input.entry_date);
     assertNotLocked(b, input.entry_date);
-    const legs = legsFor(b, input);
-    assertBalanced(legs);
-
     const accounts = b.all(
-      "SELECT id, code FROM accounts WHERE company_id = @company_id"
-    ) as { id: number; code: string }[];
+      "SELECT id, code, type FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string; type: AccountType }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
+    const accountType = new Map(accounts.map((a) => [a.code, a.type]));
+
+    // A cost centre chosen on this voucher NOW, so the strict check: it must be
+    // in this book and still active. A contra has no such field — there is no
+    // income or expense leg on it to carry one.
+    const costCentreId = resolveCostCentre(
+      b,
+      input.kind === "contra" ? null : input.cost_centre_id ?? null
+    );
+    const legs = stampCostCentre(legsFor(b, input), costCentreId, (code) =>
+      accountType.get(code)
+    );
+    assertBalanced(legs);
 
     const journalId = b.run(
       `INSERT INTO journals
@@ -243,8 +273,8 @@ export function postManualVoucher(
       if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
       b.run(
         `INSERT INTO journal_lines
-           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise, cost_centre_id)
+         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise, @costCentreId)`,
         {
           journalId,
           lineNo: i + 1,
@@ -252,6 +282,7 @@ export function postManualVoucher(
           partyId: l.partyId,
           debitPaise: l.debitPaise,
           creditPaise: l.creditPaise,
+          costCentreId: l.costCentreId ?? null,
         }
       );
     });
@@ -294,6 +325,8 @@ export interface TdsVoucherInput {
   use_alt?: boolean;
   /** Which of the book's accounts the net payment leaves from. */
   bank_account_id: number;
+  /** Optional cost centre — lands on the expense leg only (RVOS-006 P0c). */
+  cost_centre_id?: number | null;
   /** For sections with no standard rate (salary), the office's own figure.
    * Ignored otherwise. */
   tds_paise_override?: number | null;
@@ -381,12 +414,20 @@ export function postVoucherWithTds(
         creditPaise: net,
       });
     }
-    assertBalanced(legs);
 
     const accounts = b.all(
-      "SELECT id, code FROM accounts WHERE company_id = @company_id"
-    ) as { id: number; code: string }[];
+      "SELECT id, code, type FROM accounts WHERE company_id = @company_id"
+    ) as { id: number; code: string; type: AccountType }[];
     const accountId = new Map(accounts.map((a) => [a.code, a.id]));
+    const accountType = new Map(accounts.map((a) => [a.code, a.type]));
+    // Only the expense leg can carry it: the TDS-payable and bank legs are the
+    // book's plumbing, not spend belonging to a part of the business.
+    const stamped = stampCostCentre(
+      legs,
+      resolveCostCentre(b, input.cost_centre_id ?? null),
+      (code) => accountType.get(code)
+    );
+    assertBalanced(stamped);
     const now = new Date().toISOString();
 
     const journalId = b.run(
@@ -402,13 +443,13 @@ export function postVoucherWithTds(
       }
     ).lastInsertRowid as number;
 
-    legs.forEach((l, i) => {
+    stamped.forEach((l, i) => {
       const acc = accountId.get(l.accountCode);
       if (!acc) throw new Error(`unknown account code ${l.accountCode}`);
       b.run(
         `INSERT INTO journal_lines
-           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise)
-         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise)`,
+           (company_id, journal_id, line_no, account_id, party_id, debit_paise, credit_paise, cost_centre_id)
+         VALUES (@company_id, @journalId, @lineNo, @accountId, @partyId, @debitPaise, @creditPaise, @costCentreId)`,
         {
           journalId,
           lineNo: i + 1,
@@ -416,6 +457,7 @@ export function postVoucherWithTds(
           partyId: l.partyId,
           debitPaise: l.debitPaise,
           creditPaise: l.creditPaise,
+          costCentreId: l.costCentreId ?? null,
         }
       );
     });

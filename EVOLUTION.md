@@ -1498,3 +1498,78 @@ running script. The pattern that keeps paying off in this programme is to make
 the check DISCRIMINATING — ask what the result would look like if the code were
 broken, and make sure the observation distinguishes the two. A session count
 could not; a session-to-username join could.
+
+
+## 44. Cost centres, and the un-postable voucher only a browser could see
+
+**P0c shipped the dimension** — `cost_centres`, nullable
+`journal_lines.cost_centre_id` and `staged_rows.cost_centre_id` (migration 006),
+threaded through both posting paths while there are still only two of them.
+Nothing failed in building it. What follows is what the phase's verification
+found, which is the part worth keeping.
+
+### The rule that made the feature small
+
+A cost centre is stamped on **income and expense legs only** (`stampCostCentre`
+in posting.ts). The tempting alternative — tag every leg of the voucher — reads
+as more information and is quietly wrong: a receipt's bank leg and its AR leg
+would both carry "Shop A", so any later report that sums tagged lines counts
+the same rupee two or three times. A budget-vs-actual built on that is wrong
+while looking plausible, which is the worst failure mode this book has.
+
+Consequence, stated rather than hidden: receipt, payment and contra vouchers
+have no leg that can carry one, so the form does not offer the field there.
+Accepting a choice the engine then discards is a lie told by a UI.
+
+Mutation-tested: making `acceptsCostCentre` return `true` for every type fails
+five tests, so the rule is actually pinned and not merely asserted.
+
+### The defect: manual sales and purchases have been un-postable since P0a
+
+Driving the real form in a browser (isolated scratch instance, never
+`data/revenueos.db`) produced a 500 on posting a purchase:
+**"Pick a cash or bank account for this voucher."**
+
+- P0a replaced a LENIENT parse — `settle_account === "bank" ? "bank" : "cash"`,
+  where a missing field silently meant cash — with `formBankAccountId`, which
+  throws when the field is absent.
+- But `voucher-form.tsx` only renders the "Settled via" select for `receipt`
+  and `payment`, because those are the only kinds that settle through an
+  account. So for `sale`, `purchase`, `credit_note` and `debit_note` the action
+  read nothing and threw, every time.
+- **Every manual sale, purchase, credit note and debit note has been
+  un-postable from the voucher form since commit `1936ab7`.**
+
+Why no gate here saw it: every unit test calls `postManualVoucher` directly
+with a real `bank_account_id`, and the smoke's manual legs are `journal` and
+`contra` kinds. The defect lived entirely in the seam between the FORM and the
+ACTION — a place where no test looked, and where `tsc` cannot look either,
+because a missing form field is a runtime absence, not a type error.
+
+Fixed properly rather than by rendering a field nobody needs: `buildLegs` now
+takes `settleCode: string | null` and REFUSES a null only for the kinds that
+settle (naming the row and the kind), and the action passes `null` for the
+other four. The rule now lives in exactly one place, next to the legs it
+governs. Two regression tests pin both halves.
+
+### Deltas applied this phase
+
+1. **A browser pass is not optional on any phase that touches a form.** P0a
+   caught a collapsed input this way, P0b caught ungated buttons, P0c caught a
+   core posting path that had been dead for two phases. Three for three: the
+   gate that finds these is a human-shaped path through the real UI, and it
+   finds a different class of defect from every automated gate combined.
+2. **When a lenient parse becomes a strict one, enumerate its callers by FORM
+   FIELD, not by function signature.** The P0a sweep was complete at the type
+   level and still missed this, because the caller that broke does not pass an
+   argument at all — it posts a form that lacks a field.
+3. **Adding a grid column means re-measuring the grid.** The review table was
+   already pinned at its `min-w-[920px]` floor inside a ~700px pane, so a new
+   column did not widen the table — it crushed "Type" and "Via" into truncated
+   selects. The floor now rises only when the column actually renders, so a
+   book with no cost centres keeps the exact scroll distance it had.
+4. Archiving rules are per-table decisions, not a house style to copy:
+   `archiveBankAccount` refuses to archive the last account of its kind because
+   ingestion must resolve a hint to one; `archiveCostCentre` allows it, because
+   nothing must resolve to a cost centre. Stated in both docstrings and pinned
+   by a test, so the difference reads as a decision rather than an oversight.

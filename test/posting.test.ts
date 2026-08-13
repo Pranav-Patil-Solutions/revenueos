@@ -228,6 +228,7 @@ function draftsFromStaged(db: Database.Database, excludeRowNos: number[] = []): 
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: excludeRowNos.includes(r.row_no) ? false : r.include === 1,
   }));
 }
@@ -336,6 +337,7 @@ test("postDocument: staged party_id overrides the doc party per row; NULL falls 
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: true,
   }));
   const { journals } = postDocument(b, 2, drafts);
@@ -414,6 +416,7 @@ test("postDocument: three rows on THREE different bank_account_ids each settle o
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: true,
   }));
   const { journals } = postDocument(b, 2, drafts);
@@ -467,6 +470,7 @@ test("postDocument: a bank_account_id archived AFTER staging but BEFORE posting 
     entry_type: r.entry_type,
     gst_rate: r.gst_rate,
     bank_account_id: r.bank_account_id,
+    cost_centre_id: r.cost_centre_id,
     include: true,
   }));
 
