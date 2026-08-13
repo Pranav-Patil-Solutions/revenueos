@@ -68,11 +68,11 @@ settle; the action passes null for the other four. Two regression tests in
 delta 2 into every later phase: when a lenient parse becomes strict, enumerate
 its callers by FORM FIELD, not by function signature.**
 
-## Verified in a real browser (isolated scratch instance)
+## Verified in a real browser (isolated scratch instance — since deleted)
 
-Scratch at `~/rvos-p0c-scratch` (copied `src` + copied `node_modules`, its own
-`data/`), Playwright, owner and clerk logins. Delete it when you no longer want
-it — it is ~480MB and NOT gitignored anywhere useful.
+Scratch was at `~/rvos-p0c-scratch` (copied `src` + copied `node_modules`, its
+own `data/`), driven with Playwright as both owner and clerk. Removed after the
+pass; rebuild it the same way for the next phase that touches a form.
 
 - Added/renamed/archived a centre through the real forms; duplicate code refused
   as a sentence; audit rows written with the owner as actor.
@@ -85,15 +85,28 @@ it — it is ~480MB and NOT gitignored anywhere useful.
   and no "Save & post", still sees the settings card (same as the chart of
   accounts — read-only, not hidden).
 
+## Stage 0 acceptance — PASSED (all five criteria from the plan §Verification)
+
+Run against the scratch instance with the app's own functions, not by reading
+the code:
+
+1. Two banks (`1110 HDFC Current`, `1120 ICICI OD`) plus `1010 Petty cash`
+   created alongside the seeded `1000`/`1100`.
+2. **They post independently** — a receipt into each, and each ledger holds
+   exactly its own amount (₹1,111 / ₹2,222 / ₹333), nothing pooled.
+3. **The balance sheet lists them separately** — one line per funded account,
+   no two sharing a line, BS balanced and TB zero. (The two seeded ledgers hold
+   no lines in that book and are correctly omitted as zeros.)
+4. A clerk is refused `entry.post`; an accountant holds it.
+5. **Every journal names its author** (7/7 attributed, no NULLs) and the audit
+   log carries real before→after pairs with the actor's username.
+
 ## OPEN / next
 
 - **Ship-gate agents not run for P0c** — the mechanical gate (tsc, eslint,
-  tests, smoke, build) is green and the browser pass is done, but
-  `code-reviewer` and `qa-runner` were not dispatched this session. Run both
-  against the P0c commit before treating Stage 0 as closed.
-- **Stage 0 end-to-end check from the plan** (§Verification) is only partly
-  done: two bank accounts + petty cash posting independently, and the
-  balance-sheet listing them separately, has not been re-run since P0a.
+  tests, smoke, build), the browser pass and Stage 0 acceptance are all green,
+  but `code-reviewer` and `qa-runner` were not dispatched. Run both against
+  `ade6656` before treating Stage 0 as fully closed.
 - Review grid needs horizontal scrolling in the photo-review pane (~700px
   wide, table floor now 1010px with the centre column, 920px without). It was
   already scrolling before P0c. If it starts to annoy, the fix is the document
@@ -116,10 +129,11 @@ pre-migration backup.
 **This session:** a dev server from a PREVIOUS session was found still running
 with `cwd = ~/revenueos` (`next dev -p 3322 -p 3323`), serving page loads
 against the live book. A fresh backup was taken before migration 006 was
-written — `data/backups/revenueos-20260812-224657`, sha256 `e9c0f5e5…` — and
-the live db was still at migration 005 when last checked, so 006 has NOT been
-applied to it. Migration 006 is purely additive, but **stop that server before
-booting anything else against the repo**.
+written — `data/backups/revenueos-20260812-224657`, sha256 `e9c0f5e5…`. That
+server is now stopped, and the live db was verified afterwards: still at
+migration **005**, no `cost_centres` table, so 006 never reached it. The live
+book will take 006 through the backed-up `npm run migrate` path, when you
+choose to run it.
 
 The genuine pre-004 rollback point is `revenueos-20260808-005733`. Full account
 of the earlier 004-on-the-live-ledger incident in EVOLUTION #38.
