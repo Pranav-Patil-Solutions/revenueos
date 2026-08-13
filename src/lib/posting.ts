@@ -413,6 +413,12 @@ export function postDocument(
       if (!row.entry_date) {
         throw new Error(`row ${row.row_no}: needs a date before posting`);
       }
+      // Re-checked here, not only in applyDraftRows: this loop reads the rows
+      // as PERSISTED, which includes any staged row the payload did not carry.
+      // Nothing in the app can write a foreign id there today — but tenancy is
+      // the one invariant this book re-proves at the point of writing rather
+      // than trusting an earlier caller to have proved (see book.ts).
+      assertOwnedCostCentre(b, row.cost_centre_id);
       assertNotLocked(b, row.entry_date);
       const legs = stampCostCentre(
         buildLegs(

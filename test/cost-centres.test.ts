@@ -449,3 +449,34 @@ test("costCentreUsage counts the lines that would keep pointing at a centre", ()
   assert.ok((usage.get(cc) ?? 0) > 0);
   assert.equal(usage.get(unused), undefined);
 });
+
+// ---------------------------------------------------------------------------
+// Fixes found reviewing this phase's own diff
+// ---------------------------------------------------------------------------
+
+test("a typed code is normalised the same way a derived one is", () => {
+  // Two doors into the same table must not produce two shapes of code — the
+  // thing budgets and MIS columns are keyed by should not depend on which
+  // field the office filled in.
+  const { db, companyA } = twoCompanyDb();
+  const b = book(db, companyA);
+  const id = createCostCentre(b, { name: "Kothrud shop", code: "shop a" });
+  assert.equal(getCostCentre(b, id)!.code, "SHOP-A");
+  assert.throws(() => createCostCentre(b, { name: "Punctuation", code: "!!!" }), /at least one letter or digit/);
+});
+
+test("postDocument re-checks cost-centre ownership on the rows as PERSISTED", () => {
+  // applyDraftRows checks the payload; this checks what is actually in the
+  // table, which is what the posting loop reads. Simulated by writing a
+  // foreign id directly, the way only a bug or a hand-edited db could.
+  const db = stagedDb();
+  const companyB = createCompany(db, { name: "Client B" }, NOW);
+  seedAccountsForCompany(db, companyB);
+  const theirs = createCostCentre(book(db, companyB), { name: "Their shop" });
+  db.prepare("UPDATE staged_rows SET cost_centre_id = ? WHERE company_id = 1 AND row_no = 2").run(theirs);
+
+  const rows = draftRows(db, [10]).filter((r) => r.id !== 2);
+  assert.throws(() => postDocument(book(db, 1), 1, rows), /not in this book/);
+  const journals = db.prepare("SELECT COUNT(*) AS n FROM journals").get() as { n: number };
+  assert.equal(journals.n, 0, "the refusal posted nothing at all");
+});

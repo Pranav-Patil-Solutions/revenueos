@@ -42,11 +42,17 @@ export default async function DocumentReviewPage({
     id: ba.id,
     name: ba.name,
   }));
-  // Same rule for the cost-centre column (RVOS-006 P0c): active ones only.
-  const costCentres = listCostCentres(book).map((cc) => ({
+  // Cost centres, ARCHIVED ONES INCLUDED (RVOS-006 P0c) — deliberately not the
+  // same rule as bank accounts above. A posted document keeps showing the
+  // centre it was tagged with, and a centre archived after the tag was made
+  // would otherwise render as an em dash: the tag is in the books, so hiding
+  // its name makes the grid disagree with the journal. The grid offers only
+  // the active ones for a fresh choice; see review-table.tsx.
+  const costCentres = listCostCentres(book, { includeArchived: true }).map((cc) => ({
     id: cc.id,
     code: cc.code,
     name: cc.name,
+    archived: cc.archived_at !== null,
   }));
   // Imports carry a party per row — the review grid shows who each row books to.
   const partyNames = isPhoto

@@ -88,10 +88,15 @@ export function codeFromName(name: string): string {
 export function createCostCentre(book: Book, input: NewCostCentre): number {
   const name = input.name.trim();
   if (!name) throw new Error("The cost centre needs a name.");
-  const code = (input.code?.trim() ? input.code.trim().toUpperCase() : codeFromName(name))
-    .replace(/\s+/g, "-");
+  // A typed code goes through the SAME normaliser as a derived one. Otherwise
+  // the two doors into this table produce different shapes — "Shop A" typed
+  // by hand versus SHOP-A derived — and a code that reports and budgets are
+  // keyed by should not depend on which field the office filled in.
+  const code = input.code?.trim() ? codeFromName(input.code) : codeFromName(name);
   if (!code) {
-    throw new Error("The cost centre needs a code — letters or digits, e.g. SHOP-A.");
+    throw new Error(
+      "The cost centre needs a code with at least one letter or digit, e.g. SHOP-A."
+    );
   }
   const now = new Date().toISOString();
   return book.tx((b) => {

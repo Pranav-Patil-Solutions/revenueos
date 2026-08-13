@@ -105,9 +105,12 @@ export function ReviewTable({
    * Ingestion resolved a coarse cash-vs-bank hint to a default; this is where a
    * human corrects it to the account the money actually moved through. */
   bankAccounts: { id: number; name: string }[];
-  /** The book's active cost centres (RVOS-006 P0c). Empty for a book that does
-   * not use the dimension, in which case the column is not rendered at all. */
-  costCentres: { id: number; code: string; name: string }[];
+  /**
+   * The book's cost centres (RVOS-006 P0c), archived ones INCLUDED so a row
+   * already tagged with one still shows its code. Empty for a book that does
+   * not use the dimension, in which case the column is not rendered at all.
+   */
+  costCentres: { id: number; code: string; name: string; archived: boolean }[];
   /** id → name for the per-row party column (imports only). The column is
    * hidden when absent, keeping the photo path's layout untouched. */
   partyNames?: Record<number, string>;
@@ -118,9 +121,21 @@ export function ReviewTable({
   // is a client component and the account set is small and already loaded.
   const bankAccountName = (id: number): string =>
     bankAccounts.find((ba) => ba.id === id)?.name ?? "—";
-  const showCostCentre = costCentres.length > 0;
+  const activeCostCentres = costCentres.filter((cc) => !cc.archived);
+  // Shown when there is something to pick OR something already picked: a book
+  // that archived every centre must still render the column for the rows that
+  // carry one, or the grid would silently drop a tag the books have.
+  const showCostCentre =
+    activeCostCentres.length > 0 || rows.some((r) => r.cost_centre_id !== null);
   const costCentreCode = (id: number | null): string =>
     id === null ? "—" : costCentres.find((cc) => cc.id === id)?.code ?? "—";
+  /** Options for one row: the active centres, plus this row's own centre when
+   * it has been archived since — otherwise the select would render blank over
+   * a value that is really there. */
+  const optionsFor = (id: number | null) => {
+    const own = id === null ? undefined : costCentres.find((cc) => cc.id === id);
+    return own && own.archived ? [...activeCostCentres, own] : activeCostCentres;
+  };
   const [edit, setEdit] = useState<EditRow[]>(() =>
     rows.map((r) => ({
       id: r.id,
@@ -468,9 +483,10 @@ export function ReviewTable({
                           className={`${cellInput} w-24 disabled:opacity-40`}
                         >
                           <option value="">—</option>
-                          {costCentres.map((cc) => (
+                          {optionsFor(r.cost_centre_id).map((cc) => (
                             <option key={cc.id} value={cc.id}>
                               {cc.code}
+                              {cc.archived ? " (archived)" : ""}
                             </option>
                           ))}
                         </select>
