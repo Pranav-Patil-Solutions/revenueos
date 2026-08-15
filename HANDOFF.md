@@ -101,12 +101,24 @@ the code:
 5. **Every journal names its author** (7/7 attributed, no NULLs) and the audit
    log carries real before→after pairs with the actor's username.
 
+## Ship gate — CLOSED, both halves, against `504cc58`
+
+- **`code-reviewer`: 0 blockers.** Reviewed `86fdb3c..504cc58` with fresh eyes.
+  Confirmed the stamping rule is applied consistently across all three posting
+  entry points and that the UI allow-lists match the engine's, that the
+  `buildLegs` null-settle fix matches the P0a regression, and that
+  `SCOPED_TABLES` gets `cost_centres` into `exportCompany` for free.
+- **`qa-runner`: 0 failures.** tsc, eslint, 437 tests, smoke and build all
+  pass; it added no tests, judging coverage of the changed modules already
+  adequate against all five specified behaviours.
+- Known non-blocking: `npm run build` emits a Turbopack warning on
+  `next.config.ts` / `src/app/api/upload/route.ts`. Pre-existing — zero changes
+  to either in this range — and not fatal.
+
+**Stage 0 is fully closed: P0a, P0b and P0c all shipped and gated.**
+
 ## OPEN / next
 
-- **Ship-gate agents not run for P0c** — the mechanical gate (tsc, eslint,
-  tests, smoke, build), the browser pass and Stage 0 acceptance are all green,
-  but `code-reviewer` and `qa-runner` were not dispatched. Run both against
-  `ade6656` before treating Stage 0 as fully closed.
 - Review grid needs horizontal scrolling in the photo-review pane (~700px
   wide, table floor now 1010px with the centre column, 920px without). It was
   already scrolling before P0c. If it starts to annoy, the fix is the document
