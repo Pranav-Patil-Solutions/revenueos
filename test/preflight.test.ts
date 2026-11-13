@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -83,13 +83,17 @@ test("a writable data directory passes; an impossible one fails fatally", async 
     const ok = checkWritable(path.join(dir, "data"));
     assert.equal(ok.ok, true);
     assert.equal(ok.fatal, true);
+    // A path that cannot be created at all: its parent is a FILE. Fails with
+    // ENOTDIR/ENOENT on every OS. (The old probe, a path under /proc, makes
+    // Node's recursive mkdir spin forever on Linux and hung the whole suite.)
+    const blocker = path.join(dir, "blocker");
+    writeFileSync(blocker, "x");
+    const bad = checkWritable(path.join(blocker, "revenueos"));
+    assert.equal(bad.ok, false);
+    assert.match(bad.fix!, /Program Files/, "the Windows-specific cause must be named");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  // A path that cannot be created at all.
-  const bad = checkWritable("/proc/nonexistent/revenueos");
-  assert.equal(bad.ok, false);
-  assert.match(bad.fix!, /Program Files/, "the Windows-specific cause must be named");
 });
 
 test("a free port passes and a taken one warns without being fatal", async () => {
