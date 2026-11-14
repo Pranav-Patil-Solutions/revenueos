@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Geist_Mono } from "next/font/google";
+// Bundled with the app (the `geist` package), NOT fetched from Google Fonts:
+// the office machine must be able to build and run with no internet.
+import { GeistMono } from "geist/font/mono";
 import Script from "next/script";
 import { Shortcuts } from "@/components/shortcuts";
 import { Sidebar } from "@/components/sidebar";
@@ -8,10 +10,7 @@ import { Topbar } from "@/components/topbar";
 import { getSessionUser } from "@/lib/dal";
 import "./globals.css";
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const geistMono = GeistMono;
 
 export const metadata: Metadata = {
   title: "RevenueOS — Finance department in a box",
